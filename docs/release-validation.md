@@ -75,6 +75,11 @@ a network failure can leave the previous round's completed payloads behind.
 When free SQLite pages total at least 16 MiB and one quarter of the database,
 automatic VACUUM and WAL truncation return that space to the filesystem.
 An active reader or writer can defer compaction until a later maintenance pass.
+Disk-full and I/O compaction failures log a warning and defer compaction rather
+than preventing library access; reclamation errors still fail explicitly.
+An explicit snapshot reset saves the previous current heads for recovery after
+a server backup restore. Matching heads or explicit restoration reclaim these
+recovery payloads; the completed edit history is not retained.
 Current content, pending operations, undecodable data and unresolved conflicts
 must survive migration; sync and memory revision tokens must remain unchanged.
 

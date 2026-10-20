@@ -81,6 +81,8 @@ impl LocalStore {
                 SELECT i.rowid FROM sync_inbox i WHERE
                 ((i.status='applied' AND i.decode_error='' AND NOT EXISTS(
                     SELECT 1 FROM sync_remote_heads h WHERE h.id=i.id AND h.rev=i.rev AND h.wire=''))
+                    OR (i.status='reset_saved' AND EXISTS(
+                        SELECT 1 FROM sync_remote_heads h WHERE h.id=i.id AND h.wire=i.wire))
                     OR EXISTS(SELECT 1 FROM sync_resolutions r
                         WHERE r.epoch=i.epoch AND r.conflict_rev=i.rev))
                 AND NOT EXISTS(SELECT 1 FROM sync_resolution_outbox r
@@ -135,6 +137,11 @@ impl LocalStore {
             Ok(false) => Ok(()),
             Err(rusqlite::Error::SqliteFailure(error, _))
                 if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(error.code, rusqlite::ErrorCode::DiskFull | rusqlite::ErrorCode::SystemIoFailure) => {
+                    eprintln!("automatic SQLite compaction deferred: {error}");
+                    Ok(())
+                }
             Err(error) => Err(anyhow::anyhow!(error).context(
                 "automatic SQLite compaction failed; current memories and pending operations are retained"
             )),
@@ -399,6 +406,16 @@ impl LocalStore {
     pub fn reset_sync_snapshot(&self) -> Result<()> {
         let tx = self.connection.unchecked_transaction()?;
         self.requeue_pending()?;
+        // A server backup can replace current content; keep one recovery snapshot, not its edit history.
+        self.connection.execute(
+            "INSERT INTO sync_inbox(epoch,rev,id,status,op_id,wire,decode_error)
+            SELECT (SELECT value FROM meta WHERE key='sync_v2_epoch'),rev,id,'reset_saved',op_id,wire,decode_error
+            FROM sync_remote_heads WHERE wire<>''
+                AND (SELECT value FROM meta WHERE key='sync_v2_epoch') IS NOT NULL
+            ON CONFLICT(epoch,rev) DO UPDATE SET status='reset_saved',
+                wire=excluded.wire,op_id=excluded.op_id,decode_error=excluded.decode_error",
+            [],
+        )?;
         self.connection.execute("DELETE FROM sync_base", [])?;
         self.connection
             .execute("DELETE FROM sync_remote_heads", [])?;
@@ -530,6 +547,11 @@ impl LocalStore {
         if let (Some(epoch), Some(rev)) = (epoch, rev) {
             self.track_restoration(epoch, rev, &b.id, "restore")?;
         }
+        self.connection.execute(
+            "DELETE FROM sync_inbox WHERE status='reset_saved'
+                AND ((?1 IS NOT NULL AND op_id=?1) OR (epoch=?2 AND rev=?3))",
+            params![op_id, epoch, rev],
+        )?;
         tx.commit()?;
         Ok(b.id)
     }
@@ -582,11 +604,14 @@ mod tests {
         )?;
         s.begin_sync_epoch("e")?;
         s.apply_page(&keys, &page(1, stored), false)?;
+        s.maintain_sync_storage()?;
         s.reset_sync_snapshot()?;
+        s.maintain_sync_storage()?;
         s.begin_sync_epoch("new")?;
         let mut new_page = page(1, tomb("entry", "2026-09-19T00:00:00.002Z"));
         new_page.epoch = "new".into();
         s.apply_page(&keys, &new_page, false)?;
+        s.maintain_sync_storage()?;
         assert!(s.restore_sync_version(&keys, None, Some(1), None).is_err());
         assert_eq!(
             s.restore_sync_version(&keys, None, Some(1), Some("e"))?,

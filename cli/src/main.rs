@@ -8278,7 +8278,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
             let mut result = ResultEnvelope::new(
                 "sync-reset",
                 OutputStatus::Ok,
-                serde_json::json!({"history_kept":true,"pending_outbound_kept":true}),
+                serde_json::json!({"history_kept":false,"current_snapshots_kept":true,"pending_outbound_kept":true}),
                 vec![
                     OutputItem::new("snapshot", OutputStatus::Ok, "reset"),
                     OutputItem::new("history", OutputStatus::Ok, "kept"),
