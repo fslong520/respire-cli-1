@@ -181,6 +181,55 @@ fn sync_tracked(
     let boundary = rpc::sync_boundary().unwrap_or(boundary);
     sync_tracked_boundary(session, local, remote, boundary)
 }
+
+fn read_remote_sync_history(
+    transport: &impl respire::transport::MemoryTransport,
+    epoch: &str,
+    id: Option<&str>,
+    op_id: Option<&str>,
+    rev: Option<i64>,
+) -> Result<Vec<respire::transport::protocol::Change>> {
+    let mut history = std::collections::VecDeque::with_capacity(200);
+    let mut after = 0;
+    let mut until = None;
+    loop {
+        let page = transport.pull_v2(epoch, after, until, false)?;
+        if page.epoch != epoch
+            || page.cursor < after
+            || page.cursor > page.until
+            || (page.has_more && page.cursor == after)
+            || until.is_some_and(|value| value != page.until)
+        {
+            anyhow::bail!("illegal history page");
+        }
+        let mut previous = after;
+        for change in page.changes {
+            if change.rev <= previous || change.rev > page.cursor {
+                anyhow::bail!("illegal history version order");
+            }
+            previous = change.rev;
+            if id.is_some_and(|value| change.blob.id != value)
+                || op_id.is_some_and(|value| change.op_id.as_deref() != Some(value))
+                || rev.is_some_and(|value| change.rev != value)
+            {
+                continue;
+            }
+            history.push_back(change);
+            if op_id.is_some() || rev.is_some() {
+                return Ok(history.into_iter().collect());
+            }
+            if history.len() > 200 {
+                history.pop_front();
+            }
+        }
+        after = page.cursor;
+        until = Some(page.until);
+        if !page.has_more {
+            break;
+        }
+    }
+    Ok(history.into_iter().rev().collect())
+}
 fn sync_tracked_boundary(
     session: &SessionKeys,
     local: &LocalStore,
@@ -736,7 +785,7 @@ enum Command {
     },
     /// Delete (tombstone; propagates with sync)
     Forget { id: String },
-    /// Clear current-version ciphertext; sync history is kept (see sync-history)
+    /// Clear current-version ciphertext; pending operations and unresolved conflicts are kept
     Purge { id: String },
     /// Restore a deleted memory by full ID (keeps body and parent; propagates with sync)
     Restore { id: String },
@@ -8122,32 +8171,29 @@ fn run_local_inner(args: Cli) -> Result<()> {
         Command::SyncHistory { id, remote } => {
             let session = sync_phase(build_session)?;
             let local = sync_phase(build_local)?;
+            let mut history = sync_phase(|| local.sync_history(id.as_deref()))?;
             if remote {
                 let transport = sync_phase(build_remote)?;
                 let cap = transport
                     .capabilities()?
                     .ok_or_else(|| anyhow!("server does not support revision history"))?;
-                sync_phase(|| local.begin_sync_epoch(&cap.epoch))?;
-                let mut after = 0;
-                let mut until = None;
-                loop {
-                    let page = transport.pull_v2(&cap.epoch, after, until, false)?;
-                    if page.epoch != cap.epoch
-                        || page.cursor < after
-                        || (page.has_more && page.cursor == after)
-                        || until.is_some_and(|v| v != page.until)
-                    {
-                        anyhow::bail!("illegal history page");
-                    }
-                    sync_phase(|| local.cache_history(&page))?;
-                    after = page.cursor;
-                    until = Some(page.until);
-                    if !page.has_more {
-                        break;
-                    }
-                }
+                let changes =
+                    read_remote_sync_history(&transport, &cap.epoch, id.as_deref(), None, None)?;
+                let local_operations: Vec<_> = history
+                    .into_iter()
+                    .filter(|row| row.get("rev").is_none())
+                    .collect();
+                history = changes
+                    .into_iter()
+                    .map(|change| {
+                        serde_json::json!({
+                            "epoch":cap.epoch, "rev":change.rev, "status":change.status,
+                            "op_id":change.op_id, "blob":change.blob
+                        })
+                    })
+                    .collect();
+                history.extend(local_operations);
             }
-            let mut history = sync_phase(|| local.sync_history(id.as_deref()))?;
             for row in &mut history {
                 let b: respire::StoredMemory = serde_json::from_value(row["blob"].clone())?;
                 match MemoryEngine::open(&session, &b) {
@@ -8175,10 +8221,50 @@ fn run_local_inner(args: Cli) -> Result<()> {
             emit_result(result)?;
         }
         Command::SyncRestore { op_id, rev, epoch } => {
-            let session = build_session()?;
-            let local = build_local()?;
-            let id =
-                local.restore_sync_version(&session, op_id.as_deref(), rev, epoch.as_deref())?;
+            let session = sync_phase(build_session)?;
+            let local = sync_phase(build_local)?;
+            let id = match sync_phase(|| {
+                local.restore_sync_version(&session, op_id.as_deref(), rev, epoch.as_deref())
+            }) {
+                Ok(id) => id,
+                Err(error) if error.is::<respire::transport::local::SyncVersionNotFound>() => {
+                    let transport = sync_phase(build_remote)?;
+                    let cap = transport
+                        .capabilities()?
+                        .ok_or_else(|| anyhow!("server does not support revision history"))?;
+                    if epoch.as_deref().is_some_and(|value| value != cap.epoch) {
+                        anyhow::bail!("the server no longer retains the requested sync epoch");
+                    }
+                    let change = read_remote_sync_history(
+                        &transport,
+                        &cap.epoch,
+                        None,
+                        op_id.as_deref(),
+                        if op_id.is_some() { None } else { rev },
+                    )?
+                    .pop()
+                    .ok_or_else(|| anyhow!("version not found on the server"))?;
+                    let page = respire::transport::protocol::Page {
+                        epoch: cap.epoch,
+                        until: change.rev,
+                        cursor: change.rev,
+                        has_more: false,
+                        changes: vec![change],
+                        total: 0,
+                        alive: 0,
+                    };
+                    sync_phase(|| {
+                        local.cache_history(&page)?;
+                        local.restore_sync_version(
+                            &session,
+                            op_id.as_deref(),
+                            rev,
+                            epoch.as_deref(),
+                        )
+                    })?
+                }
+                Err(error) => return Err(error),
+            };
             emit_result(ResultEnvelope::new(
                 "sync-restore",
                 OutputStatus::Pending,

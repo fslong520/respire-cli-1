@@ -62,6 +62,26 @@ an already-public historical release, explicitly dispatch `npm-alias.yml` with
 `version` and `release_run`; its legacy recovery path requires successful source
 publication and a public release. It is not an automatic bypass of this barrier.
 
+## Client sync payload retention
+
+The client retains current memories, one current remote snapshot per memory, and
+unconfirmed operations or unresolved incoming data. Completed transport payloads
+are reclaimed; processed conflicts retain only their small resolution receipts.
+The server sync protocol, operation identities and cursor commit rules are unchanged.
+
+Opening an existing library migrates remote snapshots from the old inbox before
+reclaiming history. The same cleanup runs before and after sync, including before
+a network failure can leave the previous round's completed payloads behind.
+When free SQLite pages total at least 16 MiB and one quarter of the database,
+automatic VACUUM and WAL truncation return that space to the filesystem.
+An active reader or writer can defer compaction until a later maintenance pass.
+Current content, pending operations, undecodable data and unresolved conflicts
+must survive migration; sync and memory revision tokens must remain unchanged.
+
+Remote history queries return a bounded in-memory view without caching the
+account's history in the inbox. Restoring a reclaimed version fetches the
+requested operation or revision through the existing remote history protocol.
+
 ## Actions artifact retention and recovery
 
 All workflows explicitly retain Actions artifacts for one day after upload,

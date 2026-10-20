@@ -85,6 +85,7 @@ pub fn sync_controlled(
     control: &impl SyncControl,
     boundary: Option<i64>,
 ) -> Result<SyncStats> {
+    control.local(|| local.maintain_sync_storage())?;
     let captured_boundary = boundary.is_some();
     let mut boundary = match boundary {
         Some(value) => value,
@@ -253,6 +254,7 @@ pub fn sync_controlled(
         }
     }
     control.progress("verify");
+    control.local(|| local.maintain_sync_storage())?;
     (stats.pending, stats.conflicts, stats.undecodable) = control.local(|| local.sync_counts())?;
     (
         stats.conflict_history,

@@ -1497,7 +1497,7 @@ fn enqueue_job(
     }
     let sync_context = if !respire::service::off_mode() && matches!(
         command_name(&args),
-        Some("sync" | "sync-conflicts" | "sync-resolve" | "sync-history" | "classify")
+        Some("sync" | "sync-conflicts" | "sync-resolve" | "sync-history" | "sync-restore" | "classify")
     ) {
         // Capture account generation without blocking a network executor on
         // the write gate. The existing sync worker takes the snapshot later.
@@ -1982,7 +1982,7 @@ fn dispatch_loop(rx: Receiver<Job>, limit: usize, idle: Option<Duration>, _lock:
                 }
                 if matches!(
                     command_name(&job.args),
-                    Some("sync" | "sync-conflicts" | "sync-resolve" | "sync-history")
+                    Some("sync" | "sync-conflicts" | "sync-resolve" | "sync-history" | "sync-restore")
                 ) {
                     enqueue_manual(job);
                 } else if command_name(&job.args) == Some("classify") {
