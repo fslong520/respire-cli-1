@@ -423,11 +423,21 @@ impl LocalStore {
 
     /// Read recoverable encrypted versions without moving either sync cursor.
     pub fn sync_history(&self, id: Option<&str>) -> Result<Vec<serde_json::Value>> {
-        let mut stmt=self.connection.prepare("SELECT epoch,rev,status,op_id,wire FROM sync_inbox WHERE (?1 IS NULL OR id=?1)
+        // Paused/read-only libraries intentionally keep their old schema until normal service resumes.
+        let current_heads: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sync_remote_heads') WHERE name='wire')",
+            [], |r| r.get(0),
+        )?;
+        let incoming = if current_heads {
+            "SELECT epoch,rev,status,op_id,wire FROM sync_inbox WHERE (?1 IS NULL OR id=?1)
             UNION ALL SELECT (SELECT value FROM meta WHERE key='sync_v2_epoch'),h.rev,'applied',h.op_id,h.wire
             FROM sync_remote_heads h WHERE (?1 IS NULL OR h.id=?1) AND h.wire<>''
             AND NOT EXISTS(SELECT 1 FROM sync_inbox i WHERE i.epoch=(SELECT value FROM meta WHERE key='sync_v2_epoch') AND i.rev=h.rev)
-            ORDER BY rev DESC LIMIT 200")?;
+            ORDER BY rev DESC LIMIT 200"
+        } else {
+            "SELECT epoch,rev,status,op_id,wire FROM sync_inbox WHERE (?1 IS NULL OR id=?1) ORDER BY rev DESC LIMIT 200"
+        };
+        let mut stmt = self.connection.prepare(incoming)?;
         let mut out=stmt.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,String>(4)?)))?
             .map(|row| {let (epoch,rev,status,op_id,wire)=row?;Ok(serde_json::json!({"epoch":epoch,"rev":rev,"status":status,"op_id":op_id,"blob":serde_json::from_str::<serde_json::Value>(&wire)?}))})
             .collect::<Result<Vec<_>>>()?;
@@ -773,6 +783,9 @@ mod tests {
                 VALUES('new',3,1,'processed','keep_current',1,'now');
             PRAGMA wal_checkpoint(TRUNCATE);",
         )?;
+        let read_only = LocalStore::open_read_only(&path)?;
+        assert_eq!(read_only.sync_history(Some("remote"))?.len(), 1);
+        drop(read_only);
         let before = std::fs::metadata(&path)?.len();
         drop(s);
         let reader = rusqlite::Connection::open(&path)?;
