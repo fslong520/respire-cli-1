@@ -868,7 +868,7 @@ enum Command {
         #[arg(long)]
         refresh: bool,
     },
-    /// Resolve one kept revision; history is not deleted; marked resolved only after the remote confirms
+    /// Resolve one retained revision; mark it resolved only after the remote confirms
     SyncResolve {
         #[arg(long)]
         epoch: String,
@@ -883,7 +883,7 @@ enum Command {
         #[arg(long)]
         content: Option<String>,
     },
-    /// Show kept sync revisions; --remote pulls server history without moving the sync cursor
+    /// Show retained sync revisions; --remote reads server history without local caching
     SyncHistory {
         #[arg(long)]
         id: Option<String>,
@@ -899,7 +899,7 @@ enum Command {
         #[arg(long, requires = "rev", conflicts_with = "op_id")]
         epoch: Option<String>,
     },
-    /// Rebuild the snapshot after a server-side backup restore (keeps local history and pending outbound edits)
+    /// Rebuild after a server backup restore; keep current recovery snapshots and pending edits
     SyncReset,
     /// Status
     Status,
