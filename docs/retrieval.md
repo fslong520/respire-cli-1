@@ -229,3 +229,33 @@ flowchart TD
 ```
 
 Recall associations are documented in [associations](associations.md). Use `--no-related` for a per-request original-results comparison.
+
+## How-to routing and procedure run history (CLI)
+
+When a recall query reads like a procedural question (怎么 / 如何 / 报错 / 步骤 / 命令 /
+how to ...) the CLI sets `intent=howto` and runs a second Core query filtered to
+`kind=skill`. The two result sets are unioned by id, ordered with Core's scores,
+and the best-scored procedure is moved into the third slot when no procedure is
+already in the top three. Facts keep their Core order and Core scores; only
+procedure ordering is nudged by the local run history. `--intent fact` skips the
+second pass, `--intent howto` forces it, and passing `--type` disables auto-detection.
+
+`rsrs run-log <id> --status ok|fail --note "..."` appends to the local `skill_runs`
+table (SQLite, never encrypted into the payload, never synced — same contract as
+`query_log`). Raise/lower rankings are bounded to ±0.03 so a handful of runs cannot
+outvote semantics; the audit reports procedures whose last three runs all failed.
+
+The summary of every recall now carries `intent`, `procedure_pass` and
+`procedure_promoted`, so a consumer can tell whether a how-to pass ran and whether
+the order departs from Core's scores.
+
+`rsrs audit` also reports `hot_untyped`: live entries recalled at least five
+times, not typed as `skill`, whose body still reads like a manual. The list is
+advisory — the injected policy asks the AI to judge during tidy whether the entry
+is a procedure worth an explicit `update --kind skill` (with the six sections) or
+should stay a fact. `show` and `list` expose `recall_count` for that judgement;
+the count is cumulative and never feeds ranking.
+
+The judgement is not silent: the injected policy requires the AI to state its
+decision in the reply (which entry was upgraded and why, or why nothing was), so
+the user can veto an upgrade.

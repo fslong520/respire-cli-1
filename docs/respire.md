@@ -72,9 +72,11 @@ Use `remember ... --importance important --supersedes <old-id>` when a new concl
 
 - **recall** 语义翻忆（零网络）｜**remember** 判重后存（改/并/挂/存）｜**taxonomy** 23 大类词库（判树之据）
 - **tree / attach / resort / promote / demote / tree-float** 树理与整治｜**show / chain / list / update / forget / restore** 阅删修（`chain` 顺因果深挖前因后果）
-- **diary** 日记按日翻｜**query-log** 查询日志与自评上报（后训练 DPO/SFT 原料：recall 自动记候选，AI 自评 mark 定 chosen/rejected）｜**status / sync / doctor** 状态、对账、体检
+- **diary** 日记按日翻｜**query-log** 查询日志与自评上报（后训练 DPO/SFT 原料：recall 自动记候选，AI 自评 mark 定 chosen/rejected）｜**run-log** 记一次流程执行成败｜**status / sync / doctor** 状态、对账、体检
 
 本地库权威、云端只见密文、写后自动增量同步。技术细节皆保障，**所重者在库**。
+
+**程序性记忆（技能）**：操作法存 `--type skill --importance important`，正文仍守【前因】【行为】【后果】，并在【行为】里写全六段——触发条件、前置、步骤（带命令）、校验、回退、边界；缺段会在写入时告警，`rsrs audit` 逐条列出。按它实际做过一遍后，`rsrs run-log <id> --status ok|fail --note "偏差"` 记回执（本地表，不同步）；同一流程连续三次失败会进 audit 待修。问"怎么做/为什么报错"时 recall 自动加一趟 skill 检索，并在前三名保底留一条流程；流程失败多、命中的旧流程会被排到后面。整理时看 `rsrs audit` 的 hot untyped（累计命中 ≥5、不是技能、正文像操作法）：**由你判断该不该升级**——须是操作型且已有 run-log ok 或用户点头；升则 `update <id> --kind skill`、补齐六段、标题写任务签名、挂到对应域节点；纯事实不升，最多 attach 到相关技能下当证据；每次整理最多升 3 条，误升改回。**判断完要在回答里明说**：升了哪条、凭什么升；不升也说一句理由——不许默默判完不作声。
 
 ## 语言风格
 
