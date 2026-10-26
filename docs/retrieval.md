@@ -240,10 +240,14 @@ already in the top three. Facts keep their Core order and Core scores; only
 procedure ordering is nudged by the local run history. `--intent fact` skips the
 second pass, `--intent howto` forces it, and passing `--type` disables auto-detection.
 
-`rsrs run-log <id> --status ok|fail --note "..."` appends to the local `skill_runs`
-table (SQLite, never encrypted into the payload, never synced — same contract as
-`query_log`). Raise/lower rankings are bounded to ±0.03 so a handful of runs cannot
-outvote semantics; the audit reports procedures whose last three runs all failed.
+`rsrs run-log <id> --status ok|fail|confounded|no_effect --note "..."` appends to
+the local `skill_runs` table (SQLite, never encrypted into the payload, never
+synced — same contract as `query_log`). Raise/lower rankings are bounded to ±0.03
+so a handful of runs cannot outvote semantics; only `ok`/`fail` take part. A
+`confounded` run (something else changed too, so the outcome cannot be attributed)
+or a `no_effect` run is recorded but attributes nothing: it neither feeds the
+ordering nor breaks or counts toward the audit's "last three runs all failed"
+streak, which an `ok` does break.
 
 The summary of every recall now carries `intent`, `procedure_pass` and
 `procedure_promoted`, so a consumer can tell whether a how-to pass ran and whether
@@ -253,8 +257,11 @@ the order departs from Core's scores.
 times, not typed as `skill`, whose body still reads like a manual. The list is
 advisory — the injected policy asks the AI to judge during tidy whether the entry
 is a procedure worth an explicit `update --kind skill` (with the six sections) or
-should stay a fact. `show` and `list` expose `recall_count` for that judgement;
-the count is cumulative and never feeds ranking.
+should stay a fact. Declining to upgrade is a first-class outcome, not a skip:
+with no `run-log` ok, no user sign-off, or a body that does not read as a
+procedure, the AI must name the missing evidence and leave the entry as-is
+rather than promote to fill a quota. `show` and `list` expose `recall_count` for
+that judgement; the count is cumulative and never feeds ranking.
 
 The judgement is not silent: the injected policy requires the AI to state its
 decision in the reply (which entry was upgraded and why, or why nothing was), so

@@ -65,7 +65,11 @@ pub struct QueryLogStats {
 pub struct SkillRunStats {
     pub ok: i64,
     pub fail: i64,
-    /// ok | fail | "" (never run)
+    /// verdicts that attribute nothing (other changes interfered / no observable
+    /// effect): neither success nor failure, so ordering ignores them.
+    pub confounded: i64,
+    pub no_effect: i64,
+    /// ok | fail | confounded | no_effect | "" (never run)
     pub last_status: String,
     pub last_ts: i64,
 }
@@ -679,12 +683,12 @@ impl LocalStore {
         })
     }
 
-    /// Record one procedure run (ok|fail). Local-only: not encrypted-payload
+    /// Record one procedure run verdict. Local-only: not encrypted-payload
     /// state, not dirty, not synced — the same contract as `query_log`.
     pub fn log_skill_run(&self, skill_id: &str, status: &str, note: &str) -> Result<()> {
         anyhow::ensure!(
-            matches!(status, "ok" | "fail"),
-            "run status must be ok or fail"
+            matches!(status, "ok" | "fail" | "confounded" | "no_effect"),
+            "run status must be ok, fail, confounded or no_effect"
         );
         self.connection.execute(
             "INSERT INTO skill_runs (skill_id, status, note, ts_unix) VALUES (?1,?2,?3,?4)",
@@ -698,22 +702,26 @@ impl LocalStore {
         Ok(())
     }
 
-    /// ok/fail counts and the latest outcome per procedure id (missing ids omitted).
+    /// Verdict counts and the latest outcome per procedure id (missing ids omitted).
     pub fn skill_run_stats(&self, ids: &[String]) -> Result<HashMap<String, SkillRunStats>> {
         let mut out = HashMap::new();
         let mut stmt = self.connection.prepare(
             "SELECT
                 COALESCE(SUM(status = 'ok'), 0),
-                COALESCE(SUM(status = 'fail'), 0)
+                COALESCE(SUM(status = 'fail'), 0),
+                COALESCE(SUM(status = 'confounded'), 0),
+                COALESCE(SUM(status = 'no_effect'), 0)
              FROM skill_runs WHERE skill_id = ?1",
         )?;
         let mut last = self.connection.prepare(
             "SELECT status, ts_unix FROM skill_runs WHERE skill_id = ?1 ORDER BY id DESC LIMIT 1",
         )?;
         for id in ids {
-            let (ok, fail): (i64, i64) =
-                stmt.query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            if ok == 0 && fail == 0 {
+            let (ok, fail, confounded, no_effect): (i64, i64, i64, i64) = stmt
+                .query_row(params![id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?;
+            if ok == 0 && fail == 0 && confounded == 0 && no_effect == 0 {
                 continue;
             }
             let (last_status, last_ts): (String, i64) = last
@@ -725,6 +733,8 @@ impl LocalStore {
                 SkillRunStats {
                     ok,
                     fail,
+                    confounded,
+                    no_effect,
                     last_status,
                     last_ts,
                 },
@@ -733,7 +743,9 @@ impl LocalStore {
         Ok(out)
     }
 
-    /// Procedures whose latest N runs all failed (oldest-first streak broken by an ok).
+    /// Procedures whose latest N attributable runs all failed. An ok breaks the
+    /// streak; confounded / no_effect runs are not verdicts, so they neither
+    /// count toward it nor reset it.
     pub fn failing_skills(&self, streak: usize) -> Result<Vec<(String, i64)>> {
         anyhow::ensure!(streak > 0, "streak must be positive");
         let mut stmt = self.connection.prepare(
@@ -750,10 +762,11 @@ impl LocalStore {
             }
             if status == "fail" {
                 slot.0 += 1;
-            } else {
+            } else if status == "ok" {
                 slot.1 = false;
                 slot.0 = streak; // stop counting this procedure
             }
+            // confounded / no_effect: no verdict, keep counting older runs
         }
         let mut out: Vec<(String, i64)> = seen
             .into_iter()
@@ -1584,6 +1597,36 @@ mod skill_run_tests {
         assert_eq!(failing, vec![("broken".to_string(), 3)]);
 
         store.log_skill_run("broken", "ok", "").unwrap();
+        assert!(store.failing_skills(3).unwrap().is_empty());
+    }
+
+    #[test]
+    fn confounded_and_no_effect_are_verdicts_that_attribute_nothing() {
+        let (_dir, store) = store();
+        for status in ["confounded", "no_effect", "confounded"] {
+            store
+                .log_skill_run("a", status, "hook also changed")
+                .unwrap();
+        }
+        let stats = store.skill_run_stats(&["a".into()]).unwrap();
+        let a = stats.get("a").expect("stats exist even with no ok/fail");
+        assert_eq!((a.ok, a.fail, a.confounded, a.no_effect), (0, 0, 2, 1));
+        assert_eq!(a.last_status, "confounded");
+        assert!(
+            store.failing_skills(3).unwrap().is_empty(),
+            "a non-verdict is not a failure"
+        );
+
+        // A confounded run between failures neither counts nor resets the streak.
+        for _ in 0..3 {
+            store.log_skill_run("b", "fail", "").unwrap();
+        }
+        store
+            .log_skill_run("b", "confounded", "dep changed mid-run")
+            .unwrap();
+        assert_eq!(store.failing_skills(3).unwrap(), vec![("b".to_string(), 3)]);
+        // ...and an ok still breaks it.
+        store.log_skill_run("b", "ok", "").unwrap();
         assert!(store.failing_skills(3).unwrap().is_empty());
     }
 

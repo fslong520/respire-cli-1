@@ -704,12 +704,12 @@ enum Command {
         #[command(subcommand)]
         cmd: BenchCmd,
     },
-    /// Record a procedure run outcome (ok|fail) for a skill/knowledge entry; local-only, feeds how-to ordering and audit
+    /// Record a procedure run verdict (ok|fail|confounded|no_effect) for a skill/knowledge entry; local-only, feeds how-to ordering and audit
     RunLog {
         /// Skill/knowledge entry id (full id or unique prefix)
         id: String,
-        /// Outcome: ok | fail
-        #[arg(long, value_parser = ["ok", "fail"], default_value = "ok")]
+        /// Outcome: ok | fail (plain success/failure) | confounded (other changes interfered, cannot attribute) | no_effect (worked, but changed nothing observable)
+        #[arg(long, value_parser = ["ok", "fail", "confounded", "no_effect"], default_value = "ok")]
         status: String,
         /// Short note: what deviated or which command failed (local-only, never synced)
         #[arg(long, default_value = "")]
@@ -2552,7 +2552,7 @@ fn run_run_log(id: &str, status: &str, note: &str) -> Result<()> {
     }
     store.log_skill_run(&full, status, note)?;
     let stats = store
-        .skill_run_stats(&[full.clone()])?
+        .skill_run_stats(std::slice::from_ref(&full))?
         .remove(&full)
         .unwrap_or_default();
     emit_result(ResultEnvelope::new(
@@ -2564,15 +2564,18 @@ fn run_run_log(id: &str, status: &str, note: &str) -> Result<()> {
             "status": status,
             "ok": stats.ok,
             "fail": stats.fail,
+            "confounded": stats.confounded,
+            "no_effect": stats.no_effect,
             "last_status": stats.last_status,
         }),
-        vec![
-            OutputItem::new(
-                respire::service::short_id(&full),
-                OutputStatus::Ok,
-                format!("{status} · ok {} / fail {}", stats.ok, stats.fail),
+        vec![OutputItem::new(
+            respire::service::short_id(&full),
+            OutputStatus::Ok,
+            format!(
+                "{status} · ok {} / fail {} / confounded {} / no_effect {}",
+                stats.ok, stats.fail, stats.confounded, stats.no_effect
             ),
-        ],
+        )],
     ))
 }
 
@@ -3758,7 +3761,7 @@ fn run_audit(json_flag: bool) -> Result<()> {
                 title
             ),
         )
-        .action("review: update --kind skill if it is a manual")
+        .action("review: upgrade to skill only with evidence (run-log ok or user sign-off); keeping it as-is is a valid verdict")
     }));
     let mut result = ResultEnvelope::new(
         "audit",

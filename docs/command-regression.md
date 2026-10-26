@@ -25,7 +25,7 @@ Current parser behavior and `rsrs --help` define the command contract.
 | Isolated data | `RSRS_DATA_DIR=<path>` |
 | Split | `split <ID>` preview; `split <ID> --go --spec <JSON>` apply |
 | Tree maintenance | `tree-cure` report; explicit `--id` and `--parent` apply |
-| Procedures | `run-log <ID> --status ok|fail` (skill/knowledge only; other kinds return `status: skip`); `recall --intent auto|howto|fact` |
+| Procedures | `run-log <ID> --status ok|fail|confounded|no_effect` (skill/knowledge only; other kinds return `status: skip`); `recall --intent auto|howto|fact` |
 
 Plugins use the platform shell and do not inherit account-key variables. Explicit and
 background sync share one persistent outbox. Foreground mutations wait for local
