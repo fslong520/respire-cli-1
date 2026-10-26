@@ -809,7 +809,9 @@ fn doctor_reports_the_real_wait_before_completion_and_json_stays_quiet() -> Resu
     let addr = format!("http://{}", server.server_addr());
     let worker = std::thread::spawn(move || -> Result<(), String> {
         for _ in 0..2 {
-            let request = server.recv_timeout(Duration::from_secs(30)).map_err(|error| error.to_string())?.ok_or("doctor never probed the server")?;
+            // The json run waits for the runtime the human run autostarted; a
+            // coverage-instrumented binary can need well over 30s to be ready.
+            let request = server.recv_timeout(Duration::from_secs(120)).map_err(|error| error.to_string())?.ok_or("doctor never probed the server")?;
             if request.url() != "/health" { return Err("unexpected doctor request".into()); }
             std::thread::sleep(Duration::from_millis(1500));
             request.respond(tiny_http::Response::from_string("{}")) .map_err(|error| error.to_string())?;
@@ -841,7 +843,7 @@ fn doctor_reports_the_real_wait_before_completion_and_json_stays_quiet() -> Resu
         });
         let mut saw_wait = false;
         let mut phases = Vec::new();
-        while let Ok(line) = receiver.recv_timeout(Duration::from_secs(20)) {
+        while let Ok(line) = receiver.recv_timeout(Duration::from_secs(60)) {
             let line = line?;
             phases.push(line.clone());
             assert!(!line.contains('\u{1b}'), "redirected progress must be plain text");
