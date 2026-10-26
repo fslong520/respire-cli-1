@@ -30,6 +30,7 @@ fn main() -> Result<()> {
         .context("set RSRS_DATA_DIR to an initialized isolated library copy")?;
     anyhow::ensure!(!root.trim().is_empty(), "RSRS_DATA_DIR is empty");
     let root = std::fs::canonicalize(root.trim())?;
+    respire::core_sdk::set_index_root(&root)?;
     let store = respire::transport::local::LocalStore::open_read_only(
         &respire::service::database_path(&root)?,
     )?;
@@ -55,6 +56,7 @@ fn main() -> Result<()> {
             json!({
                 "model":model, "mode":"fast", "provider":null,
                 "query":query, "snapshots":snapshots,
+                "query_settings":respire::feedback::query_settings(&store,&query,&candidates)?,
             }),
         )?;
         let ranked: Vec<RecalledWithContext> = serde_json::from_value(output["items"].clone())?;

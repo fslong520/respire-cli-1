@@ -33,6 +33,8 @@ static RUNNING_STATUS: AtomicUsize = AtomicUsize::new(0);
 static LIGHT_RUNNING: AtomicUsize = AtomicUsize::new(0);
 static WORKERS: AtomicUsize = AtomicUsize::new(1);
 static STOPPING: AtomicBool = AtomicBool::new(false);
+static STORE_READY: AtomicBool = AtomicBool::new(false);
+static SNAPSHOT_BOOT_ID: Mutex<Option<String>> = Mutex::new(None);
 static JOB_TX: OnceLock<Mutex<Sender<Job>>> = OnceLock::new();
 static DISPATCH_THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 const QUEUE_EXPIRED: &str = "request queue deadline exceeded; command was not started";
@@ -156,6 +158,7 @@ enum WriteJob {
 }
 
 pub(crate) struct RecallStats {
+    pub request_id:String,
     pub query: String,
     pub project: String,
     pub candidates: Vec<String>,
@@ -166,7 +169,7 @@ impl RecallStats {
     pub(crate) fn persist(&self, store: &respire::transport::local::LocalStore) -> Result<()> {
         if respire::service::workspace_mode() != "normal" { return Ok(()); }
         store.write_transaction(|| {
-            store.log_query(&self.query, &self.project, "", &self.candidates, &self.scores)?;
+            store.log_query_request(&self.request_id,&self.query, &self.project, "", &self.candidates, &self.scores)?;
             store.bump_recall(&self.candidates)?;
             store.bump_recall_pairs(&self.candidates)
         })
@@ -410,7 +413,6 @@ fn index_loop_inner() -> Result<()> {
             let Some(_operation) = respire::model_progress::Operation::try_begin_background_index()? else {
                 return Ok(false);
             };
-            respire::model_progress::apply_index_threads();
             index_yield_to_foreground(generation)?;
             let mirror = INDEX_WORK.lock().map_err(|_| anyhow::anyhow!("index work lock poisoned"))?.prepare_mirror.take();
             if let Some(mirror) = mirror {
@@ -861,7 +863,8 @@ fn query_json_with_start(args: Vec<String>, auto_start: bool) -> Result<serde_js
         return execute_json(full).map_err(|err| anyhow::anyhow!("{err}"));
     }
     let response = call_method("cli.exec", full, auto_start)?;
-    if let Some(envelope) = response.envelope {
+    if let Some(mut envelope) = response.envelope {
+        envelope.ensure_failure_diagnostics();
         return Ok(serde_json::to_value(envelope).context("runtime envelope could not be encoded")?);
     }
     let err = response
@@ -959,6 +962,24 @@ pub fn recover_interrupted_login() -> Result<()> {
     respire_app::login_transaction::recover_interrupted()?;
     eprintln!("Recovered an interrupted login; the original account and configuration were restored.");
     Ok(())
+}
+
+/// Listener readiness alone is insufficient for a snapshot commit: the actor
+/// must have opened, checked and bound the actual restored database first.
+pub fn verify_snapshot_store(root:&std::path::Path,id:&str)->Result<()> {
+    verify_runtime_store(root,Some(id))
+}
+pub fn verify_open_store(root:&std::path::Path)->Result<()> {
+    verify_runtime_store(root,None)
+}
+fn verify_runtime_store(root:&std::path::Path,id:Option<&str>)->Result<()> {
+    for _ in 0..START_POLLS {
+        let health=crate::net_rpc::health()?;
+        anyhow::ensure!(std::path::Path::new(&health.data_dir)==root,"snapshot runtime profile changed during verification");
+        if health.store_ready && id.is_none_or(|id|health.snapshot_restore_id.as_deref()==Some(id)){return Ok(());}
+        std::thread::sleep(START_WAIT);
+    }
+    bail!("restored runtime did not confirm an opened and verified snapshot store")
 }
 
 pub fn change_profile(change: impl FnOnce() -> Result<()>) -> Result<()> {
@@ -1101,7 +1122,8 @@ pub fn runtime_entry(flags: RuntimeFlags) -> Result<()> {
 }
 
 fn render_response(response: RpcResponse, json: bool) -> Result<()> {
-    if let Some(envelope) = response.envelope {
+    if let Some(mut envelope) = response.envelope {
+        envelope.ensure_failure_diagnostics();
         crate::progress::finish();
         if json || envelope.summary["skipped"] != true || envelope.summary["mode"] != "off" {
             println!("{}", envelope.render(json)?);
@@ -1613,6 +1635,8 @@ pub(crate) fn health_body() -> Value {
         "url": current_url(),
         "exe": exe,
         "data_dir": respire::service::data_dir().display().to_string(),
+        "store_ready": STORE_READY.load(Ordering::Acquire),
+        "snapshot_restore_id": SNAPSHOT_BOOT_ID.lock().ok().and_then(|slot|slot.clone()),
         "recall_statistics": recall_stats_status(),
         "retrieval_index": index_status(),
         "inference": inference,
@@ -1746,6 +1770,7 @@ fn is_exclusive(args: &[String]) -> bool {
                 | "root-create"
                 | "share-import"
                 | "backup"
+                | "snapshot"
         )
     )
 }
@@ -1800,8 +1825,12 @@ fn dispatch_loop(rx: Receiver<Job>, limit: usize, idle: Option<Duration>, _lock:
     respire_app::core_sdk::worker::enable();
     // Keep WAL open across requests: closing the last connection can briefly lock
     // a concurrent opener during checkpoint/cleanup, even for read-only status.
-    let mut _store = if respire::service::off_mode() { None } else { Some(match respire::service::open_store() {
-        Ok(store) => store,
+    let mut _store = if respire::service::off_mode() { None } else { Some(match respire::service::open_runtime_store(&_lock) {
+        Ok((store,snapshot_id)) => {
+            if let Ok(mut slot)=SNAPSHOT_BOOT_ID.lock(){*slot=snapshot_id;}
+            STORE_READY.store(true,Ordering::Release);
+            store
+        },
         Err(error) => {
             eprintln!("runtime failed to initialize the library: {error:#}");
             stop_process(1);

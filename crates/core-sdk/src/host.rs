@@ -140,27 +140,10 @@ fn explicit_setting<T: std::str::FromStr + serde::Serialize>(
 }
 
 pub(crate) fn request_settings(payload: &mut Value) -> Result<()> {
+    crate::feedback_contract::validate(payload,Some(crate::FEEDBACK_CONTRACT))?;
     if let Some(fields) = payload.as_object_mut() {
         if !fields.contains_key("query_settings") {
-            let mut settings = serde_json::Map::new();
-            match crate::env::var("RSRS_ROUTE") {
-                Ok(value) => { settings.insert("route_on".to_owned(), json!(value != "0")); }
-                Err(std::env::VarError::NotPresent) => {}
-                Err(error) => return Err(error.into()),
-            }
-            match crate::env::var("RSRS_ABLATE") {
-                Ok(value) => { settings.insert("ablate".to_owned(), json!(value)); }
-                Err(std::env::VarError::NotPresent) => {}
-                Err(error) => return Err(error.into()),
-            }
-            explicit_setting::<f32>(&mut settings, "recall_min_score", "RSRS_RECALL_MIN_SCORE")?;
-            explicit_setting::<f32>(&mut settings, "mmr_lambda", "RSRS_MMR_LAMBDA")?;
-            explicit_setting::<usize>(&mut settings, "ancestor_budget", "RSRS_ANCESTOR_BUDGET")?;
-            explicit_setting::<usize>(
-                &mut settings,
-                "ancestor_root_floor",
-                "RSRS_ANCESTOR_ROOT_FLOOR",
-            )?;
+            let settings=query_settings_from_env()?;
             fields.insert("query_settings".to_owned(), Value::Object(settings));
         }
         if !fields.contains_key("related_settings") {
@@ -239,6 +222,10 @@ fn model_file_metadata(path: &std::path::Path, custom_cpu_file: bool) -> Result<
 }
 
 pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
+    let background_intra_threads = crate::inference_policy::background_threads(
+        crate::env::var("RSRS_INTRA_THREADS").ok().as_deref(),
+        std::thread::available_parallelism().map_or(2, |cores| cores.get()),
+    )?;
     let directory = crate::bge::resolve_model_dir()?;
     let engine = crate::onnx::configured_engine()?;
     let cpu_owned_experiment = crate::bge::cpu_owned_mode(engine)?;
@@ -258,7 +245,7 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
     };
     let legacy_options_id = digest(
         format!(
-            "{:?}:{:?}",
+            "{:?}:{:?}:{background_intra_threads}",
             crate::env::var_os("RSRS_ORT_PROFILE"),
             if cfg!(windows) && engine != crate::onnx::Engine::Cpu {
                 Some(crate::onnx::host_cache_dir())
@@ -285,7 +272,7 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
     let mut loaded = model_cache()?;
     if let Some(existing) = loaded.as_ref().filter(|existing| existing.stamp == stamp) {
         let mut request = json!({"model":"m3", "asset_id":existing.asset_id,"engine":engine,
-            "execution_timeout_secs":120,"session_options_id":session_options_id,"reuse_current":true});
+            "execution_timeout_secs":120,"background_intra_threads":background_intra_threads,"session_options_id":session_options_id,"reuse_current":true});
         if cpu_owned_experiment { request["cpu_owned_ort_experiment"] = json!(true); }
         let reused = core.load_model(request, &[], &[]);
         if reused.is_ok() { return Ok(()); }
@@ -308,7 +295,7 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
         drop(file);
         let asset_id = format!("{MODEL_HASH}:{tokenizer_hash}");
         let request = json!({"model":"m3", "asset_id":asset_id,"engine":engine,
-            "execution_timeout_secs":120,"session_options_id":session_options_id,"reuse_current":false,"cpu_owned_ort_experiment":true});
+            "execution_timeout_secs":120,"background_intra_threads":background_intra_threads,"session_options_id":session_options_id,"reuse_current":false,"cpu_owned_ort_experiment":true});
         *loaded = None;
         *PROVIDER_DIAGNOSTICS.lock().map_err(|_| anyhow::anyhow!("host provider diagnostics poisoned"))? = Vec::new();
         input.commit(request, &tokenizer)?;
@@ -352,7 +339,7 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
     // leaves no usable canonical group; never preserve an apparently live stamp.
     *loaded = None;
     let mut request = json!({"model":"m3", "asset_id":asset_id,"engine":engine,
-        "execution_timeout_secs":120,"session_options_id":session_options_id,"reuse_current":false});
+        "execution_timeout_secs":120,"background_intra_threads":background_intra_threads,"session_options_id":session_options_id,"reuse_current":false});
     if cpu_owned_experiment { request["cpu_owned_ort_experiment"] = json!(true); }
     let loaded_model = core.load_model(request, &model, &tokenizer);
     if registration_errors.is_empty() {
@@ -407,4 +394,43 @@ mod stream_tests {
         assert!(stream_model(&mut Broken, source.len(), |_| Ok(())).is_err());
         Ok(())
     }
+}
+
+/// Strict host opt-in; compatibility environment aliases are handled by env::var.
+pub fn feedback_enabled()->Result<bool> { feedback_switch("RSRS_FEEDBACK",false) }
+fn feedback_switch(name:&str,default:bool)->Result<bool> {
+    match crate::env::var(name) {
+        Ok(value)=>match value.trim(){"1"=>Ok(true),"0"=>Ok(false),_=>anyhow::bail!("{name} must be 0 or 1")},
+        Err(std::env::VarError::NotPresent)=>Ok(default),Err(error)=>Err(error.into()),
+    }
+}
+
+/// Host environment defaults, copied into each immutable request.
+pub fn query_settings_from_env()->Result<serde_json::Map<String,Value>> {
+    let mut settings = serde_json::Map::new();
+    if feedback_enabled()? {
+        anyhow::ensure!(crate::FEEDBACK_CONTRACT==1,"enabled feedback requires Core SDK feedback contract 1; install the paired SDK/CLI version");
+        // Non-recall ranking callers still remove read heat. Recall paths
+        // explicitly replace these neutral counts with their authorized context.
+        settings.insert("feedback".into(),json!({"enabled":true,"good":{},"bad":{},"bad_penalty":feedback_switch("RSRS_BAD_PENALTY",true)?}));
+    }
+    match crate::env::var("RSRS_ROUTE") {
+        Ok(value) => { settings.insert("route_on".to_owned(), json!(value != "0")); }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => return Err(error.into()),
+    }
+    match crate::env::var("RSRS_ABLATE") {
+        Ok(value) => { settings.insert("ablate".to_owned(), json!(value)); }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => return Err(error.into()),
+    }
+    explicit_setting::<f32>(&mut settings, "recall_min_score", "RSRS_RECALL_MIN_SCORE")?;
+    explicit_setting::<f32>(&mut settings, "mmr_lambda", "RSRS_MMR_LAMBDA")?;
+    explicit_setting::<usize>(&mut settings, "ancestor_budget", "RSRS_ANCESTOR_BUDGET")?;
+    explicit_setting::<usize>(
+        &mut settings,
+        "ancestor_root_floor",
+        "RSRS_ANCESTOR_ROOT_FLOOR",
+    )?;
+    Ok(settings)
 }

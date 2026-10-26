@@ -194,8 +194,10 @@ impl App {
             q = q.of_kind(k);
         }
         let (candidates, _) = recall_candidates(&self.store)?;
-        let ranked =
-            MemoryEngine::recall_local_scored(&self.keys, &self.embedder, &candidates, &q)?;
+        let ranked:Vec<(f32,MemoryEntry)>=crate::core_sdk::execute("query",serde_json::json!({
+            "model":self.embedder.model_name(),"snapshots":crate::memory::engine::snapshots(&self.keys,&candidates),
+            "query":q,"mode":"scored","query_settings":crate::feedback::query_settings(&self.store,&q,&candidates)?
+        }))?;
         for (score, e) in &ranked {
             if !readonly_mode() && !off_mode() { let _ = self.store.bump_recall_count(&e.id); }
             let _ = score;
@@ -1498,7 +1500,7 @@ pub fn autosync_enabled() -> bool {
 /// split_exec / deepen_apply each missed this and got one-off patches; this is the single gate:
 /// every write-path auto-sync goes through this fn; new write paths do not need a private check.
 pub fn autosync_active() -> bool {
-    !cfg!(test) && autosync_enabled()
+    !cfg!(test) && autosync_enabled() && crate::snapshot::ensure_sync_allowed(&data_dir()).is_ok()
 }
 
 pub fn set_autosync(on: bool) -> Result<()> {
@@ -2279,8 +2281,17 @@ pub fn import_share_payload(
 pub fn backup_db(dest: &std::path::Path) -> Result<PathBuf> {
     crate::input_error::validate_output_parent(dest)?;
     let src = database_path(&data_dir())?;
+    backup_database(&src, dest)
+}
+
+pub(crate) fn backup_database(src: &std::path::Path, dest: &std::path::Path) -> Result<PathBuf> {
+    backup_database_policy(src,dest,true)
+}
+
+pub(crate) fn backup_database_policy(src: &std::path::Path, dest: &std::path::Path, strip_grants: bool) -> Result<PathBuf> {
+    crate::input_error::validate_output_parent(dest)?;
     let connection =
-        rusqlite::Connection::open_with_flags(&src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        rusqlite::Connection::open_with_flags(src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let target = dest
         .to_str()
         .ok_or_else(|| anyhow!("backup path must be valid UTF-8"))?;
@@ -2300,8 +2311,8 @@ pub fn backup_db(dest: &std::path::Path) -> Result<PathBuf> {
         let has_grants = backup
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='access_grants'")?
             .exists([])?;
-        if has_grants {
-            backup.execute("DELETE FROM access_grants", [])?;
+        if has_grants && strip_grants {
+            backup.execute_batch("PRAGMA secure_delete=ON; DELETE FROM access_grants; VACUUM;")?;
         }
         Ok(())
     })();
@@ -2726,12 +2737,14 @@ pub fn split_exec<E: crate::memory::search::Embedder>(
 // ── small helpers ──
 
 pub fn open_store() -> Result<LocalStore> {
+    crate::snapshot::ensure_no_incomplete_restore(&data_dir())?;
     open_store_with_profile().map(|(_, store)| store)
 }
 
 /// Return the identity captured for this exact connection, not a later config read.
 pub fn open_store_with_profile() -> Result<(PathBuf, LocalStore)> {
     let root = data_dir();
+    crate::snapshot::ensure_no_incomplete_restore(&root)?;
     check_runtime_profile(&root)?;
     respire_core_sdk::set_index_root(&root)?;
     let db = database_path(&root)?;
@@ -2743,11 +2756,26 @@ pub fn open_store_with_profile() -> Result<(PathBuf, LocalStore)> {
     Ok((root, store))
 }
 
+/// Bootstrap under actual runtime library ownership without opening business access.
+pub fn open_runtime_store(ownership:&crate::lock::LibraryLock)->Result<(LocalStore,Option<String>)> {
+    let root=data_dir();check_runtime_profile(&root)?;
+    anyhow::ensure!(ownership.protects(&root)?,"runtime bootstrap requires matching library ownership");
+    let expected=crate::snapshot::runtime_bootstrap_target(&root)?;
+    respire_core_sdk::set_index_root(&root)?;
+    let store=LocalStore::open(&database_path(&root)?)?;
+    if let Some(id)=expected.as_ref() {
+        store.verify_sqlite_integrity()?;
+        anyhow::ensure!(store.snapshot_quarantine_id()?.as_ref()==Some(id),"opened library does not match the restored snapshot transaction");
+    }
+    Ok((store,expected))
+}
+
 /// Initialize the runtime's owned library after normal service is restored.
 /// Disabled startup deliberately leaves a new database uncreated.
 pub fn initialize_runtime_store() -> Result<LocalStore> {
     anyhow::ensure!(!service_paused(), "database initialization requires normal service");
     let root = data_dir();
+    crate::snapshot::ensure_no_incomplete_restore(&root)?;
     check_runtime_profile(&root)?;
     respire_core_sdk::set_index_root(&root)?;
     LocalStore::open(&database_path(&root)?)
