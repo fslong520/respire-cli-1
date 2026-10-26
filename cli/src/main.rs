@@ -7851,6 +7851,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     embedder!(),
                     &candidates,
                     &q_skill,
+                    &store,
                     &recall_mode,
                 )?;
                 procedure_pass = skills.len();
