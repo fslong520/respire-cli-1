@@ -4,7 +4,7 @@
 // Builds npm/dist/<pkg>/. After verify-packages.mjs writes pack receipts,
 // --publish consumes those exact packages, platform packages before the umbrella.
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, cpSync, existsSync, chmodSync, rmSync } from 'node:fs';
-import { readExpectedPacks } from './registry-publication.mjs';
+import { assertPackMatches, currentPackSource, readExpectedPacks, readValidatedPacks } from './registry-publication.mjs';
 import {assertSubmissionActive} from './publication-acceptance.mjs';
 import { publishScopedPackages, acceptScopedPackages } from './parallel-publication.mjs';
 import path from 'node:path';
@@ -43,7 +43,13 @@ if (manifest.cliVersion !== version) {
 // Publication consumes the receipts written by verify-packages.mjs. Do not
 // rebuild or clear dist here: that would discard the evidence we just verified.
 if (doPublish) {
-  const expected = readExpectedPacks(outDir, manifest, version);
+  let expected = readExpectedPacks(outDir, manifest, version);
+  const validated = arg('--verified-packs');
+  if (process.argv.includes('--verified-packs') && !validated) throw Error('Validated tarball directory is required');
+  if (validated) {
+    const packs=readValidatedPacks(path.resolve(validated),currentPackSource(),manifest);
+    expected=expected.map(pack=>({...assertPackMatches(packs.find(p=>p.name===pack.name),pack),dir:pack.dir}));
+  }
   const accepted = [];
   const submissions = new Map();
   const prior = acceptedOnly ? JSON.parse(readFileSync('prior-scoped-acceptances.json', 'utf8')) : null;
@@ -59,8 +65,8 @@ if (doPublish) {
   for (const result of await publish(expected, manifest.npmScope, npmTag, {
     timeoutMs: 30 * 60 * 1000,
     knownAcceptances: prior?.acceptances,
+    beforeWrite: acceptedOnly ? ()=>assertSubmissionActive() : undefined,
     onSubmission: acceptedOnly ? event => {
-      assertSubmissionActive();
       const p = event.package;
       submissions.set(p.name, {state: 'unknown', package: {name: p.name, version: p.version, integrity: p.integrity, shasum: p.shasum}});
       persist();

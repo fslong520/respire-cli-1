@@ -149,7 +149,7 @@ test('workflow defaults critical, retains mandatory profile gates and dispatches
   assert.match(release,/validation_profile:[\s\S]*?default: critical/);assert.match(release,/REQUIRE_FULL:.*inputs.full_regression_before_publish/);
   assert.match(release,/process.env.REQUIRE_FULL==='true'\?'full':requested/);
   const part=name=>release.split('\n  '+name+':\n')[1]?.split(/\n  [a-z][\w-]*:\n/)[0];
-  for(const name of ['validate','native-regression','native-regression-critical'])assert.match(part(name),/permissions:[\s\S]*?actions: read/);
+  for(const name of ['validate','native-regression','native-regression-critical','native-regression-critical-readonly'])assert.match(part(name),/permissions:[\s\S]*?actions: read/);
   const standalone=readFileSync(new URL('../../.github/workflows/release-validation.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
   assert.match(standalone,/permissions:\n  contents: read\n  actions: read/);
   assert.match(standalone.split('\n  native-regression:\n')[1].split('\n  npm-dry-run:')[0],/permissions:[\s\S]*?actions: read/);
@@ -164,6 +164,29 @@ test('workflow defaults critical, retains mandatory profile gates and dispatches
   assert.match(native,/artifacts.length>1/);assert.match(native,/current.run_attempt!==attempt/);assert.match(native,/job.conclusion==='success'/);
   assert.match(native,/if: inputs.validation_profile == 'full'[\s\S]*?resident-stress/);
   assert.match(daily,/schedule:/);assert.match(daily,/-f publish=false -f validation_profile=full/);assert.doesNotMatch(daily,/-f publish=true(?:\s|$)|npm publish/);
+});
+
+test('critical cache writers and readers are mutually exclusive and full callers stay read-only',()=>{
+  const text=file=>readFileSync(new URL('../../.github/workflows/'+file,import.meta.url),'utf8').replace(/\r\n/g,'\n');
+  const release=text('release.yml'),part=name=>release.split('\n  '+name+':\n')[1]?.split(/\n  [a-z][\w-]*:\n/)[0];
+  const writer=part('native-regression-critical'),reader=part('native-regression-critical-readonly');
+  assert.match(writer,/cache-mode: write/);assert.match(reader,/cache-mode: read/);assert.match(part('native-regression'),/cache-mode: read/);
+  assert.match(text('release-validation.yml'),/^cache-mode: read$/m);
+  assert.doesNotMatch(text('release-validation.yml').split('\n  native-regression:\n')[1].split('\n  npm-dry-run:')[0],/cache-mode: (?:write|write-only)/);
+  assert.doesNotMatch(text('release-native-validation.yml'),/cache-mode:/);
+  for(const block of [writer,reader]){
+    assert.match(block,/name: native-regression/);assert.match(block,/needs: plan/);assert.match(block,/validation_profile: critical/);assert.match(block,/producer_prefix: 'validate \/ '/);
+  }
+  const condition=block=>block.match(/    if: \$\{\{ (.+) \}\}/)[1];
+  for(const repository of ['risense-ai/respire-cli','foreign/repo'])for(const ref of ['refs/heads/main','refs/tags/v1.2.3'])for(const sameSha of [true,false])for(const event of ['push','workflow_dispatch','pull_request','workflow_run'])for(const profile of ['critical','full']){
+    const context={github:{repository,ref,sha:'a'.repeat(40),event_name:event},inputs:{reuse_dev12_validation:false,prepared_run:''},needs:{plan:{outputs:{sha:(sameSha?'a':'b').repeat(40),validation_profile:profile}}}};
+    const write=runInNewContext(condition(writer),context),read=runInNewContext(condition(reader),context);
+    assert.equal(Number(write)+Number(read),profile==='critical'?1:0,'exactly one critical native matrix may run');
+    assert.equal(write,profile==='critical'&&repository==='risense-ai/respire-cli'&&ref==='refs/heads/main'&&sameSha&&['push','workflow_dispatch'].includes(event));
+    for(const inputs of [{reuse_dev12_validation:true,prepared_run:''},{reuse_dev12_validation:false,prepared_run:'123'}]){
+      assert.equal(runInNewContext(condition(writer),{...context,inputs}),false);assert.equal(runInNewContext(condition(reader),{...context,inputs}),false);
+    }
+  }
 });
 
 test('the actual critical target waiter binds unique successful producer, source, attempt and artifact before consumption',async()=>{

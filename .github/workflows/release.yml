@@ -249,6 +249,7 @@ jobs:
       full_validation: false
 
   native-regression:
+    cache-mode: read
     if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' && needs.plan.outputs.validation_profile == 'full' }}
     needs: [plan, validate]
     permissions:
@@ -262,7 +263,23 @@ jobs:
 
   native-regression-critical:
     name: native-regression
-    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' && needs.plan.outputs.validation_profile == 'critical' }}
+    cache-mode: write
+    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' && needs.plan.outputs.validation_profile == 'critical' && github.repository == 'risense-ai/respire-cli' && github.ref == 'refs/heads/main' && needs.plan.outputs.sha == github.sha && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    needs: plan
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release-native-validation.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      version: ${{ needs.plan.outputs.version }}
+      validation_profile: critical
+      producer_prefix: 'validate / '
+
+  native-regression-critical-readonly:
+    name: native-regression
+    cache-mode: read
+    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' && needs.plan.outputs.validation_profile == 'critical' && !(github.repository == 'risense-ai/respire-cli' && github.ref == 'refs/heads/main' && needs.plan.outputs.sha == github.sha && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
     needs: plan
     permissions:
       contents: write
@@ -682,11 +699,11 @@ jobs:
       ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
           needs.plan.result == 'success' && needs.validate.result == 'success' &&
           ((needs.plan.outputs.validation_profile == 'full' && needs.native-regression.result == 'success') ||
-           (needs.plan.outputs.validation_profile == 'critical' && needs.native-regression-critical.result == 'success')) &&
+           (needs.plan.outputs.validation_profile == 'critical' && needs.native-regression-critical.result == 'success' && needs.native-regression-critical-readonly.result == 'skipped')) &&
           needs.plan.outputs.sha == github.sha && needs.plan.outputs.publish == 'false' &&
           !inputs.reuse_dev12_validation &&
           !inputs.resume_dev6_publication && !inputs.repair_dev12 && !inputs.repair_dev14 }}
-    needs: [plan, validate, native-regression, native-regression-critical, cloud-sweep, native-migration, migration-gate, api-smoke]
+    needs: [plan, validate, native-regression, native-regression-critical, native-regression-critical-readonly, cloud-sweep, native-migration, migration-gate, api-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -992,6 +1009,7 @@ jobs:
       REPAIR_VERSION: ${{ inputs.repair_dev14 && '1.0.11-dev.14' || '1.0.11-dev.12' }}
       REPAIR_SHA: ${{ inputs.repair_dev14 && 'fd0e5463f8c59f304ff17d622efb1f6221f9b04c' || 'd8314480e10a27767544f781083e35c8e85657f0' }}
       REPAIR_RUN: ${{ inputs.repair_dev14 && '37728949557' || '37716872717' }}
+      REUSE_VALIDATED_PACKS: ${{ github.repository == 'risense-ai/respire-cli' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.plan.outputs.sha == github.sha && inputs.prepared_run == '' && !(inputs.repair_dev12 || inputs.repair_dev14 || inputs.reuse_dev12_validation) }}
     permissions:
       contents: write
       actions: write
@@ -1054,11 +1072,18 @@ jobs:
           path: release-assets
           merge-multiple: true
       - name: Verify release artifacts and prepare every scoped npm package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLI_SHA: ${{ needs.plan.outputs.sha }}
         run: |
           node npm/scripts/verify-packages.mjs release-assets --assets-only
           node npm/scripts/assemble-artifacts.mjs release-assets target/ci
           node npm/scripts/pack.mjs --root target/ci
-          node npm/scripts/verify-packages.mjs release-assets
+          if [ "$REUSE_VALIDATED_PACKS" = true ]; then
+            node npm/scripts/verify-packages.mjs release-assets --reuse-packs "$RUNNER_TEMP/validated-npm" --download
+          else
+            node npm/scripts/verify-packages.mjs release-assets
+          fi
       - name: Materialize the actual local tarballs for prepared-byte equality checks
         if: inputs.prepared_run != ''
         run: node npm/scripts/verify-packages.mjs release-assets --pack npm/release-packages
@@ -1130,8 +1155,14 @@ jobs:
         if: ${{ !(inputs.repair_dev12 || inputs.repair_dev14) }}
         env:
           GH_TOKEN: ${{ github.token }}
+          CLI_SHA: ${{ needs.plan.outputs.sha }}
           CLI_CHANNEL: ${{ needs.plan.outputs.channel }}
-        run: node npm/scripts/pack.mjs --root target/ci --publish --accepted-only --tag "$CLI_CHANNEL"
+        run: |
+          if [ "$REUSE_VALIDATED_PACKS" = true ]; then
+            node npm/scripts/pack.mjs --root target/ci --publish --accepted-only --verified-packs "$RUNNER_TEMP/validated-npm" --tag "$CLI_CHANNEL"
+          else
+            node npm/scripts/pack.mjs --root target/ci --publish --accepted-only --tag "$CLI_CHANNEL"
+          fi
       - uses: actions/upload-artifact@v4
         if: ${{ always() && !(inputs.repair_dev12 || inputs.repair_dev14) }}
         with:

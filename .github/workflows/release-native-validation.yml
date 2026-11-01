@@ -149,11 +149,29 @@ jobs:
           CLI_SHA: ${{ inputs.ref }}
           CLI_VERSION: ${{ inputs.version }}
         run: node npm/scripts/extract-artifact.mjs validated-cli target/ci/${{ matrix.target }}/release
-      - uses: actions/cache@v4
-        if: runner.os == 'macOS'
+      - name: Key the four fixed public model inputs
+        id: model-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$(python scripts/native-model-cache.py key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: model-cache
         with:
-          path: ${{ runner.temp }}/release-probe/models/bge-m3
-          key: release-m3-quantized-0826f8c1-macos
+          path: .native-model-cache
+          key: ${{ steps.model-key.outputs.key }}
+          enableCrossOsArchive: true
+      - name: Require an exact cache and verify every public model byte before restoring
+        if: steps.model-cache.outputs.cache-matched-key != ''
+        shell: bash
+        env:
+          EXPECTED_KEY: ${{ steps.model-key.outputs.key }}
+          MATCHED_KEY: ${{ steps.model-cache.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          test "$MATCHED_KEY" = "$EXPECTED_KEY"
+          python scripts/native-model-cache.py restore --model-dir "$RUNNER_TEMP/release-probe/models/bge-m3" --legacy-dir native-legacy-model
       - name: Install and probe BGE CPU inference
         shell: bash
         env:
@@ -171,25 +189,59 @@ jobs:
           "$exe" --direct model install-m3 --json
           "$exe" --direct model probe --json
           bash scripts/probe-native-arm64-alpine.sh '${{ matrix.target }}' "$exe" "$RSRS_M3_DIR" "$RUNNER_TEMP/arm-alpine-probe"
+      - name: Prepare isolated upgrade Python and the fixed Windows wheel key
+        id: wheel-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/upgrade-python"
+          py="$RUNNER_TEMP/upgrade-python/bin/python"
+          if [ "$RUNNER_OS" = Windows ]; then py="$RUNNER_TEMP/upgrade-python/Scripts/python.exe"; fi
+          if [ "$RUNNER_OS" = Windows ]; then
+            "$py" -m pip install --only-binary=:all: pip==26.2.2 setuptools==84.2.1 wheel==0.48.0
+          fi
+          "$py" -m pip install --only-binary=:all: cryptography==46.0.3
+          if [ "$RUNNER_OS" = Windows ]; then
+            key="$("$py" scripts/native-psutil-wheel-cache.py key)"
+            echo "key=$key" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/cache/restore@v4
+        id: wheel-cache
+        if: runner.os == 'Windows'
+        with:
+          path: .native-psutil-wheels
+          key: ${{ steps.wheel-key.outputs.key }}
+          enableCrossOsArchive: false
+      - name: Verify or build the exact Windows wheel and install it offline
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          EXPECTED_KEY: ${{ steps.wheel-key.outputs.key }}
+          MATCHED_KEY: ${{ steps.wheel-cache.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          py="$RUNNER_TEMP/upgrade-python/Scripts/python.exe"
+          if [ -n "$MATCHED_KEY" ]; then
+            test "$MATCHED_KEY" = "$EXPECTED_KEY"
+          else
+            "$py" scripts/native-psutil-wheel-cache.py build --directory .native-psutil-wheels
+          fi
+          "$py" scripts/native-psutil-wheel-cache.py validate --directory .native-psutil-wheels
+          "$py" scripts/native-psutil-wheel-cache.py install --directory .native-psutil-wheels
       - name: Require every upgrade selected by the native validation profile
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          MODEL_CACHE_HIT: ${{ steps.model-cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
-          python -m venv "$RUNNER_TEMP/upgrade-python"
           py="$RUNNER_TEMP/upgrade-python/bin/python"
           exe="target/ci/${{ matrix.target }}/release/rsrs"
           if [ "$RUNNER_OS" = Windows ]; then
             py="$RUNNER_TEMP/upgrade-python/Scripts/python.exe"
             exe="$exe.exe"
           fi
-          "$py" -m pip install --only-binary=:all: cryptography==46.0.3
-          if [ "$RUNNER_OS" = Windows ]; then
-            # PyPI 7.2.2 predates the fixed Windows handle-query implementation.
-            # Build the exact upstream fix, not a moving branch or local patch.
-            "$py" -m pip install --no-deps 'psutil @ https://github.com/giampaolo/psutil/archive/078f2f08d2ccea916a42f9571ab8bd40d958e7a1.tar.gz#sha256=8073a6389894b1ea3edc4f0feb47dba742b5552eab93f28ba6f45d2b19f11e4b'
-          else
+          if [ "$RUNNER_OS" != Windows ]; then
             "$py" -m pip install --only-binary=:all: psutil==7.1.0
           fi
           # Historical sources use FP16; newer stable sources also need the prepared CPU container.
@@ -197,9 +249,12 @@ jobs:
           cp "$RUNNER_TEMP/release-probe/models/bge-m3/tokenizer.json" native-legacy-model/tokenizer.json
           cp "$RUNNER_TEMP/release-probe/models/bge-m3/onnx/model_quantized.onnx" native-legacy-model/onnx/model_quantized.onnx
           cp "$RUNNER_TEMP/release-probe/models/bge-m3/onnx/model_quantized.cpu-v1.ort" native-legacy-model/onnx/model_quantized.cpu-v1.ort
-          curl --fail --location --retry 1 --connect-timeout 20 --max-time 1200 \
-            'https://huggingface.co/Xenova/bge-m3/resolve/4de13258303883538bd53b696b452bf8099f0858/onnx/model_fp16.onnx' \
-            --output native-legacy-model/onnx/model_fp16.onnx
+          if [ "$MODEL_CACHE_HIT" != true ]; then
+            curl --fail --location --retry 1 --connect-timeout 20 --max-time 1200 \
+              'https://huggingface.co/Xenova/bge-m3/resolve/4de13258303883538bd53b696b452bf8099f0858/onnx/model_fp16.onnx' \
+              --output native-legacy-model/onnx/model_fp16.onnx
+          fi
+          "$py" scripts/native-model-cache.py verify --model-dir "$RUNNER_TEMP/release-probe/models/bge-m3" --legacy-dir native-legacy-model
           "$py" scripts/test-published-upgrades.py --binary "$exe" --target '${{ matrix.target }}' \
             --model-dir "$RUNNER_TEMP/release-probe/models/bge-m3" \
             --legacy-model-dir native-legacy-model \
@@ -258,3 +313,36 @@ jobs:
           name: gnu-login-interruption
           path: ${{ runner.temp }}/gnu-login-interruption/interruption-coverage.json
           if-no-files-found: error
+      - name: Read the runner's actual public input cache capability
+        id: cache-write
+        shell: bash
+        env:
+          TRUSTED_SOURCE: ${{ github.repository == 'risense-ai/respire-cli' && github.ref == 'refs/heads/main' && inputs.ref == github.sha && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        run: |
+          set -euo pipefail
+          if [ "${ACTIONS_CACHE_MODE:-}" = write ] && [ "$TRUSTED_SOURCE" = true ]; then
+            echo 'may_save=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'may_save=false' >> "$GITHUB_OUTPUT"
+            echo "Public input cache is read-only for this source/mode (${ACTIONS_CACHE_MODE:-unset}); no save scheduled"
+          fi
+      - name: Stage only verified public model inputs for the next run
+        id: model-cache-stage
+        continue-on-error: true
+        if: ${{ steps.cache-write.outputs.may_save == 'true' && github.repository == 'risense-ai/respire-cli' && github.ref == 'refs/heads/main' && inputs.ref == github.sha && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.model-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: python scripts/native-model-cache.py stage --model-dir "$RUNNER_TEMP/release-probe/models/bge-m3" --legacy-dir native-legacy-model
+      - uses: actions/cache/save@v4
+        continue-on-error: true
+        if: ${{ steps.cache-write.outputs.may_save == 'true' && github.repository == 'risense-ai/respire-cli' && github.ref == 'refs/heads/main' && inputs.ref == github.sha && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.model-cache-stage.outcome == 'success' }}
+        with:
+          path: .native-model-cache
+          key: ${{ steps.model-key.outputs.key }}
+          enableCrossOsArchive: true
+      - uses: actions/cache/save@v4
+        continue-on-error: true
+        if: ${{ steps.cache-write.outputs.may_save == 'true' && runner.os == 'Windows' && github.repository == 'risense-ai/respire-cli' && github.ref == 'refs/heads/main' && inputs.ref == github.sha && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.wheel-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: .native-psutil-wheels
+          key: ${{ steps.wheel-key.outputs.key }}
+          enableCrossOsArchive: false

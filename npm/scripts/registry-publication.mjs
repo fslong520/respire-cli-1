@@ -1,9 +1,9 @@
 // Immutable npm publication helpers. Public registry reads never use npm credentials.
 import {createHash} from 'node:crypto';
-import {mkdirSync, mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {closeSync, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {spawn, spawnSync} from 'node:child_process';
+import {execFileSync, spawn, spawnSync} from 'node:child_process';
 
 export const REGISTRY = 'https://registry.npmjs.org';
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -75,6 +75,166 @@ export function readExpectedPacks(dist, manifest, version = manifest.cliVersion)
     identity(expected);
     return expected;
   });
+}
+
+const positive = value => /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(Number(value));
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
+export function packProducer(sha, env = process.env) {
+  if (!env.GITHUB_RUN_ID || env.GITHUB_JOB!=='npm-dry-run') return undefined; // Other pack callers cannot opt into same-run reuse.
+  const producer = {repository:env.GITHUB_REPOSITORY,run_id:String(env.GITHUB_RUN_ID),
+    run_attempt:Number(env.GITHUB_RUN_ATTEMPT),sha,job:env.GITHUB_JOB};
+  if (!/^[\w.-]+\/[\w.-]+$/.test(producer.repository || '') || !positive(producer.run_id) ||
+      !positive(producer.run_attempt) || !/^[a-f0-9]{40}$/.test(sha) || producer.job !== 'npm-dry-run') {
+    throw Error('Validated pack producer identity is incomplete');
+  }
+  return producer;
+}
+export function currentPackSource(env = process.env) {
+  const source = {repository:env.GITHUB_REPOSITORY,run_id:String(env.GITHUB_RUN_ID),
+    run_attempt:Number(env.GITHUB_RUN_ATTEMPT),sha:env.CLI_SHA};
+  if (!/^[\w.-]+\/[\w.-]+$/.test(source.repository || '') || !positive(source.run_id) ||
+      !positive(source.run_attempt) || !/^[a-f0-9]{40}$/.test(source.sha || '')) throw Error('Current pack source is incomplete');
+  return source;
+}
+export function validatedPackArtifact(run,jobs,artifacts,source) {
+  if (String(run.id)!==source.run_id || Number(run.run_attempt)!==source.run_attempt || run.head_sha!==source.sha ||
+      run.head_repository?.full_name!==source.repository || run.path!=='.github/workflows/release.yml' ||
+      run.head_branch!=='main' || run.event!=='workflow_dispatch' || run.status!=='in_progress') throw Error('Validated pack run/source/attempt differs');
+  const producers=jobs.filter(j=>j.name==='validate / npm-dry-run');
+  if (producers.length!==1 || !positive(producers[0].id) || String(producers[0].run_id)!==source.run_id ||
+      Number(producers[0].run_attempt)!==source.run_attempt || producers[0].head_sha!==source.sha ||
+      producers[0].status!=='completed' || producers[0].conclusion!=='success') throw Error('Validated pack producer is missing, ambiguous or unsuccessful');
+  const found=artifacts.filter(a=>a.name==='npm-release-packages');
+  if (found.length!==1 || !positive(found[0].id) || found[0].expired!==false ||
+      String(found[0].workflow_run?.id)!==source.run_id || found[0].workflow_run.head_sha!==source.sha ||
+      !/^sha256:[a-f0-9]{64}$/.test(found[0].digest || '') || !positive(found[0].size_in_bytes) ||
+      found[0].size_in_bytes>1024*1024*1024) throw Error('Validated pack artifact is missing, foreign or undigested');
+  return found[0];
+}
+function python(script,args,input) {
+  return execFileSync(process.platform==='win32'?'py':'python3',
+    [...(process.platform==='win32'?['-3']:[]),'-I','-c',script,...args],{input,encoding:'utf8',timeout:120000,maxBuffer:1024*1024});
+}
+export function downloadValidatedPacks(folder,source,transport) {
+  currentPackSource({GITHUB_REPOSITORY:source.repository,GITHUB_RUN_ID:source.run_id,GITHUB_RUN_ATTEMPT:source.run_attempt,CLI_SHA:source.sha});
+  if (existsSync(folder)) throw Error('Validated pack download destination must be new');
+  const command=transport || ((args,options)=>{
+    if (!process.env.GH_TOKEN) throw Error('Validated pack reads require the explicit workflow GH_TOKEN');
+    return execFileSync('gh',['api',...args],{timeout:120000,...options});
+  });
+  const base=`repos/${source.repository}/actions`,read=endpoint=>JSON.parse(command([endpoint],{encoding:'utf8'}));
+  const pages=endpoint=>JSON.parse(command(['--paginate','--slurp',endpoint],{encoding:'utf8'}));
+  const run=read(`${base}/runs/${source.run_id}`);
+  const jobs=pages(`${base}/runs/${source.run_id}/attempts/${source.run_attempt}/jobs?per_page=100`).flatMap(p=>p.jobs);
+  const artifacts=pages(`${base}/runs/${source.run_id}/artifacts?per_page=100`).flatMap(p=>p.artifacts);
+  const artifact=validatedPackArtifact(run,jobs,artifacts,source);
+  const bytes=command([`${base}/artifacts/${artifact.id}/zip`],{encoding:'buffer',maxBuffer:1024*1024*1024});
+  if (!Buffer.isBuffer(bytes) || bytes.length!==artifact.size_in_bytes || `sha256:${sha256(bytes)}`!==artifact.digest) throw Error('Validated pack ZIP differs from its immutable artifact digest');
+  const temp=mkdtempSync(path.join(tmpdir(),'validated-packs-'));
+  try {
+    const zip=path.join(temp,'packs.zip');writeFileSync(zip,bytes);
+    // Read only flat ordinary files; never let an archive choose extraction paths.
+    python(`import os,re,stat,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+ entries=z.infolist(); names=[e.filename for e in entries]
+ assert len(names)==len(set(names)) and 2<len(names)<=64, 'Invalid pack ZIP inventory'
+ assert all(re.fullmatch(r'[A-Za-z0-9@._-]+\\.tgz|source-version\\.json|SHA256SUMS',n) for n in names), 'Unsafe pack ZIP entry'
+ assert all(not e.is_dir() and stat.S_IFMT(e.external_attr>>16) in (0,stat.S_IFREG) for e in entries), 'Non-regular pack ZIP entry'
+ assert sum(e.file_size for e in entries)<=1024**3, 'Oversized pack ZIP'
+ limits={'source-version.json':1024**2,'SHA256SUMS':16*1024}
+ assert all(e.file_size<=limits.get(e.filename,1024**3) for e in entries), 'Oversized pack metadata'
+ os.mkdir(sys.argv[2])
+ for e in entries:
+  with z.open(e) as src,open(os.path.join(sys.argv[2],e.filename),'xb') as dst:
+   count=0
+   while chunk:=src.read(1024*1024):
+    count+=len(chunk)
+    assert count<=limits.get(e.filename,1024**3), 'Oversized actual pack metadata'
+    dst.write(chunk)
+   assert count==e.file_size, 'Pack ZIP member size differs'
+`,[zip,path.resolve(folder)]);
+    return readValidatedPacks(folder,source);
+  } finally {rmSync(temp,{recursive:true,force:true});}
+}
+function packMetadata(folder,file,limit) {
+  const full=path.join(folder,file),stat=lstatSync(full);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size>limit) throw Error(`Validated pack metadata is not an ordinary bounded file: ${file}`);
+  const fd=openSync(full,'r');
+  try {
+    const opened=fstatSync(fd);
+    if (!opened.isFile() || opened.size>limit || opened.dev!==stat.dev || opened.ino!==stat.ino) throw Error(`Validated pack metadata changed: ${file}`);
+    const bytes=Buffer.alloc(limit+1);let length=0,count;
+    while(length<bytes.length && (count=readSync(fd,bytes,length,bytes.length-length,null))) length+=count;
+    if(length>limit || length!==opened.size) throw Error(`Validated pack metadata exceeds its budget or changed: ${file}`);
+    return bytes.subarray(0,length).toString('utf8');
+  } finally {closeSync(fd);}
+}
+export function readValidatedPacks(folder,source,manifest) {
+  currentPackSource({GITHUB_REPOSITORY:source.repository,GITHUB_RUN_ID:source.run_id,GITHUB_RUN_ATTEMPT:source.run_attempt,CLI_SHA:source.sha});
+  const index=JSON.parse(packMetadata(folder,'source-version.json',1024*1024));
+  const seal={...source,job:'npm-dry-run'};
+  if (!same(index.producer,seal) || index.git_sha!==source.sha || index.schema_version!==1 || !Array.isArray(index.packages)) throw Error('Validated pack seal/source/attempt differs');
+  const names=manifest?[...manifest.targets.map(t=>t.pkg),manifest.npmScope]:index.packages.map(p=>p.name);
+  if (new Set(names).size!==names.length || !same(index.packages.map(p=>p.name).sort(),[...names].sort()) ||
+      (manifest && index.version!==manifest.cliVersion)) throw Error('Validated pack inventory/version differs');
+  const files=index.packages.map(p=>archiveName(p.file));
+  if (new Set(files).size!==files.length || !same(readdirSync(folder).sort(),[...files,'source-version.json','SHA256SUMS'].sort()) ||
+      packMetadata(folder,'SHA256SUMS',16*1024)!==index.packages.map(p=>`${p.sha256}  ${p.file}`).join('\n')+'\n') throw Error('Validated pack file inventory/checksums differ');
+  return index.packages.map(p=>{
+    const report=p.pack;
+    if (!report || report.name!==p.name || report.version!==index.version || p.version!==index.version ||
+        report.filename!==p.file || !/^[a-f0-9]{64}$/.test(p.sha256 || '')) throw Error('Validated pack report identity differs');
+    identity(report);
+    const tarballPath=path.resolve(folder,archiveName(p.file));
+    return {...report,sha256:p.sha256,tarballPath};
+  });
+}
+function verifyPackBytes(tarballPath,expected) {
+  identity(expected);
+  const stat=lstatSync(tarballPath);
+  if (!stat.isFile() || stat.isSymbolicLink() || !Number.isSafeInteger(expected.size) || stat.size!==expected.size) throw Error('Validated tarball size/SHA256 differs');
+  const bytes=readFileSync(tarballPath);
+  if (bytes.length!==expected.size ||
+      !/^[a-f0-9]{64}$/.test(expected.sha256 || '') || sha256(bytes)!==expected.sha256) throw Error('Validated tarball size/SHA256 differs');
+  assertPackMatches({...expected,...hashBytes(bytes)},expected);
+}
+export function verifyPackFile(tarballPath,expected,dir) {
+  verifyPackBytes(tarballPath,expected);
+  // tarfile handles PAX/GNU headers. Compare every ordinary member to the current-source tree without extraction.
+  python(`import json,os,stat,sys,tarfile
+report=json.load(sys.stdin); root=sys.argv[2]; files=report['files']; expected={}
+assert not os.path.islink(root), 'Linked package root'
+for f in files:
+ p=f['path']
+ assert isinstance(p,str) and p and '\\\\' not in p and all(s not in ('','.','..') for s in p.split('/')), 'Unsafe pack path'
+ assert p not in expected and isinstance(f['size'],int) and f['size']>=0, 'Duplicate or invalid pack file'
+ expected[p]=f
+local=set()
+for base,dirs,names in os.walk(root,followlinks=False):
+ assert all(not os.path.islink(os.path.join(base,d)) for d in dirs), 'Linked package directory'
+ for name in names:
+  full=os.path.join(base,name); p=os.path.relpath(full,root).replace(os.sep,'/')
+  if p=='release.pack.json': continue
+  assert stat.S_ISREG(os.lstat(full).st_mode), 'Non-regular package file'
+  local.add(p)
+assert local==set(expected) and 'package.json' in expected, 'Local package inventory differs'
+seen=set()
+with tarfile.open(sys.argv[1],'r|gz') as archive:
+ for member in archive:
+  assert member.type in (tarfile.REGTYPE,tarfile.AREGTYPE) and member.name.startswith('package/'), 'Non-regular or unrooted tar member'
+  p=member.name[len('package/'):]
+  assert p in expected and p not in seen, 'Unexpected or duplicate tar member'
+  f=expected[p]; full=os.path.join(root,*p.split('/')); size=os.stat(full).st_size
+  assert member.size==f['size']==size and (member.mode&0o7777)==f['mode'], 'Tar member size/mode differs'
+  assert os.name=='nt' or stat.S_IMODE(os.stat(full).st_mode)==f['mode'], 'Local package file mode differs'
+  with archive.extractfile(member) as packed,open(full,'rb') as actual:
+   while chunk:=actual.read(1024*1024): assert packed.read(len(chunk))==chunk, 'Tar member content differs'
+   assert not packed.read(1), 'Unexpected tar member bytes'
+  seen.add(p)
+assert seen==set(expected), 'Missing tar member'
+`,[path.resolve(tarballPath),path.resolve(dir)],JSON.stringify(expected));
+  return {...expected,tarballPath:path.resolve(tarballPath)};
 }
 
 function hashBytes(bytes) {
@@ -317,8 +477,17 @@ async function submitPackage(dir, expected, tag, options, acceptedOnly) {
   // Check the verified local receipt before either skipping or publishing.
   const temp = mkdtempSync(path.join(tmpdir(), 'rsrs-npm-publish-'));
   try {
-    const packed = packPackage(dir, temp, options);
+    let packed;
+    if (expected.tarballPath) {
+      if (!lstatSync(expected.tarballPath).isFile() || lstatSync(expected.tarballPath).isSymbolicLink()) throw Error('Validated tarball is not an ordinary file');
+      const snapshot=path.join(temp,archiveName(expected.filename));
+      copyFileSync(expected.tarballPath,snapshot);
+      packed=verifyPackFile(snapshot,expected,dir);
+    } else packed=packPackage(dir,temp,options);
     assertPackMatches(packed, expected);
+    const snapshotBytes=readFileSync(packed.tarballPath);
+    const submissionSnapshot={...packed,size:snapshotBytes.length,sha256:sha256(snapshotBytes),...hashBytes(snapshotBytes)};
+    assertPackMatches(submissionSnapshot,expected);
     if (acceptedOnly && options.knownAcceptances) {
       if (!Array.isArray(options.knownAcceptances)) throw new Error('Invalid prior npm acceptance list');
       const previous = options.knownAcceptances.filter(p => p.name === expected.name && p.version === expected.version);
@@ -354,6 +523,8 @@ async function submitPackage(dir, expected, tag, options, acceptedOnly) {
     let result;
     // Persist intent before crossing the irreversible boundary. A rerun must
     // reconcile an interrupted submission rather than treating 404 as consent.
+    if (options.beforeWrite) await options.beforeWrite();
+    verifyPackBytes(packed.tarballPath,submissionSnapshot);
     options.onSubmission?.({state: 'unknown', package: expected});
     try {
       result = await (options.spawnImpl || publishNpm)(npm,

@@ -54,6 +54,7 @@ test('independent contract checks do not wait for Rust coverage or receive SDK/p
     assert(contracts.includes(`npm/scripts/${script}.mjs`),script);assert(!source.includes(`npm/scripts/${script}.mjs`),`not serialized: ${script}`);
   }
   for(const script of ['test-private-sdk-download.mjs','test-sdk-ci-cache.mjs','test-stage-core-runtime.mjs','test-dev-smoke-gate.py','test-dev-api-contract.py','test-dev-model-fixture.py','test-dev-fixture-tty.py','test-dev-witness-fixture.py','test-reembed-progress-contract.ps1'])assert(contracts.includes(script),script);
+  assert(readFileSync(new URL('../../scripts/test-dev-model-fixture.py',import.meta.url),'utf8').includes('from test_native_psutil_wheel_cache import NativePsutilWheelCacheTest'));
 });
 test('fail-closed aggregate requires both successful lanes, including failure and unexpected skips',()=>{
   const complete=section('check-complete');assert.match(complete,/always\(\)/);assert.match(complete,/needs: \[coverage-tests, workspace-tests, contract-checks\]/);

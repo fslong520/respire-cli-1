@@ -164,6 +164,30 @@ test('workflow contract keeps trust identities, unprivileged waiting and acyclic
     assert.match(final.slice(final.indexOf(`- name: ${name}`)).split('\n      - ')[0], /!\(inputs.repair_dev12 \|\| inputs.repair_dev14\)/);
   }
 });
+
+test('same-run scoped tarball reuse is explicit current-main only; historical, prepared and repair paths keep packing',()=>{
+  const workflow=readFileSync(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
+  const publisher=workflow.split('\n  publish:')[1];
+  const expression=publisher.match(/^      REUSE_VALIDATED_PACKS: \$\{\{ (.+) \}\}$/m)?.[1];
+  assert(expression,'reuse must be selected from the workflow trust context');
+  const repository=expression.match(/github.repository == '([^']+)'/)?.[1];assert(repository);
+  const selected=new Function('github','needs','inputs',`return (${expression});`);
+  for(const owner of [repository,'fork/repo']) for(const event of ['workflow_dispatch','push']) for(const ref of ['refs/heads/main','refs/heads/feature'])
+    for(const exact of [true,false]) for(const prepared of ['', '100']) for(const repair12 of [false,true])
+    for(const repair14 of [false,true]) for(const reuse of [false,true]) {
+      const github={repository:owner,event_name:event,ref,sha:'a'.repeat(40)},needs={plan:{outputs:{sha:(exact?'a':'b').repeat(40)}}};
+      const inputs={prepared_run:prepared,repair_dev12:repair12,repair_dev14:repair14,reuse_dev12_validation:reuse};
+      assert.equal(selected(github,needs,inputs),owner===repository&&event==='workflow_dispatch'&&ref==='refs/heads/main'&&exact&&!prepared&&!repair12&&!repair14&&!reuse);
+    }
+  const verify=publisher.split('- name: Verify release artifacts and prepare every scoped npm package')[1].split('\n      - ')[0];
+  assert.match(verify,/CLI_SHA: \$\{\{ needs.plan.outputs.sha \}\}/);
+  assert.match(verify,/if \[ "\$REUSE_VALIDATED_PACKS" = true \]; then\n\s+node npm\/scripts\/verify-packages.mjs release-assets --reuse-packs "\$RUNNER_TEMP\/validated-npm" --download\n\s+else\n\s+node npm\/scripts\/verify-packages.mjs release-assets\n\s+fi/);
+  const publish=publisher.split('- name: Publish npm using Trusted Publishing')[1].split('\n      - ')[0];
+  assert.match(publish,/if \[ "\$REUSE_VALIDATED_PACKS" = true \]; then/);
+  assert.match(publish,/--publish --accepted-only --verified-packs "\$RUNNER_TEMP\/validated-npm" --tag/);
+  assert.match(publish,/else\n\s+node npm\/scripts\/pack.mjs --root target\/ci --publish --accepted-only --tag/);
+  assert.match(publisher,/if: inputs.prepared_run != ''\n\s+run: node npm\/scripts\/verify-packages.mjs release-assets --pack npm\/release-packages/);
+});
 test('two overlapping Releases progress without waiting while holding the opposite alias lock', () => {
   // Model the actual lock graph asserted above. B's early ready wait has no lock.
   let publication = 'A', aliasLock = null;
