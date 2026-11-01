@@ -90,12 +90,15 @@ else throw Error('Unexpected API scope');process.stdout.write(JSON.stringify(r))
       const output=join(root,`artifact-${id}.zip`);
       const result=spawnSync('python3',['-c','import sys,zipfile\nwith zipfile.ZipFile(sys.argv[1],"w",compression=zipfile.ZIP_DEFLATED) as z: z.writestr(sys.argv[2],sys.stdin.read())',output,file],
         {input:JSON.stringify(payload),env:{PATH:process.env.PATH,HOME:root,TMPDIR:root},encoding:'utf8',timeout:10000});success(result);
-      const bytes=readFileSync(output);return {id,name,expired:false,size_in_bytes:bytes.length,digest:'sha256:'+digest(bytes),workflow_run:{id:owner.id,head_sha:owner.head_sha},_zip:output};
+      const bytes=readFileSync(output);return {id,name,created_at:new Date().toISOString(),expired:false,size_in_bytes:bytes.length,digest:'sha256:'+digest(bytes),workflow_run:{id:owner.id,head_sha:owner.head_sha},_zip:output};
     }
+    const producer={id:900,name:'preparation-receipt',status:'in_progress',started_at:new Date().toISOString()};
+    state.originalJobs.push(producer);
     const proofFile=join(root,'release-prepared.json');success(run('release-preparation.mjs',['attest',assets,packs,proofFile]));
     const proof=JSON.parse(readFileSync(proofFile));
-    state.original={...state.original,status:'completed',conclusion:'success',updated_at:proof.prepared_at};
     state.originalArtifacts.push(zipReceipt(90,'release-prepared-700-1','release-prepared.json',state.original,proof));
+    Object.assign(producer,{status:'completed',conclusion:'success',completed_at:new Date().toISOString()});
+    state.original={...state.original,status:'completed',conclusion:'success',updated_at:producer.completed_at};
     state.current.created_at=new Date().toISOString();
     env.GITHUB_RUN_ID='701';env.GITHUB_SHA=workflowSha;env.PREPARED_RUN='700';
     success(run('release-preparation.mjs',['inspect']));
@@ -108,8 +111,8 @@ else throw Error('Unexpected API scope');process.stdout.write(JSON.stringify(r))
     success(run('prepared-import.mjs',['consumer']));
     const importFile=join(root,'prepared-import.json');success(run('prepared-import.mjs',['record',assets,packs,importFile]));
     const imported=JSON.parse(readFileSync(importFile));
-    state.currentJobs[0]={...state.currentJobs[0],status:'completed',conclusion:'success',completed_at:new Date().toISOString()};
     state.currentArtifacts.push(zipReceipt(92,'prepared-import-701-1','prepared-import.json',state.current,imported));
+    state.currentJobs[0]={...state.currentJobs[0],status:'completed',conclusion:'success',completed_at:new Date().toISOString()};
     env.GITHUB_JOB='publication-ready';success(run('prepared-import.mjs',['readiness']));
     const baseline=structuredClone(state),negative=[];
     for(const [name,mutate] of [
@@ -144,7 +147,7 @@ else throw Error('Unexpected API scope');process.stdout.write(JSON.stringify(r))
     // source/preparation/import/acceptance metrics remain separate.
     mkdirSync(join(root,'npm'));writeFileSync(join(root,'npm/artifact-manifest.json'),JSON.stringify({...manifest,cliVersion:version}));
     const identity=name=>({name,version,integrity:'sha512-'+createHash('sha512').update(name).digest('base64'),shasum:'e'.repeat(40)});
-    const ack=p=>({...p,schema:1,state:'accepted',evidence:'npm-exit-zero',exit_code:0,signal:null,accepted_at:new Date().toISOString()});
+    const ack=p=>({...p,schema:1,state:'accepted',evidence:'npm-exit-zero',exit_code:0,signal:null,accepted_at:new Date(Date.now()+3600_000).toISOString()});
     const scoped={schema:2,kind:'scoped-accepted',state:'accepted',source,packages:packages.map(p=>identity(p.name)),
       acceptances:packages.map(p=>ack(identity(p.name))),assets:proof.assets.map(a=>({name:a.file,size:a.size,sha256:a.sha256})),
       binaries:manifest.targets.map(t=>{const a=proof.assets.find(a=>a.file===`rsrs-${t.triple}${t.triple.includes('windows')?'.exe':''}`);return {package:t.pkg,target:t.triple,file:a.file,sha256:a.sha256};}),
@@ -181,9 +184,11 @@ else throw Error('Unexpected API scope');process.stdout.write(JSON.stringify(r))
     success(run('release-publication.mjs',['finalize-accepted']));
     const report=JSON.parse(readFileSync(join(root,'publication-accepted.json')));
     requireValue(report.full_validation==='verified'&&report.public_verification==='pending'&&report.preparation_run_id==='700'&&
-      report.full_validation_completed_at===proof.prepared_at&&report.import_verified_at===imported.imported_at&&
+      report.accepted_at===state.acceptedAt&&report.accepted_at_source==='github-release-published-at'&&report.all_npm_accepted_at===null&&
+      report.source_to_complete_validation_seconds===null&&
+      report.full_validation_completed_at===proof.validation.completed_at&&report.import_verified_at===state.currentArtifacts.find(a=>a.id===92).created_at&&
       report.full_validation_completed_at<report.source_run_created_at&&
-      report.preparation_duration_seconds===(Date.parse(proof.prepared_at)-Date.parse(state.original.created_at))/1000&&
+      report.preparation_duration_seconds===(Date.parse(producer.completed_at)-Date.parse(state.original.created_at))/1000&&
       report.trigger_to_accepted_seconds===(Date.parse(state.acceptedAt)-Date.parse(state.current.created_at))/1000,
       'Preparation/publication timing conflated or fabricated public verification');
     return {positive:['original-attest','selected-proof','registered-consumer','verified-import','completed-import-readiness','mandatory-write-byte-check'],

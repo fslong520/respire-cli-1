@@ -122,10 +122,22 @@ export function preparedPacks(folder,source,manifest){
   }).sort((a,b)=>a.name.localeCompare(b.name));
 }
 
+export function preparationReceiptJob(jobs,{producing=false}={}){
+  const matches=jobs.filter(j=>j.name==='preparation-receipt');
+  requireValue(matches.length===1&&positive(matches[0].id),'Preparation receipt job is missing or duplicated');
+  const job=matches[0];
+  requireValue(parseTimestamp(job.started_at)!==null,'Preparation receipt job start is missing');
+  if(producing)requireValue(job.status==='in_progress','Preparation receipt job is not active');
+  else completed(job,'receipt');
+  return job;
+}
+
 export function createPreparation({source,identity,manifest,run,jobs,ci,artifacts,assets,packs,now=new Date().toISOString()}){
   validatePreparationRun(run,source,{producing:true});
   const validation=preparationValidation(jobs,ci,source,manifest),time=parseTimestamp(now);
-  requireValue(time!==null&&time>=parseTimestamp(validation.completed_at),'Preparation precedes complete validation');
+  preparationReceiptJob(jobs,{producing:true});
+  // Completed API gates are read before writing; runner time is audit data only.
+  requireValue(time!==null,'Preparation receipt clock is invalid');
   validatePreparedBytes(assets,packs,source,manifest);
   return structuredClone({schema:1,kind:'release-prepared',state:'validated-unpublished',source,identity,validation,
     origin_artifacts:preparationArtifacts(artifacts,source,manifest),assets,packs,prepared_at:now});
@@ -145,8 +157,8 @@ export function validatePreparationHistory(receipt,context){
   requireValue(receipt?.schema===1&&receipt.kind==='release-prepared'&&receipt.state==='validated-unpublished'&&
     same(receipt.source,source)&&same(receipt.identity,identity),'Prepared receipt source, SDK, toolchain or layout differs');
   requireValue(same(receipt.validation,preparationValidation(jobs,ci,source,manifest)), 'Prepared CI/regression proof changed or is stale');
-  const prepared=parseTimestamp(receipt.prepared_at),finished=parseTimestamp(run.updated_at);
-  requireValue(prepared!==null&&finished!==null&&prepared>=parseTimestamp(receipt.validation.completed_at)&&prepared<=finished,'Prepared receipt clock is invalid');
+  const prepared=parseTimestamp(preparationReceiptJob(jobs).completed_at),finished=parseTimestamp(run.updated_at);
+  requireValue(parseTimestamp(receipt.prepared_at)!==null&&finished!==null&&prepared>=parseTimestamp(receipt.validation.completed_at)&&prepared<=finished,'Prepared receipt clock is invalid');
   validatePreparedBytes(receipt.assets,receipt.packs,source,manifest);
   if(context.assets)requireValue(same(receipt.assets,context.assets),'Downloaded prepared asset bytes differ');
   if(context.packs)requireValue(same(receipt.packs,context.packs),'Downloaded prepared npm bytes differ');
@@ -243,7 +255,7 @@ export function currentPublicationOwner(sha,version){
   return {owner,run};
 }
 export function requirePreparationBeforeTrigger(result,run){
-  const prepared=parseTimestamp(result.receipt.prepared_at),complete=parseTimestamp(result.context.run.updated_at),trigger=parseTimestamp(run.created_at);
+  const prepared=parseTimestamp(preparationReceiptJob(result.context.jobs).completed_at),complete=parseTimestamp(result.context.run.updated_at),trigger=parseTimestamp(run.created_at);
   requireValue(prepared!==null&&complete!==null&&trigger!==null&&prepared<=complete&&complete<=trigger,
     'Complete preparation must precede this publication trigger');
 }

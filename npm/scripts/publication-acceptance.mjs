@@ -9,7 +9,7 @@ import {readdirSync, statSync} from 'node:fs';
 import path from 'node:path';
 import {regressionContract,validateRegressionContract,regressionStatus,regressionCompletedAt,parseTimestamp} from './release-regression-contract.mjs';
 import {validateImportAnchor,assertImportedContents,importPinFromEnv,readImportedPreparation,assertImportSelection,assertImportPin} from './prepared-import.mjs';
-import {preparationPinFromEnv} from './release-preparation.mjs';
+import {preparationPinFromEnv,preparationReceiptJob} from './release-preparation.mjs';
 
 import {checkVersionFence,checkReservationFence,bindFenceNotes,persistVersionFence} from './publication-fence.mjs';
 const ALIAS = '.github/workflows/npm-alias.yml';
@@ -18,6 +18,10 @@ export const aliasAcceptedName = (s, r) => `alias-accepted-${s.run_id}-${s.run_a
 const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
 const id = v => /^[1-9]\d*$/.test(String(v));
 const instant = v => typeof v === 'string' && Number.isFinite(Date.parse(v));
+export function serviceDuration(start,end){
+  const from=parseTimestamp(start),to=parseTimestamp(end);
+  return from!==null&&to!==null&&to>=from?(to-from)/1000:null;
+}
 
 export function validateAcceptance(proof, expected) {
   if (proof?.schema !== 1 || proof.state !== 'accepted' || !instant(proof.accepted_at) ||
@@ -272,7 +276,7 @@ function finalizeAccepted() {
     assertImportPin(preparedImport,importPinFromEnv());
     if(!same(preparedImport.anchor,scoped.validation_origin))throw Error('Prepared validation origin changed after scoped acceptance');
     fullyValidated=true;
-    fullAt=parseTimestamp(preparedImport.receipt.preparation.prepared_at);
+    fullAt=parseTimestamp(preparedImport.receipt.preparation.validation.completed_at);
     if(fullAt===null)throw Error('Original complete preparation clock is missing');
   }else{
     try {fullyValidated=regressionStatus(readinessJobs,regressionContract(manifest()))==='success';}
@@ -291,22 +295,26 @@ function finalizeAccepted() {
   const published=api(`repos/${s.repository}/releases/${s.release_id}`);
   if(published.draft!==false || !published.published_at)throw Error('Release publication result not confirmed; inspect without replaying');
   assertDraft({...published,draft:true},scoped);assertTag(s,{requireExisting:true});
-  const allNpmAccepted=Math.max(...scoped.acceptances.map(p=>Date.parse(p.accepted_at)),Date.parse(complete.alias_receipt.acceptance.accepted_at));
-  const acceptedAt=Math.max(allNpmAccepted,Date.parse(published.published_at));
-  const measuredFullAt=fullAt!==null&&fullAt>=sourceAt&&fullAt<=acceptedAt?fullAt:null;
+  // Release publication is the service-side completion boundary, not an npm ACK clock.
+  const acceptedAt=parseTimestamp(published.published_at);
+  if(acceptedAt===null)throw Error('Invalid Release publication clock');
+  const measuredFullAt=fullAt!==null&&fullAt<=acceptedAt?fullAt:null;
+  const readyDuration=serviceDuration(ready[0].completed_at,published.published_at);
+  const triggerDuration=serviceDuration(sourceRun.created_at,published.published_at);
   const preparationCreatedAt=preparedImport?parseTimestamp(preparedImport.history.run.created_at):null;
-  const preparationDuration=preparedImport&&preparationCreatedAt!==null&&fullAt>=preparationCreatedAt?(fullAt-preparationCreatedAt)/1000:null;
+  const preparationCompletedAt=preparedImport?parseTimestamp(preparationReceiptJob(preparedImport.history.jobs).completed_at):null;
+  const preparationDuration=preparationCompletedAt!==null&&preparationCreatedAt!==null&&preparationCompletedAt>=preparationCreatedAt?(preparationCompletedAt-preparationCreatedAt)/1000:null;
   write('publication-accepted.json',{...complete,accepted_at:new Date(acceptedAt).toISOString(),
-    release_published_at:published.published_at,all_npm_accepted_at:new Date(allNpmAccepted).toISOString(),
+    release_published_at:published.published_at,accepted_at_source:'github-release-published-at',all_npm_accepted_at:null,
     source_run_created_at:sourceRun.created_at,source_committed_at:commit.commit.committer.date,publication_ready_at:ready[0].completed_at,
     full_validation_completed_at:measuredFullAt===null?null:new Date(measuredFullAt).toISOString(),
     preparation_run_id:preparedImport?.receipt.preparation.source.run_id??null,
     preparation_run_attempt:preparedImport?.receipt.preparation.source.run_attempt??null,
     preparation_created_at:preparedImport?.history.run.created_at??null,preparation_duration_seconds:preparationDuration,
-    import_verified_at:preparedImport?.receipt.imported_at??null,
-    source_to_complete_validation_seconds:measuredFullAt===null?null:(measuredFullAt-sourceAt)/1000,full_validation:fullyValidated?'verified':'pending-or-failed',ready_to_accepted_seconds:(acceptedAt-readyAt)/1000,trigger_to_accepted_seconds:(acceptedAt-Date.parse(sourceRun.created_at))/1000,
+    import_verified_at:preparedImport?.metadata.created_at??null,
+    source_to_complete_validation_seconds:null,full_validation:fullyValidated?'verified':'pending-or-failed',ready_to_accepted_seconds:readyDuration,trigger_to_accepted_seconds:triggerDuration,
     public_verification:'pending'});
-  const summary=`Release v${s.version} public; all ${complete.packages.length} npm submissions accepted. Public propagation/install verification pending. Source to full validation: ${measuredFullAt!==null?`${(measuredFullAt-sourceAt)/1000}s`:(fullyValidated?'time unavailable':'pending/unverified')}; ready to acceptance: ${(acceptedAt-readyAt)/1000}s; workflow trigger to acceptance: ${(acceptedAt-Date.parse(sourceRun.created_at))/1000}s.\n`;
+  const summary=`Release v${s.version} public; all ${complete.packages.length} npm submissions accepted. Public propagation/install verification pending. Source to full validation: time unavailable (git commit and service clocks differ); ready to public Release: ${readyDuration===null?'time unavailable':`${readyDuration}s`}; workflow trigger to public Release: ${triggerDuration===null?'time unavailable':`${triggerDuration}s`}.\n`;
   console.log(summary);
   if(process.env.GITHUB_STEP_SUMMARY)appendFileSync(process.env.GITHUB_STEP_SUMMARY,summary);
 }

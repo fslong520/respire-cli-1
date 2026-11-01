@@ -7,7 +7,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {validateAcceptedScoped,validateAcceptedAlias,validateAcceptance,validateVerified,validateArmVerified,
-  assertCompletedSource,acceptedScopedOutput,reconcilePriorSubmissions} from './publication-acceptance.mjs';
+  assertCompletedSource,acceptedScopedOutput,reconcilePriorSubmissions,serviceDuration} from './publication-acceptance.mjs';
 import {assertSourceRun,validateScoped} from './release-publication.mjs';
 import {planCleanup,executeCleanup,CLEANUP_POLICY} from './cleanup-release-artifacts.mjs';
 import {regressionContract} from './release-regression-contract.mjs';
@@ -32,6 +32,13 @@ function fixture(){
     verified_at:'2026-10-27T00:20:00Z',install:{platform:'linux-x64-gnu',version,binary_sha256:hash}};
   return {scoped,alias,run,child,jobs,verified};
 }
+
+test('service durations never mix runner ACK clocks or report negative intervals',()=>{
+  assert.equal(serviceDuration('2026-10-27T00:00:00Z','2026-10-27T00:10:00Z'),600);
+  assert.equal(serviceDuration('2026-10-27T00:10:00Z','2026-10-27T00:00:00Z'),null);
+  assert.equal(serviceDuration('invalid','2026-10-27T00:10:00Z'),null);
+  assert.equal(serviceDuration('2026-10-27T00:00:00Z',undefined),null);
+});
 
 test('accepted receipts require all exact package ACKs and cannot masquerade as verified protocol 1',()=>{
   const f=fixture();validateAcceptedScoped(f.scoped,m);
@@ -126,7 +133,9 @@ function preparedCleanupFixture(){
   const assets=f.scoped.assets.map(a=>({file:a.name,size:a.size,sha256:a.sha256}));
   const packs=f.scoped.packages.map((p,i)=>({name:p.name,version,file:`pack-${i}.tgz`,size:10,sha256:hash}));
   f.history={source:original,identity,manifest,run:originalRun,jobs:originalJobs,ci,artifacts};
+  originalJobs.push({id:900,name:'preparation-receipt',status:'in_progress',started_at:previous('30')});
   const proof=createPreparation({...f.history,assets,packs,now:previous('35')});
+  Object.assign(originalJobs.at(-1),{status:'completed',conclusion:'success',completed_at:previous('36')});
   f.history.run={...originalRun,status:'completed',conclusion:'success'};
   const origin=preparationLink(proof,{id:80,name:'release-prepared-50-1',size_in_bytes:100,digest:'sha256:'+hash,expired:false,workflow_run:{id:50,head_sha:sha}});
   f.run.head_branch='main';
@@ -135,7 +144,7 @@ function preparedCleanupFixture(){
     validated_assets:copy(assets),validated_packs:copy(packs),imported_at:'2026-10-27T00:05:00Z'};
   f.intent={schema:1,kind:'prepared-consumer',state:'reading',owner,origin:copy(origin),created_at:'2026-10-27T00:00:30Z'};
   const artifact=(id,name)=>({id,name,expired:false,digest:'sha256:'+hash,size_in_bytes:100,created_at:'2026-10-27T00:06:00Z',workflow_run:{id:100,head_sha:f.run.head_sha}});
-  f.artifacts.set(14,artifact(14,'prepared-import-100-1'));f.artifacts.set(15,artifact(15,'prepared-consumer-100-1'));
+  f.artifacts.set(14,artifact(14,'prepared-import-100-1'));f.artifacts.set(15,{...artifact(15,'prepared-consumer-100-1'),created_at:'2026-10-27T00:00:31Z'});
   f.scoped.validation_origin=importedAnchor(f.imported,f.artifacts.get(14),f.run);
   f.scoped.validation_inventory=proof.validation.inventory;
   f.parentJobs=[{id:1000,name:'prepared-import',status:'completed',conclusion:'success',started_at:'2026-10-27T00:01:00Z',completed_at:'2026-10-27T00:06:00Z'},
@@ -151,7 +160,7 @@ test('prepared cleanup requires original full gates, current completed import an
   assert(plan.prepared);assert(plan.artifacts.some(a=>a.id===14)&&plan.artifacts.some(a=>a.id===15));
   assert(!plan.artifacts.some(a=>a.workflow_run.id===50),'original preparation archives must never be deleted as current copies');
   await executeCleanup(f.io,plan,{apply:true,now:()=>at});assert(f.deleted.includes(14)&&f.deleted.includes(15));
-  for(const mutate of [x=>x.history.jobs[0].conclusion='skipped',x=>delete x.io.preparedHistory,
+  for(const mutate of [x=>x.history.jobs[0].conclusion='skipped',x=>x.history.jobs.at(-1).conclusion='failure',x=>delete x.io.preparedHistory,
     x=>x.imported.validated_packs.pop(),x=>x.intent.owner.sha='f'.repeat(40),x=>x.parentJobs[0].conclusion='failure']){
     const bad=preparedCleanupFixture();mutate(bad);await assert.rejects(planCleanup(bad.io,100,m,at));assert.deepEqual(bad.deleted,[]);
   }
@@ -169,6 +178,8 @@ test('prepared cleanup rejects wrong origin, import, consumer, history and publi
     ['import owner',f=>f.imported.owner.import_job_id='999',/import job/],
     ['consumer origin',f=>f.intent.origin.artifact.id='999',/registration differs/],
     ['consumer missing',f=>f.artifacts.delete(15),/proof missing/],
+    ['consumer registered too late',f=>f.artifacts.get(15).created_at='2026-10-27T00:02:00Z',/register before import/],
+    ['consumer registration time missing',f=>delete f.artifacts.get(15).created_at,/register before import/],
     ['history lock',f=>f.history.identity.hashes['Cargo.lock']='f'.repeat(64),/SDK, toolchain or layout differs/],
     ['history attempt',f=>f.history.run.run_attempt=2,/stale/],
     ['public asset',f=>f.scoped.assets[0].sha256='f'.repeat(64),/Public assets differ/],
@@ -192,6 +203,17 @@ test('cleanup waits for verified proof and the last background consumer/report p
   const complete=cleanupFixture();assert.equal((await planCleanup(complete.io,100,m,at-1)).skip,'one-hour-after-consumers-not-reached');
   const plan=await planCleanup(complete.io,100,m,at);assert.equal(plan.skip,undefined);assert.deepEqual(plan.artifacts.map(a=>a.id),[10,12,13,16,11]);
   await executeCleanup(complete.io,plan,{apply:true,now:()=>at});assert.deepEqual(complete.deleted,[10,12,13,16,11]);
+});
+
+test('cleanup installation proof keeps runner audit time without changing the service grace boundary',async()=>{
+  for(const clock of ['2026-10-26T23:11:00Z','2026-10-27T01:11:00Z']){
+    const f=cleanupFixture();f.verified.verified_at=clock;
+    const boundary=Date.parse('2026-10-27T01:20:00Z');
+    assert.equal((await planCleanup(f.io,100,m,boundary-1000)).skip,'one-hour-after-consumers-not-reached');
+    const plan=await planCleanup(f.io,100,m,boundary);
+    assert.equal(plan.skip,undefined);
+    assert.equal(plan.finished,Date.parse('2026-10-27T00:20:00Z'));
+  }
 });
 
 test('active/new background consumers, failed verification and digest drift stop cleanup',async()=>{
@@ -269,7 +291,7 @@ main(process.argv[2]).catch(e=>{console.error(e.message);process.exitCode=1;});`
   f.run.status='completed';save();const stale=run('finalize-accepted');assert.notEqual(stale.status,0);assert.match(stale.stderr,/stale|inactive/);assert.equal(existsSync(path.join(root,'edited-release')),false);
   f.run.status='in_progress';const missing=f.full_jobs.pop();save();const incomplete=run('finalize-accepted');assert.notEqual(incomplete.status,0);assert.match(incomplete.stderr,/Full regression proof missing/);assert.equal(existsSync(path.join(root,'edited-release')),false);
   f.full_jobs.push(missing);env.FULL_REGRESSION_REQUIRED='false';save();const finalized=run('finalize-accepted');assert.equal(finalized.status,0,finalized.stderr);assert.equal(existsSync(path.join(root,'edited-release')),true);
-  const summary=JSON.parse(readFileSync(path.join(root,'publication-accepted.json')));assert.equal(summary.public_verification,'pending');assert.equal(summary.trigger_to_accepted_seconds,600);assert.equal(summary.source_to_complete_validation_seconds,540);assert.equal(summary.full_validation_completed_at,'2026-10-27T00:08:00.000Z');assert.equal(summary.ready_to_accepted_seconds,300);
+  const summary=JSON.parse(readFileSync(path.join(root,'publication-accepted.json')));assert.equal(summary.public_verification,'pending');assert.equal(summary.trigger_to_accepted_seconds,600);assert.equal(summary.source_to_complete_validation_seconds,null);assert.equal(summary.full_validation_completed_at,'2026-10-27T00:08:00.000Z');assert.equal(summary.ready_to_accepted_seconds,300);
 });
 
 test('scoped and alias preflight failures retain empty journals without inventing a submission',t=>{

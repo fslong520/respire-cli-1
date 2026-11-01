@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createPreparation,preparationLink} from './release-preparation.mjs';
-import {validateImportedEvidence,importedAnchor,validateImportAnchor,assertImportPin,assertImportSelection,assertImportedContents} from './prepared-import.mjs';
+import {validateImportedEvidence,importedAnchor,validateImportAnchor,assertImportPin,assertImportSelection,assertImportedContents,validateConsumerIntent} from './prepared-import.mjs';
 import {preparedConsumerFlow} from './fixtures/prepared-consumer-flow.mjs';
 import {readFileSync} from 'node:fs';
 
@@ -63,7 +63,9 @@ function fixture(){
   const packs=[...manifest.targets.map(t=>t.pkg),manifest.npmScope].map((name,i)=>({name,version,file:`pack-${i}.tgz`,size:100,sha256:hash}));
   const identity={hashes:{'Cargo.lock':hash,'rust-toolchain.toml':hash},sdk:[]};
   const history={source:original,identity,manifest,run,jobs,ci,artifacts,assets,packs};
+  jobs.push({id:900,name:'preparation-receipt',status:'in_progress',started_at:time(3)});
   const proof=createPreparation({...history,now:time(4)});
+  Object.assign(jobs.at(-1),{status:'completed',conclusion:'success',completed_at:time(4)});
   history.run={...run,status:'completed',conclusion:'success'};
   const origin=preparationLink(proof,{id:90,name:'release-prepared-700-1',size_in_bytes:100,digest:`sha256:${hash}`,expired:false,workflow_run:{id:700,head_sha:sha}});
   const owner={repository:source.repository,workflow:source.workflow,run_id:'701',run_attempt:1,sha,version,workflow_head_sha:workflowSha,import_job_id:'1000'};
@@ -72,8 +74,8 @@ function fixture(){
   const ownerRun={id:701,run_attempt:1,path:source.workflow,event:'workflow_dispatch',head_branch:'main',head_sha:workflowSha,
     head_repository:{full_name:source.repository},status:'in_progress',created_at:time(6)};
   const ownerJobs=[{id:1000,name:'prepared-import',status:'completed',conclusion:'success',started_at:time(6),completed_at:time(8)}];
-  const metadata={id:99,name:'prepared-import-701-1',size_in_bytes:100,digest:`sha256:${hash}`,expired:false,workflow_run:{id:701,head_sha:workflowSha}};
-  return {receipt,source:structuredClone(source),manifest,context:{ownerRun,ownerJobs,history},metadata};
+  const metadata={id:99,name:'prepared-import-701-1',created_at:time(7),size_in_bytes:100,digest:`sha256:${hash}`,expired:false,workflow_run:{id:701,head_sha:workflowSha}};
+  return {receipt,source:structuredClone(source),manifest,context:{ownerRun,ownerJobs,history,metadata},metadata};
 }
 
 test('completed trusted import keeps exact selected CLI SHA even when workflow main has advanced',()=>{
@@ -81,6 +83,26 @@ test('completed trusted import keeps exact selected CLI SHA even when workflow m
   assert.notEqual(f.context.ownerRun.head_sha,f.source.sha);
   const anchor=importedAnchor(f.receipt,f.metadata,f.context.ownerRun);assert.equal(validateImportAnchor(anchor,f.source),anchor);
 });
+test('consumer registration uses bound GitHub artifact time despite a different runner clock',()=>{
+  const f=fixture(),run=f.context.ownerRun,job=f.context.ownerJobs[0];
+  const intent={schema:1,kind:'prepared-consumer',state:'reading',owner:f.receipt.owner,origin:f.receipt.origin,
+    created_at:'2026-10-26T23:06:10Z'};
+  job.started_at=time(7);
+  const metadata={...f.metadata,name:'prepared-consumer-701-1',created_at:'2026-10-27T00:06:20Z'};
+  assert.equal(validateConsumerIntent(intent,f.source,f.receipt.origin,run,job,metadata),intent);
+  intent.created_at='2026-10-27T01:06:10Z';
+  assert.equal(validateConsumerIntent(intent,f.source,f.receipt.origin,run,job,metadata),intent);
+  assert.throws(()=>validateConsumerIntent(intent,f.source,f.receipt.origin,run,job));
+  for(const mutate of [x=>x.created_at=time(5),x=>x.created_at=time(8),x=>delete x.created_at,
+    x=>x.created_at='invalid',x=>x.workflow_run.id=702,x=>x.workflow_run.head_sha=sha,x=>x.expired=true,
+    x=>x.name='prepared-consumer-701-2',x=>x.digest='invalid']){
+    const bad=structuredClone(metadata);mutate(bad);
+    assert.throws(()=>validateConsumerIntent(intent,f.source,f.receipt.origin,run,job,bad));
+  }
+  intent.created_at='invalid';
+  assert.throws(()=>validateConsumerIntent(intent,f.source,f.receipt.origin,run,job,metadata));
+});
+
 test('wrong source/version, owner attempt/repository, import job or immutable origin cannot authorize reuse',()=>{
   const mutations=[f=>f.source.sha='f'.repeat(40),f=>f.source.version='1.2.3-dev.5',f=>f.receipt.owner.run_attempt=2,
     f=>f.context.ownerRun.head_repository.full_name='fork/respire-cli',f=>f.context.ownerRun.head_sha=sha,
@@ -101,11 +123,25 @@ test('missing/duplicate/failed/cancelled/skipped import and failed original gate
   const f=fixture();f.context.history.jobs[0].conclusion='skipped';assert.throws(()=>validateImportedEvidence(f.receipt,f.source,f.manifest,f.context));
 });
 test('preparation must finish before actual publication trigger and import must fit real job clocks',()=>{
-  for(const mutate of [f=>f.context.ownerRun.created_at=time(4),f=>f.receipt.imported_at=time(9),
+  for(const mutate of [f=>f.context.ownerRun.created_at=time(4),f=>f.context.metadata.created_at=time(9),
     f=>f.context.ownerJobs[0].started_at='invalid',f=>f.context.ownerJobs[0].completed_at=time(5)]){
     const f=fixture();mutate(f);assert.throws(()=>validateImportedEvidence(f.receipt,f.source,f.manifest,f.context));
   }
 });
+test('import verification uses its bound API upload time despite runner clock skew',()=>{
+  for(const clock of ['2026-10-26T23:07:00Z','2026-10-27T01:07:00Z']){
+    const f=fixture();f.receipt.imported_at=clock;
+    assert.equal(validateImportedEvidence(f.receipt,f.source,f.manifest,f.context),f.receipt);
+  }
+  for(const mutate of [f=>delete f.context.metadata,f=>delete f.context.metadata.created_at,
+    f=>f.context.metadata.created_at=time(5),f=>f.context.metadata.created_at=time(9),
+    f=>f.context.metadata.workflow_run.id=702,f=>f.context.metadata.digest='invalid',
+    f=>f.context.metadata.expired=true,f=>f.receipt.imported_at='invalid']){
+    const f=fixture();mutate(f);
+    assert.throws(()=>validateImportedEvidence(f.receipt,f.source,f.manifest,f.context));
+  }
+});
+
 test('only verified current copies may outlive original archive availability; expired current proof is refused',()=>{
   const f=fixture();f.context.history.artifacts=[];
   assert.equal(validateImportedEvidence(f.receipt,f.source,f.manifest,f.context),f.receipt);

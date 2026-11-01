@@ -53,17 +53,17 @@ async function preparedCleanupEvidence(io,scoped,manifest,run,jobs,artifacts){
   const receipt=await io.receipt(imports[0],'prepared-import.json');
   validateImportedShape(receipt,source,manifest);
   const history=await io.preparedHistory(receipt.preparation.source);
-  validateImportedEvidence(receipt,source,manifest,{ownerRun:run,ownerJobs:jobs,history});
+  validateImportedEvidence(receipt,source,manifest,{ownerRun:run,ownerJobs:jobs,history,metadata:imports[0]});
   const actual=scoped.assets.map(a=>({file:a.name,size:a.size,sha256:a.sha256})).sort((a,b)=>a.file.localeCompare(b.file));
   const original=[...receipt.preparation.assets].sort((a,b)=>a.file.localeCompare(b.file));
   if(JSON.stringify(actual)!==JSON.stringify(original))throw Error('Public assets differ from original prepared bytes');
   if(JSON.stringify(importedAnchor(receipt,imports[0],run))!==JSON.stringify(scoped.validation_origin))throw Error('Prepared cleanup origin changed after acceptance');
   const intent=await io.receipt(intents[0],'prepared-consumer.json');
-  validateConsumerIntent(intent,source,receipt.origin,run,jobs.find(j=>j.name==='prepared-import'));
+  validateConsumerIntent(intent,source,receipt.origin,run,jobs.find(j=>j.name==='prepared-import'),intents[0]);
   if(jobs.some(j=>j.status!=='completed')||!jobs.some(j=>j.name==='publish'&&j.conclusion==='success'))throw Error('Source consumers/publisher are not complete');
   return {receipt,manifest};
 }
-export async function planCleanup(io,runId,manifest,now=Date.now()){
+export async function planCleanup(io,runId,manifest,now=io.now()){
   if(io.repository!==REPOSITORY||!id(runId))throw Error('Cleanup repository/run scope refused');
   const run=await io.run(runId);
   if(!workflow(run,RELEASE)||!['push','workflow_dispatch'].includes(run.event)||!terminal(run)||run.conclusion!=='success')return {skip:'source-not-successfully-complete'};
@@ -115,7 +115,7 @@ export async function planCleanup(io,runId,manifest,now=Date.now()){
   // Protocol 2 acceptance is never installation proof. Every background reader
   // must finish, and at least one exact successful content/install report remains.
   const verifiers=accepted?await io.verifiers(run.created_at):[],verificationArtifacts=[];
-  let verifiedAt=0,provedPublic=!accepted;
+  let provedPublic=!accepted;
   const needsArm=accepted&&manifest.targets.some(t=>t.triple==='aarch64-unknown-linux-gnu');
   let provedArm=!needsArm;
   if(verifiers.some(r=>!workflow(r,VERIFY)||!terminal(r)))return {skip:'public-verification-still-active'};
@@ -130,7 +130,7 @@ export async function planCleanup(io,runId,manifest,now=Date.now()){
       const receipt=await io.receipt(a,'publication-verified.json');
       const alias=aliasReceipts.find(r=>JSON.stringify(r.publisher)===JSON.stringify(receipt.alias_publisher));
       if(!alias)throw Error('Verified report has no accepted alias publisher');
-      validateVerified(receipt,scoped,alias);provedPublic=true;verifiedAt=Math.max(verifiedAt,timestamp(receipt.verified_at));verificationArtifacts.push(a);
+      validateVerified(receipt,scoped,alias);provedPublic=true;verificationArtifacts.push(a);
     }
     const armName=`publication-arm64-verified-${run.id}-${run.run_attempt}-${verifier.id}-${verifier.run_attempt}`;
     for(const a of (await io.artifacts(verifier.id)).filter(a=>a.name===armName&&!a.expired)){
@@ -139,7 +139,7 @@ export async function planCleanup(io,runId,manifest,now=Date.now()){
       const receipt=await io.receipt(a,'publication-arm64-verified.json');
       const alias=aliasReceipts.find(r=>JSON.stringify(r.publisher)===JSON.stringify(receipt.alias_publisher));
       if(!alias)throw Error('ARM64 verified report has no accepted alias publisher');
-      validateArmVerified(receipt,scoped,alias);provedArm=true;verifiedAt=Math.max(verifiedAt,timestamp(receipt.verified_at));verificationArtifacts.push(a);
+      validateArmVerified(receipt,scoped,alias);provedArm=true;verificationArtifacts.push(a);
     }
   }
   if(!provedPublic)return {skip:'no-completed-public-install-proof'};
@@ -147,7 +147,7 @@ export async function planCleanup(io,runId,manifest,now=Date.now()){
   const selected=artifacts.filter(a=>!a.expired&&allowedSourceArtifact(a.name,source,manifest.targets.map(t=>t.triple),scoped.validation_origin));
   for(const a of selected)boundArtifact(a,run);
   const all=[...selected,...aliasArtifacts,...verificationArtifacts];
-  const finished=Math.max(timestamp(run.updated_at),timestamp(release.published_at),...jobs.map(j=>timestamp(j.completed_at||run.updated_at)),...consumers.map(r=>timestamp(r.updated_at)),...verifiers.map(r=>timestamp(r.updated_at)),...consumerFinishes,...readerFinishes,verifiedAt,...all.map(a=>timestamp(a.created_at)));
+  const finished=Math.max(timestamp(run.updated_at),timestamp(release.published_at),...jobs.map(j=>timestamp(j.completed_at||run.updated_at)),...consumers.map(r=>timestamp(r.updated_at)),...verifiers.map(r=>timestamp(r.updated_at)),...consumerFinishes,...readerFinishes,...all.map(a=>timestamp(a.created_at)));
   if(now-finished<3600_000)return {skip:'one-hour-after-consumers-not-reached',eligible_at:new Date(finished+3600_000).toISOString()};
   // Keep proof until the payloads are gone. A partial failure leaves receipts
   // intact where possible; subsequent invocations inventory again, never retry
@@ -155,7 +155,7 @@ export async function planCleanup(io,runId,manifest,now=Date.now()){
   const payload=selected.filter(a=>a.id!==ready[0].id);
   return {run,source,scoped,release,tag,consumers,verifiers,readers,prepared,finished,artifacts:[...payload,...aliasArtifacts,...verificationArtifacts,ready[0]],preserved:artifacts.filter(a=>!all.some(x=>x.id===a.id)).map(a=>({id:a.id,name:a.name}))};
 }
-export async function executeCleanup(io,plan,{apply=false,now=()=>Date.now(),audit=()=>{}}={}){
+export async function executeCleanup(io,plan,{apply=false,now=()=>io.now(),audit=()=>{}}={}){
   if(plan.skip){audit(plan);return [];}
   const deleted=[];
   for(const expected of plan.artifacts){
@@ -191,6 +191,12 @@ export function githubAdapter(repository=process.env.GITHUB_REPOSITORY,{transpor
   const pages=p=>JSON.parse(command(['api','--paginate','--slurp',p]));
   const base=`repos/${repository}`;
   const adapter={repository,
+    now:()=>{
+      const headers=command(['api','--include','--method','HEAD',base]);
+      const dates=[...headers.matchAll(/^date:\s*([^\r\n]+)$/gim)];
+      if(dates.length!==1)throw Error('GitHub service time is missing or ambiguous');
+      return timestamp(dates[0][1]);
+    },
     run:id=>api(`${base}/actions/runs/${id}`),
     jobs:(id,attempt)=>pages(`${base}/actions/runs/${id}/attempts/${attempt}/jobs?per_page=100`).flatMap(p=>p.jobs),
     artifacts:id=>pages(`${base}/actions/runs/${id}/artifacts?per_page=100`).flatMap(p=>p.artifacts),
@@ -236,7 +242,7 @@ export async function main(){
   if(process.argv.slice(2).some(a=>!['--apply','--dry-run'].includes(a))||process.argv.includes('--apply')&&process.argv.includes('--dry-run'))throw Error('Use --dry-run or --apply');
   const io=githubAdapter();if(io.repository!==REPOSITORY)throw Error('Repository scope refused');
   const manifest=JSON.parse(readFileSync(new URL('../artifact-manifest.json',import.meta.url)));
-  const since=new Date(Date.now()-48*3600_000).toISOString();
+  const since=new Date(io.now()-48*3600_000).toISOString();
   const runs=JSON.parse(execFileSync('gh',['api','--paginate','--slurp',`repos/${REPOSITORY}/actions/workflows/release.yml/runs?status=completed&per_page=100&created=%3E%3D${encodeURIComponent(since)}`],{encoding:'utf8',maxBuffer:16*1024*1024})).flatMap(p=>p.workflow_runs);
   const audit=value=>{const line=JSON.stringify(value);console.log(line);if(process.env.GITHUB_STEP_SUMMARY)appendFileSync(process.env.GITHUB_STEP_SUMMARY,`\n\`\`\`json\n${line}\n\`\`\`\n`);};
   for(const run of runs){try{const plan=await planCleanup(io,run.id,manifest);audit({mode:apply?'apply':'dry-run',source_run:run.id,skip:plan.skip||null,preserved:plan.preserved||[]});await executeCleanup(io,plan,{apply,audit});}catch(error){audit({source_run:run.id,error:error.message});throw error;}}

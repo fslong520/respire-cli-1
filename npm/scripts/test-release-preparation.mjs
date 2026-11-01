@@ -28,8 +28,10 @@ function fixture(){
     name,id:i+1,size_in_bytes:100,digest:`sha256:${hash}`,expired:false,workflow_run:{id:700,head_sha:sha}}));
   const assets=targets.flatMap(([t])=>[`rsrs-${t}${t.includes('windows')?'.exe':''}`,`rsrs-${t}-runtime.tar.gz`,`cli-build-${t}.json`]).map(file=>({file,size:100,sha256:hash}));
   const packs=[...targets.map(([,n])=>`@rsrsai/${n}`),'@rsrsai/cli'].map((name,i)=>({name,version,file:`pack-${i}.tgz`,size:100,sha256:hash}));
+  jobs.push({id:900,name:'preparation-receipt',status:'in_progress',started_at:time(3)});
   const context={source,identity,manifest,run,jobs,ci,artifacts,assets,packs,now:time(4)};
   const receipt=createPreparation(context);
+  Object.assign(jobs.at(-1),{status:'completed',conclusion:'success',completed_at:time(4)});
   context.run={...context.run,status:'completed',conclusion:'success'};
   return {receipt,context};
 }
@@ -79,10 +81,35 @@ test('SDK/toolchain changes, missing clocks, expired or substituted artifacts an
 });
 test('receipt cannot change version/inventory or claim validation before work completes',()=>{
   for(const mutate of [r=>r.source.version='1.2.3-dev.5',r=>r.assets[0]=r.assets[1],r=>r.packs.pop(),
-    r=>r.prepared_at=time(1),r=>r.prepared_at='2026-02-30T00:00:00Z',r=>r.prepared_at=time(6)]){
+    r=>r.prepared_at='2026-02-30T00:00:00Z']){
     const {receipt,context}=structuredClone(fixture());mutate(receipt);assert.throws(()=>validatePreparation(receipt,context));
   }
 });
+test('preparation uses completed API gates and its successful producer despite runner clock skew',()=>{
+  for(const now of ['2026-10-26T23:04:00Z','2026-10-27T01:04:00Z']){
+    const {context}=structuredClone(fixture());
+    context.run.status='in_progress';context.jobs.at(-1).status='in_progress';
+    const receipt=createPreparation({...context,now});
+    context.run.status='completed';context.jobs.at(-1).status='completed';
+    assert.equal(validatePreparation(receipt,context),receipt);
+  }
+  for(const mutate of [c=>c.jobs.pop(),c=>c.jobs.push({...c.jobs.at(-1)}),
+    c=>c.jobs.at(-1).id='invalid',c=>c.jobs.at(-1).started_at='invalid',
+    c=>c.jobs.at(-1).completed_at=time(2),c=>c.jobs.at(-1).completed_at=time(6),
+    c=>c.jobs.at(-1).conclusion='failure',c=>c.jobs.at(-1).status='in_progress']){
+    const {receipt,context}=structuredClone(fixture());mutate(context);
+    assert.throws(()=>validatePreparation(receipt,context));
+  }
+});
+
+test('source CI may finish during producer setup before the attester reads its successful result',()=>{
+  const {context}=structuredClone(fixture());
+  context.jobs.at(-1).started_at=time(1);context.run.status='in_progress';context.jobs.at(-1).status='in_progress';
+  const receipt=createPreparation(context);
+  context.run.status='completed';context.jobs.at(-1).status='completed';
+  assert.equal(validatePreparation(receipt,context),receipt);
+});
+
 test('actual synthetic asset files bind source, version, platform and binary/runtime hashes',()=>{
   const folder=mkdtempSync(join(tmpdir(),'prepared-assets-'));
   try{
@@ -158,7 +185,8 @@ test('actual attester subprocess reads only main-bound mock APIs and rejects sta
       GITHUB_REPOSITORY:source.repository,GITHUB_RUN_ID:'700',GITHUB_RUN_ATTEMPT:'1',GITHUB_EVENT_NAME:'workflow_dispatch',
       GITHUB_REF:'refs/heads/main',GITHUB_SHA:sha,CLI_SHA:sha,CLI_VERSION:version};
     for(const [index,mutate] of [()=>{},s=>s.run.head_sha='f'.repeat(40),s=>s.ci.event='workflow_dispatch',s=>s.jobs[0].conclusion='skipped',s=>s.run.run_attempt=2].entries()){
-      const {context}=fixture(),value={...context,run:{...context.run,status:'in_progress'},inputs};mutate(value);
+      const {context}=fixture(),value={...context,run:{...context.run,status:'in_progress'},inputs};
+      value.jobs.at(-1).status='in_progress';mutate(value);
       writeFileSync(state,JSON.stringify(value));rmSync(output,{force:true});
       const result=spawnSync(process.execPath,[fileURLToPath(new URL('./release-preparation.mjs',import.meta.url)),'attest',assets,packs,output],{env,encoding:'utf8',timeout:15000});
       if(index===0){

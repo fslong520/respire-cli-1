@@ -21,15 +21,17 @@ const fields=['repository','workflow','sha','version'];
 export const importName=source=>`prepared-import-${source.run_id}-${source.run_attempt}`;
 export const consumerName=source=>`prepared-consumer-${source.run_id}-${source.run_attempt}`;
 
-export function validateConsumerIntent(intent,source,origin,run,importJob){
+export function validateConsumerIntent(intent,source,origin,run,importJob,metadata){
   const owner=intent?.owner;
   requireValue(intent?.schema===1&&intent.kind==='prepared-consumer'&&intent.state==='reading'&&owner&&
     fields.every(k=>owner[k]===source[k])&&String(owner.run_id)===String(source.run_id)&&
     Number(owner.run_attempt)===Number(source.run_attempt)&&owner.workflow_head_sha===run.head_sha&&
     same(intent.origin,origin),'Cross-run consumer registration differs from the selected source');
   validatePreparationLink(intent.origin,source);
-  const at=parseTimestamp(intent.created_at),start=parseTimestamp(importJob.started_at),trigger=parseTimestamp(run.created_at);
-  requireValue(at!==null&&start!==null&&trigger!==null&&trigger<=at&&at<=start,'Consumer must register before import starts');
+  currentReceiptMetadata(metadata,run,consumerName(source));
+  // Compare GitHub service timestamps; the receipt's runner clock may differ.
+  const at=parseTimestamp(metadata.created_at),start=parseTimestamp(importJob.started_at),trigger=parseTimestamp(run.created_at);
+  requireValue(parseTimestamp(intent.created_at)!==null&&at!==null&&start!==null&&trigger!==null&&trigger<=at&&at<=start,'Consumer must register before import starts');
   return intent;
 }
 function currentReceiptMetadata(metadata,run,name){
@@ -42,7 +44,7 @@ function readConsumer(source,run,job,origin,artifacts){
   requireValue(entries.length===1,'Missing or duplicate cross-run consumer registration');
   currentReceiptMetadata(entries[0],run,consumerName(source));
   const intent=readVerifiedReceipt(entries[0],'prepared-consumer.json',{runId:source.run_id,headSha:run.head_sha});
-  validateConsumerIntent(intent,source,origin,run,job);
+  validateConsumerIntent(intent,source,origin,run,job,entries[0]);
   return {intent,metadata:entries[0]};
 }
 export function verifyConsumerBeforeImport(){
@@ -55,7 +57,7 @@ export function verifyConsumerBeforeImport(){
   requireValue(intents.length===1,'Cross-run consumer was not registered by the plan');
   currentReceiptMetadata(intents[0],run,consumerName(owner));
   const intent=readVerifiedReceipt(intents[0],'prepared-consumer.json',{runId:owner.run_id,headSha:run.head_sha});
-  validateConsumerIntent(intent,owner,intent?.origin,run,jobs[0]);
+  validateConsumerIntent(intent,owner,intent?.origin,run,jobs[0],intents[0]);
   requireValue(String(intent.origin.source.run_id)===String(process.env.PREPARED_RUN),'Registered consumer selected a different preparation');
   assertPreparationPin({link:intent.origin},preparationPinFromEnv());
   return {owner,run,job:jobs[0],intent};
@@ -82,7 +84,7 @@ export function validateImportedShape(receipt,source,manifest){
 
 // This validates evidence, not write authority. Writers additionally require an
 // active exact publication attempt and both actual local byte inventories below.
-export function validateImportedEvidence(receipt,source,manifest,{ownerRun,ownerJobs,history}){
+export function validateImportedEvidence(receipt,source,manifest,{ownerRun,ownerJobs,history,metadata}){
   validateImportedShape(receipt,source,manifest);
   const owner=receipt.owner;
   requireValue(String(ownerRun?.id)===String(owner.run_id)&&Number(ownerRun.run_attempt)===Number(owner.run_attempt)&&
@@ -92,7 +94,9 @@ export function validateImportedEvidence(receipt,source,manifest,{ownerRun,owner
   const jobs=ownerJobs.filter(j=>j.name==='prepared-import');
   requireValue(jobs.length===1&&String(jobs[0].id)===String(owner.import_job_id)&&
     jobs[0].status==='completed'&&jobs[0].conclusion==='success','Trusted import job is missing, duplicated, skipped or unsuccessful');
-  const start=parseTimestamp(jobs[0].started_at),end=parseTimestamp(jobs[0].completed_at),at=parseTimestamp(receipt.imported_at);
+  currentReceiptMetadata(metadata,ownerRun,importName(source));
+  // The bound upload follows local byte verification in the trusted import job.
+  const start=parseTimestamp(jobs[0].started_at),end=parseTimestamp(jobs[0].completed_at),at=parseTimestamp(metadata.created_at);
   requireValue(start!==null&&end!==null&&start<=at&&at<=end,'Invalid import completion clock');
   validatePreparationHistory(receipt.preparation,history);
   requirePreparationBeforeTrigger({receipt:receipt.preparation,context:history},ownerRun);
@@ -123,10 +127,10 @@ export function readImportedPreparation(source,manifest){
   const receipt=readVerifiedReceipt(matches[0],'prepared-import.json',{runId:source.run_id,headSha:run.head_sha});
   validateImportedShape(receipt,source,manifest);
   const history=preparationContext(receipt.preparation.source);
-  validateImportedEvidence(receipt,source,manifest,{ownerRun:run,ownerJobs,history});
+  validateImportedEvidence(receipt,source,manifest,{ownerRun:run,ownerJobs,history,metadata:matches[0]});
   const anchor=importedAnchor(receipt,matches[0],run);
   const consumer=readConsumer(source,run,ownerJobs.find(j=>j.name==='prepared-import'),receipt.origin,artifacts);
-  return {receipt,anchor,history,run,ownerJobs,consumer};
+  return {receipt,anchor,history,run,ownerJobs,consumer,metadata:matches[0]};
 }
 export function assertImportSelection(result,runId,pin){
   requireValue(positive(runId)&&String(result.receipt.origin.source.run_id)===String(runId),'Import used a different preparation run');

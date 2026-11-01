@@ -37,6 +37,32 @@ test('completed public release, all eight regressions and finished alias permit 
   const audit=[];assert.deepEqual(await executeCleanup(f.io,p,{now:()=>now,audit:x=>audit.push(x)}),[]);assert.deepEqual(f.deleted,[]);assert.equal(audit.filter(a=>a.action==='would-delete').length,3);
   assert.deepEqual(await executeCleanup(f.io,p,{apply:true,now:()=>now}),[10,12,11]);assert( f.artifacts.has(13));
 });
+test('cleanup grace uses service time at the exact hour despite runner clock skew',async t=>{
+  for(const offset of [-3600_000,3600_000]){
+    t.mock.method(Date,'now',()=>now+offset);
+    const f=fixture(),eligible=Date.parse(at)+3600_000;
+    f.io.now=()=>eligible-1000;
+    assert.equal((await planCleanup(f.io,100,manifest)).skip,'one-hour-after-consumers-not-reached');
+    const plan=await planCleanup(f.io,100,manifest,eligible);
+    await assert.rejects(executeCleanup(f.io,plan,{apply:true}),/fence changed/);
+    assert.deepEqual(f.deleted,[]);
+    f.io.now=()=>eligible;
+    assert.deepEqual(await executeCleanup(f.io,plan,{apply:true}),[10,12,11]);
+    t.mock.restoreAll();
+  }
+});
+
+test('cleanup service clock requires one valid GitHub Date header',()=>{
+  const io=githubAdapter(REPOSITORY,{transport:args=>{
+    assert.deepEqual(args,['api','--include','--method','HEAD',`repos/${REPOSITORY}`]);
+    return 'HTTP/2.0 200 OK\r\nDate: Sun, 25 Oct 2026 02:00:00 GMT\r\n';
+  }});
+  assert.equal(io.now(),now);
+  for(const headers of ['', 'Date: invalid\r\n', 'Date: Sun, 25 Oct 2026 02:00:00 GMT\r\nDate: Sun, 25 Oct 2026 02:00:00 GMT\r\n']){
+    assert.throws(()=>githubAdapter(REPOSITORY,{transport:()=>headers}).now());
+  }
+});
+
 test('historical artifacts never opt into new automatic policy retroactively',async()=>{
   for(const policy of [undefined,{schema:1,after_consumers_seconds:3599},{...CLEANUP_POLICY,extra:true}]){
     const f=fixture();f.scoped.cleanup_policy=policy;assert.equal((await planCleanup(f.io,100,manifest,now)).skip,'historical-release-not-opted-in');assert.deepEqual(f.deleted,[]);
