@@ -26,12 +26,12 @@ pub use merge::{merge_entries, merge_entries_with_metadata, merge_entries_with_m
 /// Shared candidate receipt contract for agent and client consumers.
 pub fn write_decision_actions() -> &'static [&'static str] {
     &[
-        "① duplicate (bool)：两文同一事实且无新增细节？成立时 merge-ids 合并；先查子孙、先备份。",
-        "② contradiction (bool)：同时点上互斥？成立时合并，以新者为准并留弃因。",
-        "③ obsolete (bool)：新文明确取代旧文？成立时 update 旧条，尾注取代关系，不删旧文。",
-        "④ linkable (bool)：相连有助日后召回？成立时用 --parent 挂因果。",
-        "⑤ representation (keep_separate|merge|promote|uncertain)：该分开、合并、升格还是存疑？各留／合写综合版／重复事件升格为规律条／存疑缓办。",
-        "逐问回答后择一执行：update ＞ merge ＞ parent ＞ force；候选回执不表示已写入。",
+        "① duplicate (bool): do both texts state the same fact with no new detail? If so, merge with merge-ids; inspect descendants and back up first.",
+        "② contradiction (bool): are they mutually exclusive at the same point in time? If so, merge, keep the newer text and record why the old one was dropped.",
+        "③ obsolete (bool): does the new text clearly supersede the old one? If so, update the old entry, append a note on the supersession and do not delete it.",
+        "④ linkable (bool): would linking them help later recall? If so, attach the cause with --parent.",
+        "⑤ representation (keep_separate|merge|promote|uncertain): keep them apart, merge, promote or defer? Keep separate / write one synthesized entry / promote a repeated event into a principle / defer while uncertain.",
+        "After answering every question, execute exactly one action: update > merge > parent > force. A candidate receipt does not mean the write already happened.",
     ]
 }
 mod related;
