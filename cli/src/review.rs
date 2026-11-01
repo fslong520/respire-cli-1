@@ -239,3 +239,59 @@ pub fn run(args: &ReviewArgs) -> Result<()> {
     envelope.ensure_failure_diagnostics();
     crate::emit_result(envelope)
 }
+
+#[cfg(test)]
+mod review_coverage {
+    use super::*;
+    use anyhow::Context;
+
+    #[test]
+    fn error_codes_preserve_typed_and_wrapped_failures() -> Result<()> {
+        let malformed = serde_json::from_str::<Value>("{")
+            .err()
+            .context("invalid JSON accepted")?;
+        assert_eq!(error_code(&malformed.into()), "invalid_metadata");
+        let metadata = respire::memory::model::metadata::MetadataError {
+            code: "unsupported_metadata",
+            message: "fixture metadata version",
+        };
+        assert_eq!(
+            error_code(&anyhow::Error::new(metadata).context("outer context")),
+            "unsupported_metadata"
+        );
+        for code in [
+            "feature_disabled",
+            "unsupported_metadata",
+            "invalid_metadata",
+            "verification_authority_unavailable",
+            "verification_rejected",
+            "evidence_unavailable",
+            "review_conflict",
+        ] {
+            assert_eq!(error_code(&anyhow::anyhow!("fixture: {code}: detail")), code);
+        }
+        for diagnostic in ["Core SDK lacks review support", "missing memory_metadata_contract"] {
+            assert_eq!(
+                error_code(&anyhow::anyhow!("{diagnostic}")),
+                "unsupported_core_capability"
+            );
+        }
+        assert_eq!(
+            error_code(&anyhow::anyhow!("fixture storage read failed")),
+            "review_failed"
+        );
+        crate::capture_tests::with_isolated_session(|_| {
+            let error = respire_app::review_approval::ReviewAuthority::configured()
+                .err()
+                .context("fixture unexpectedly has authority")?;
+            assert!(error
+                .downcast_ref::<respire_app::review_approval::ApprovalError>()
+                .is_some());
+            assert_eq!(
+                error_code(&error.context("outer authority context")),
+                "verification_authority_unavailable"
+            );
+            Ok(())
+        })
+    }
+}

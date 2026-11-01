@@ -9831,6 +9831,53 @@ mod capture_tests {
         Ok(())
     }
 
+    pub(crate) fn with_isolated_session<T>(
+        f: impl FnOnce(&std::path::Path) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let _lock = crate::TEST_ENV_LOCK.lock().map_err(|error| anyhow::anyhow!("{error}"))?;
+        let dir = tempfile::tempdir()?;
+        struct Restore {
+            values: Vec<(&'static str, Option<std::ffi::OsString>)>,
+            worker: bool,
+        }
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in &self.values {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+                crate::rpc::set_worker_active(self.worker);
+            }
+        }
+        let _restore = Restore {
+            values: ["RSRS_DATA_DIR", "RSRS_BIN_DIR", "RSRS_M3_DIR", "RSRS_SUPER",
+                "RSRS_NO_AUTOSYNC", "RSRS_RPC_PORT", "RSRS_CORE_TEST_MODE"]
+                .into_iter().map(|key| (key, std::env::var_os(key))).collect(),
+            worker: crate::rpc::worker_active(),
+        };
+        let _guard = EnvGuard {
+            prev: respire::env::var("RSRS_DATA_DIR").ok(),
+            prev_super: std::env::var_os("RSRS_SUPER"),
+        };
+        std::env::set_var("RSRS_DATA_DIR", dir.path());
+        std::env::set_var("RSRS_BIN_DIR", dir.path().join("bin"));
+        std::env::set_var("RSRS_M3_DIR", dir.path().join("absent-model"));
+        std::env::set_var("RSRS_NO_AUTOSYNC", "1");
+        std::env::set_var("RSRS_RPC_PORT", "29873");
+        std::env::set_var("RSRS_CORE_TEST_MODE", "1");
+        crate::rpc::set_worker_active(true);
+        seed_capture_session()?;
+        let result = f(dir.path());
+        respire::resident::clear()?;
+        result
+    }
+
+    mod metadata_coverage;
+    mod brief_coverage;
+    mod review_coverage;
+
     #[test]
     fn injected_chain_examples_follow_the_parser_contract() -> anyhow::Result<()> {
         for policy in [respire::inject::INSTRUCTIONS_MD, respire::inject::INSTRUCTIONS_LITE_MD] {

@@ -31,7 +31,7 @@ def main():
         raise RuntimeError("Expected exactly one explicit payload release in actual SDK methods")
     fixture = (ROOT / "scripts/fixtures/core-payload-lifetime.rs").read_text()
     prefix = "use anyhow::{bail, Context, Result};\nuse serde::Serialize;\nuse serde_json::{json, Value};\nmod feedback_contract;\nconst FEEDBACK_CONTRACT:u64=0;\n"
-    core = "struct Core { handle: ffi::Handle, next_request: u64, poisoned: bool, native_feedback_contract: Option<u64> }\n"
+    core = "struct Core { handle: ffi::Handle, next_request: u64, poisoned: bool, native_feedback_contract: Option<u64>, native_read_heat_contract: Option<u64> }\n"
     lock = (ROOT / "Cargo.lock").read_text()
     packages = tomllib.loads(lock)["package"]
     versions = {}

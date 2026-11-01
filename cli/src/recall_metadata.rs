@@ -356,3 +356,106 @@ pub fn recall_metadata<E: respire::memory::search::Embedder>(
         result.budget,
     ))
 }
+
+#[cfg(test)]
+mod brief_receipt_tests {
+    use super::*;
+
+    fn entry() -> Result<respire::MemoryEntry> {
+        serde_json::from_value(json!({
+            "id":"fixture","kind":"Context","tags":[],"title":"原题","content":"原文🧪e\u{301}",
+            "user":"test","computer":"fixture","project":"p","created_at":"2026-11-01T00:00:00.000Z",
+            "updated_at":"2026-11-01T00:00:00.000Z","emotion":-1,"parent_id":"",
+            "memory_contract":1,"summary":"摘要",
+            "source_refs":[{"id":"source","revision":format!("sha256:{}","a".repeat(64)),"required":false}],
+            "artifact":{"path":"fixture.rs"}
+        })).map_err(Into::into)
+    }
+
+    #[test]
+    fn complete_rendering_keeps_source_identity_and_original_semantics() -> Result<()> {
+        let entry = entry()?;
+        let rendered = full_text(&entry)?;
+        for value in [&entry.title, &entry.content, &entry.user, &entry.project] {
+            assert!(rendered.contains(value));
+        }
+        assert!(rendered.contains("Stored summary: 摘要"));
+        assert!(rendered.contains("Sources:"));
+        assert!(rendered.contains("Artifact:"));
+        assert!(brief_layout(201).is_err());
+        let zero = brief_layout(0)?;
+        assert_eq!(zero.prefix_by_count, vec![String::new()]);
+        Ok(())
+    }
+
+    #[test]
+    fn receipt_validation_rejects_mutation_duplicates_and_unqualified_variants() -> Result<()> {
+        let entry = entry()?;
+        let original = full_text(&entry)?;
+        let body = format!("[unverified]\n{original}");
+        let evidence = json!({"id":entry.id,"record_revision":"revision","fact_eligible":false});
+        let request = json!({"budget_chars":1500,"prefix_by_count":["","P","P"],"separator":"S","suffix":"E",
+            "items":[{"id":entry.id,"representation":"full","complete":true,"record_revision":"revision","rendered_text":original}]});
+        let text = format!("P{body}E");
+        let receipt = json!({"items":[{"id":entry.id,"representation":"full","rendered_text":body,"evidence":evidence}],
+            "rendered_text":text,"chars":text.chars().count(),"budget_chars":1500,"selected_count":1,
+            "tokens":null,"tokenizer_id":null,"estimated":true,"status":"selected"});
+        let results = vec![RecalledWithContext { score:1.0,entry,ancestors:Vec::new() }];
+        validate_receipt(&receipt,&request,&results,&[evidence.clone()])?;
+        for (key, value) in [
+            ("chars",json!(1)),("budget_chars",json!(1)),("selected_count",json!(2)),
+            ("tokens",json!(10)),("tokenizer_id",json!("unknown")),("estimated",json!(false)),
+            ("status",json!("unknown")),("status",json!("empty_candidates")),
+        ] {
+            let mut changed = receipt.clone();
+            changed[key] = value;
+            assert!(validate_receipt(&changed,&request,&results,&[evidence.clone()]).is_err(),"{key}");
+        }
+        let mut duplicate = receipt.clone();
+        duplicate["items"] = json!([receipt["items"][0],receipt["items"][0]]);
+        duplicate["selected_count"] = json!(2);
+        assert!(validate_receipt(&duplicate,&request,&results,&[evidence.clone()]).err()
+            .context("duplicate accepted")?.to_string().contains("duplicate"));
+        for (key, value) in [
+            ("id",json!("unknown")),("representation",json!("title")),("rendered_text",json!("changed")),
+            ("evidence",json!({"id":"fixture","record_revision":"changed"})),
+        ] {
+            let mut changed = receipt.clone();
+            changed["items"][0][key] = value;
+            assert!(validate_receipt(&changed,&request,&results,&[evidence.clone()]).is_err(),"{key}");
+        }
+        assert!(validate_receipt(&receipt,&request,&results,&[]).is_err());
+        assert!(validate_receipt(&receipt,&request,&[],&[evidence.clone()]).is_err());
+        let mut unqualified = request.clone();
+        unqualified["items"][0]["complete"] = json!(false);
+        assert!(validate_receipt(&receipt,&unqualified,&results,&[evidence.clone()]).is_err());
+        let mut changed = receipt.clone();
+        changed["rendered_text"] = json!("X".repeat(text.chars().count()));
+        assert!(validate_receipt(&changed,&request,&results,&[evidence]).err()
+            .context("changed wrapper accepted")?.to_string().contains("wrapper rendering"));
+        Ok(())
+    }
+
+    #[test]
+    fn empty_receipts_validate_status_wrapper_and_exact_zero() -> Result<()> {
+        let request = json!({"budget_chars":0,"prefix_by_count":[""],"separator":"","suffix":"","items":[]});
+        let receipt = json!({"items":[],"rendered_text":"","chars":0,"budget_chars":0,"selected_count":0,
+            "tokens":null,"tokenizer_id":null,"estimated":true,"status":"empty_candidates"});
+        for status in ["empty_candidates","all_dropped_by_budget","all_dropped_by_incomplete","all_dropped","wrapper_over_budget"] {
+            let mut receipt = receipt.clone();
+            receipt["status"] = json!(status);
+            validate_receipt(&receipt,&request,&[],&[])?;
+        }
+        for key in ["items","rendered_text","status","tokens","tokenizer_id"] {
+            let mut changed = receipt.clone();
+            changed.as_object_mut().context("receipt object")?.remove(key);
+            assert!(validate_receipt(&changed,&request,&[],&[]).is_err(),"{key}");
+        }
+        for key in ["budget_chars","prefix_by_count","separator","suffix"] {
+            let mut changed = request.clone();
+            changed.as_object_mut().context("request object")?.remove(key);
+            assert!(validate_receipt(&receipt,&changed,&[],&[]).is_err(),"{key}");
+        }
+        Ok(())
+    }
+}
