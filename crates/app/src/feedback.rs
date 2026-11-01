@@ -26,6 +26,9 @@ pub fn query_settings(
     candidates: &[StoredMemory],
 ) -> Result<Value> {
     let mut settings = crate::core_sdk::query_settings_from_env()?;
+    if let Some(read_heat) = crate::read_heat::effective()? {
+        settings.insert("read_heat".into(), Value::Bool(read_heat));
+    }
     if enabled()? {
         anyhow::ensure!(crate::core_sdk::FEEDBACK_CONTRACT==1,"enabled feedback requires Core SDK feedback contract 1; install the paired SDK/CLI version");
         let threshold = match crate::env::var("RSRS_MARK_SIM") {

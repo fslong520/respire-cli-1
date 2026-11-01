@@ -22,6 +22,8 @@ fn main() -> Result<()> {
     let provider = HashingEmbedder::new(8);
     for day in 0..days {
         let entry = MemoryEntry {
+            metadata: Default::default(),
+            unknown_fields: Default::default(),
             id: format!("synthetic-day-{day}"),
             kind: Kind::Time,
             tags: vec![],

@@ -55,6 +55,8 @@ pub fn session_entry(session: &Session, opts: &ConvertOptions) -> MemoryEntry {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| created_at.clone());
     MemoryEntry {
+        metadata: Default::default(),
+        unknown_fields: Default::default(),
         supersedes: String::new(),
         superseded_by: String::new(),
         see_also: Vec::new(),

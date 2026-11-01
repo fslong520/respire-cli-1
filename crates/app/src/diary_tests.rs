@@ -5,6 +5,8 @@ fn fixture(content: String) -> Result<(crate::test_lock::Isolate, LocalStore, Se
     let store = LocalStore::open(&isolate.path().join("diary.db"))?;
     let keys = SessionKeys::from_urk([37; 32])?;
     let entry = MemoryEntry {
+        metadata: Default::default(),
+        unknown_fields: Default::default(),
         id: "synthetic-diary-source".into(),
         kind: crate::Kind::Time,
         tags: vec![],

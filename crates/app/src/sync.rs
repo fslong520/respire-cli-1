@@ -87,6 +87,7 @@ pub fn sync_controlled(
 ) -> Result<SyncStats> {
     control.local(|| {
         local.ensure_snapshot_sync_allowed()?;
+        crate::metadata_gate::ensure_sync_allowed(local)?;
         local.maintain_sync_storage()
     })?;
     let captured_boundary = boundary.is_some();
@@ -266,6 +267,7 @@ pub fn sync_controlled(
     control.progress("verify");
     control.local(|| {
         local.ensure_snapshot_sync_allowed()?;
+        crate::metadata_gate::ensure_sync_allowed(local)?;
         local.maintain_sync_storage()
     })?;
     (stats.pending, stats.conflicts, stats.undecodable) = control.local(|| local.sync_counts())?;
@@ -461,6 +463,7 @@ fn test_blob(id: &str) -> StoredMemory {
         local_modified_by: String::new(),
         local_chunks: Vec::new(),
         local_artifact: Vec::new(),
+        local_meta: Default::default(),
     }
 }
 
@@ -473,6 +476,8 @@ mod tests {
 
     fn entry(id: &str, content: &str) -> MemoryEntry {
         MemoryEntry {
+            metadata: Default::default(),
+            unknown_fields: Default::default(),
             supersedes: String::new(),
             superseded_by: String::new(),
             see_also: Vec::new(),

@@ -1621,6 +1621,7 @@ version = "2.0.0-dev.3"
 dependencies = [
  "anyhow",
  "base64",
+ "chrono",
  "dirs",
  "hex",
  "libloading",
@@ -1652,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "respire_protocol"
-version = "2.0.0-dev.1"
+version = "2.0.0-dev.2"
 dependencies = [
  "anyhow",
  "serde",

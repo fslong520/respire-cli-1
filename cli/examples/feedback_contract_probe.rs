@@ -21,7 +21,7 @@ fn recall(
     let output: Value = respire::core_sdk::execute(
         "query_business",
         json!({
-            "model":"m3","snapshots":respire::memory::engine::snapshots(keys,&candidates),
+            "model":"m3","snapshots":respire::memory::engine::snapshots(keys,&candidates)?,
             "query":query,"mode":"fast","provider":null,
             "query_settings":respire::feedback::query_settings(store,query,&candidates)?
         }),
@@ -194,6 +194,8 @@ fn main() -> Result<()> {
     {
         let now = chrono::Utc::now().to_rfc3339();
         let entry = MemoryEntry {
+            metadata: Default::default(),
+            unknown_fields: Default::default(),
             id: format!("00000000-0000-4000-8000-{index:012}"),
             user: "synthetic-probe".into(),
             title: (*title).into(),
@@ -218,7 +220,7 @@ fn main() -> Result<()> {
     }
     let query = MemoryQuery::new(text).limit(20);
     std::env::set_var("RSRS_RECALL_PROFILE", "calibrated");
-    let snapshots = respire::memory::engine::snapshots(&keys, &store.all(false)?);
+    let snapshots = respire::memory::engine::snapshots(&keys, &store.all(false)?)?;
     let calibrated: Value = respire::core_sdk::execute("query_business", json!({
         "model":"m3","snapshots":snapshots,"query":query,"mode":"fast","provider":null
     }))?;

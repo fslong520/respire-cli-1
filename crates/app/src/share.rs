@@ -29,6 +29,10 @@ pub const MARK_END: &str = "-----END respire SHARE-----";
 /// One memory in the payload (plaintext form, no embedding/ciphertext/user).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShareItem {
+    #[serde(default, flatten)]
+    pub metadata: crate::memory::model::MemoryMeta,
+    #[serde(default, flatten)]
+    pub unknown_fields: crate::memory::model::ExtraFields,
     #[serde(default)]
     pub supersedes: String,
     #[serde(default)]
@@ -296,6 +300,8 @@ pub fn items_from(
             e.parent_id.clone()
         };
         out.push(ShareItem {
+            metadata: e.metadata.clone(),
+            unknown_fields: e.unknown_fields.clone(),
             supersedes: if members.contains(&e.supersedes) { e.supersedes.clone() } else { String::new() },
             superseded_by: if members.contains(&e.superseded_by) { e.superseded_by.clone() } else { String::new() },
             see_also: e.see_also.iter().filter(|id| members.contains(*id)).cloned().collect(),
@@ -408,6 +414,8 @@ mod tests {
             source_user: "alice".into(),
             items: vec![
                 ShareItem {
+                    metadata: Default::default(),
+                    unknown_fields: Default::default(),
                     supersedes: String::new(),
                     superseded_by: String::new(),
                     see_also: Vec::new(),
@@ -422,6 +430,8 @@ mod tests {
                     importance: "important".into(),
                 },
                 ShareItem {
+                    metadata: Default::default(),
+                    unknown_fields: Default::default(),
                     supersedes: String::new(),
                     superseded_by: String::new(),
                     see_also: Vec::new(),
@@ -561,6 +571,8 @@ mod tests {
 
     fn item(id: &str, parent: &str) -> ShareItem {
         ShareItem {
+            metadata: Default::default(),
+            unknown_fields: Default::default(),
             supersedes: String::new(),
             superseded_by: String::new(),
             see_also: Vec::new(),
@@ -623,6 +635,8 @@ mod tests {
         use crate::memory::model::{Kind, MemoryEntry};
         use std::collections::HashSet;
         let mk = |id: &str, parent: &str| MemoryEntry {
+            metadata: Default::default(),
+            unknown_fields: Default::default(),
             supersedes: String::new(),
             superseded_by: String::new(),
             see_also: Vec::new(),

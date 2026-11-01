@@ -38,6 +38,8 @@ mod runtime_http;
 mod runtime_policy;
 mod shell;
 mod skill;
+mod review;
+mod metadata;
 mod web;
 
 use respire::auth;
@@ -604,6 +606,11 @@ enum ModelAction {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Review evidence, due records and explicit approval-backed confirmations.
+    Review {
+        #[command(flatten)]
+        args: review::ReviewArgs,
+    },
     /// Host-owned foreground runtime and opt-in current-user sign-in startup.
     Runtime {
         #[command(subcommand)]
@@ -646,8 +653,11 @@ enum Command {
     /// `--parent` = causal attach; parent/child is cause/effect.
     Remember {
         content: String,
-        #[arg(long, default_value = "context")]
-        r#type: String,
+        /// Kind; defaults to context for creation and the first source's kind for merge.
+        #[arg(long, value_parser = metadata::kind)]
+        r#type: Option<String>,
+        #[command(flatten)]
+        metadata: metadata::Flags,
         #[arg(long, default_value = "")]
         tags: String,
         #[arg(long, default_value = "")]
@@ -697,6 +707,15 @@ enum Command {
         /// Return compact IDs and titles in JSON; use show to read full memory content.
         #[arg(long)]
         titles: bool,
+        /// Opt-in complete representations selected by Core under the 1500-char budget.
+        #[arg(long, conflicts_with = "titles")]
+        brief: bool,
+        /// Base64-encoded RenderBudget JSON wrappers; items must be empty (host supplies catalog titles).
+        #[arg(long)]
+        render_budget_base64: Option<String>,
+        /// Filter final Core scores before the render budget (does not change retrieval admission).
+        #[arg(long)]
+        render_min_score: Option<f32>,
         /// Disable associations for this request (original recall results only).
         #[arg(long)]
         no_related: bool,
@@ -1181,16 +1200,18 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Update a memory (any of title/body/tags/kind/importance); decrypt, reseal, auto-sync
+    /// Update a memory; omitted fields stay unchanged and --clear-* explicitly clears metadata.
     Update {
         id: String,
+        #[command(flatten)]
+        metadata: metadata::Flags,
         #[arg(long)]
         title: Option<String>,
         #[arg(long)]
         content: Option<String>,
         #[arg(long)]
         tags: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_parser = metadata::kind)]
         kind: Option<String>,
         /// Importance revision: important | normal | trivial (reseals ciphertext payload and the index column)
         #[arg(long)]
@@ -1200,6 +1221,11 @@ enum Command {
     Export { file: String },
     /// Back up the local store file (whole SQLite copy, ciphertext and index)
     Backup { file: String },
+    /// Candidate metadata gate; defaults off and does not establish verification.
+    Metadata {
+        #[command(subcommand)]
+        command: metadata::Command,
+    },
     /// Create or inspect verified local snapshots; never rolls back cloud state
     Snapshot {
         #[command(subcommand)]
@@ -1598,10 +1624,14 @@ fn run_agent_config(set: Option<&str>) -> Result<()> {
         let val =
             serde_json::from_str::<serde_json::Value>(v).unwrap_or_else(|_| serde_json::json!(v));
         respire::service::write_agent_config_key(k, &val)?;
+        let mut info = serde_json::json!({"action":"updated", "key":k, "value":val});
+        if k.trim() == "read_heat" {
+            info["read_heat_runtime"] = respire_app::read_heat::receipt()?;
+        }
         return emit_result(ResultEnvelope::new(
             "agent-config",
             OutputStatus::Ok,
-            serde_json::json!({"action":"updated", "key":k, "value":val}),
+            info,
             vec![OutputItem::new(k, OutputStatus::Ok, v)],
         ));
     }
@@ -1612,6 +1642,7 @@ fn run_agent_config(set: Option<&str>) -> Result<()> {
     object.insert("readonly".into(), serde_json::json!(respire::service::readonly_mode()));
     object.insert("memory_off".into(), serde_json::json!(respire::service::off_mode()));
     object.insert("workspace_mode".into(), serde_json::json!(respire::service::workspace_mode()));
+    object.insert("read_heat_runtime".into(), respire_app::read_heat::receipt()?);
     let rows = object
         .iter()
         .map(|(key, value)| OutputItem::new(key, OutputStatus::Ok, value.to_string()))
@@ -2271,7 +2302,7 @@ fn run_extract(
     let pending = respire::session_import::cap_per_platform(fresh, scan_options.limit);
 
     let convert_options = respire::session_import::ConvertOptions {
-        kind: respire::Kind::from_str(kind),
+        kind: respire::Kind::try_from_str(&kind.trim().to_lowercase()).ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?,
         importance: importance.to_owned(),
         parent: String::new(),
         user: respire::service::current_user(),
@@ -2950,7 +2981,7 @@ fn run_bench_run(
             }
         }
         let started = std::time::Instant::now();
-        let (ranked, _, fallback, _, _) = recall_select::recall(&session, &embedder, &candidates, &q, &store)?;
+        let (ranked, _, fallback, _, _, _) = recall_select::recall(&session, &embedder, &candidates, &q, &store, None, None, None)?;
         latency.push(started.elapsed().as_micros());
         selector_fallbacks += usize::from(fallback.is_some());
         let ids: Vec<String> = ranked.iter().map(|r| r.entry.id.clone()).collect();
@@ -3316,6 +3347,12 @@ fn run_classify(
                 );
             }
             store.write_transaction(|| {
+                let current = store.all(false)?;
+                for action in &result.actions {
+                    let row = current.iter().find(|row| row.id == action.id)
+                        .ok_or_else(|| anyhow!("classification memory disappeared: {}", action.id))?;
+                    respire_app::metadata_gate::ensure_write(&store, &MemoryEngine::open(session, row)?)?;
+                }
                 for action in &result.actions {
                     respire::service::reparent(session, &store, &action.id, &action.parent_id)?;
                 }
@@ -3874,20 +3911,26 @@ fn run_audit(json_flag: bool) -> Result<()> {
 fn run_repack() -> Result<()> {
     let session = build_session()?;
     let store = build_local()?;
-    let mut fixed = 0usize;
-    for stored in store.all(true)? {
-        let payload_parent = MemoryEngine::payload_parent(&session, &stored)?;
-        if payload_parent != stored.local_parent_id {
+    let fixed = store.write_transaction(|| {
+        let mut pending = Vec::new();
+        for stored in store.all(true)? {
+            let payload_parent = MemoryEngine::payload_parent(&session, &stored)?;
+            if payload_parent != stored.local_parent_id {
+                respire_app::metadata_gate::ensure_write(&store, &MemoryEngine::open(&session, &stored)?)?;
+                pending.push(stored);
+            }
+        }
+        for stored in &pending {
             let out = MemoryEngine::reseal_parent(
                 &session,
-                &stored,
+                stored,
                 &stored.local_parent_id,
                 &stored.updated_at,
             )?;
             store.put_inner(&out, true)?;
-            fixed += 1;
         }
-    }
+        Ok(pending.len())
+    })?;
     auto_sync(&session, &store);
     emit_result(ResultEnvelope::new(
         "repack",
@@ -4238,6 +4281,8 @@ fn run_root_create(title: &str, content: Option<&str>, yes: bool) -> Result<()> 
     let rid = respire::taxonomy::root_id(title);
     let now = now_stamp();
     let entry = respire::MemoryEntry {
+        metadata: Default::default(),
+        unknown_fields: Default::default(),
         supersedes: String::new(),
         superseded_by: String::new(),
         see_also: Vec::new(),
@@ -4298,6 +4343,12 @@ fn run_tree_cure(
             }),
         )?;
         app.store.write_transaction(|| {
+            let current = app.store.all(false)?;
+            for suggestion in &report.suggests {
+                let row = current.iter().find(|row| row.id == suggestion.orphan.id)
+                    .ok_or_else(|| anyhow!("tree-cure memory disappeared: {}", suggestion.orphan.id))?;
+                respire_app::metadata_gate::ensure_write(&app.store, &MemoryEngine::open(&app.keys, row)?)?;
+            }
             for suggestion in &report.suggests {
                 respire::service::reparent(
                     &app.keys,
@@ -5951,6 +6002,7 @@ fn is_write_command(c: &Command) -> bool {
         c,
         Command::Remember { .. }
             | Command::Update { .. }
+            | Command::Metadata { command: metadata::Command::Enable { .. } | metadata::Command::Disable }
             | Command::Forget { .. }
             | Command::Restore { .. }
             | Command::Purge { .. }
@@ -6042,6 +6094,7 @@ fn is_off_allowed(c: &Command) -> bool {
 
 fn is_write_command_fine(c: &Command) -> bool {
     match c {
+        Command::Review { args } => args.writes(),
         Command::Account { action, .. } => {
             let a = action.trim().to_ascii_lowercase();
             a == "remove"
@@ -6340,6 +6393,8 @@ fn run_capabilities() -> Result<()> {
             "capabilities": {
                 "host_rpc": {"version":1,"transport":"stdio","flag":"--host-rpc-stdio","methods":["auth.register","auth.login","auth.recover","auth.reset"]},
                 "memory_list_metadata": true,
+                "memory_metadata_flags": true,
+                "memory_metadata_gate_default": false,
                 "rerank": false,
                 "model": {"install": true, "install_rerank": false}
             }
@@ -6355,6 +6410,81 @@ fn changes_profile(command: Option<&Command>) -> bool {
     }
 }
 
+fn run_metadata_status() -> Result<()> {
+    let root = respire::service::data_dir();
+    let path = respire::service::database_path(&root)?;
+    let details = if path.exists() {
+        let store = respire::transport::local::LocalStore::open_read_only(&path)?;
+        let backup = store.meta_get("memory_metadata_v1_backup")?
+            .map(|value| serde_json::from_str::<serde_json::Value>(&value)).transpose()?;
+        serde_json::json!({"enabled":store.memory_metadata_v1_enabled()?,
+            "mode":respire_app::metadata_gate::mode(&store)?,
+            "metadata_retained":store.has_memory_metadata()?,"backup":backup})
+    } else {
+        serde_json::json!({"enabled":false,"mode":"isolated","metadata_retained":false,"backup":null})
+    };
+    let capabilities: serde_json::Value = respire::core_sdk::execute("capabilities", serde_json::Value::Null)?;
+    let mut result = ResultEnvelope::new("metadata", OutputStatus::Ok,
+        serde_json::json!({"action":"status","enabled":details["enabled"],"mode":details["mode"],
+            "sdk_supported":capabilities["memory_metadata_contract"].as_u64()==Some(1)}), Vec::new());
+    result.details = details;
+    emit_result(result)
+}
+
+fn change_metadata_profile(change: impl FnOnce() -> Result<()>) -> Result<()> {
+    if DIRECT_MODE.load(Ordering::Relaxed) {
+        let _takeover = runtime_policy::takeover_lock()?;
+        anyhow::ensure!(!rpc::runtime_is_up(), "stop the local runtime before direct metadata configuration");
+        change()
+    } else {
+        rpc::change_profile(change)
+    }
+}
+
+fn run_metadata_host(command: &metadata::Command) -> Result<()> {
+    runtime_policy::require_host("metadata deployment configuration")?;
+    anyhow::ensure!(!rpc::worker_active(), "metadata enable/disable must run in the host CLI");
+    respire::service::ensure_writable()?;
+    anyhow::ensure!(!respire::service::off_mode(), "restore normal service before changing the metadata gate");
+    let root = respire::service::data_dir();
+    let mut details = serde_json::Value::Null;
+    match command {
+        metadata::Command::Enable { mode, deployment_review } => {
+            let (deployment, review) = metadata::deployment(mode, deployment_review.as_deref())?;
+            respire_app::metadata_gate::require_support()?;
+            let keys = build_session()?;
+            let account = respire::service::session_user_of_dir(&root);
+            change_metadata_profile(|| {
+                let ownership = respire::lock::LibraryLock::acquire(&root, std::time::Duration::from_secs(15))?;
+                let receipt = respire_app::metadata_gate::enable(&root, &ownership, &account, &keys, deployment)?;
+                details = serde_json::json!({"receipt":receipt,"deployment_review":review,
+                    "deployment_assurance":"operator_attestation_only","old_client_access_enforced":false});
+                Ok(())
+            })?;
+        }
+        metadata::Command::Disable => {
+            change_metadata_profile(|| {
+                let _ownership = respire::lock::LibraryLock::acquire(&root, std::time::Duration::from_secs(15))?;
+                let store = respire::transport::local::LocalStore::open_existing(&respire::service::database_path(&root)?)?;
+                details = store.write_transaction(|| {
+                    let mode = respire_app::metadata_gate::mode(&store)?;
+                    let retained = store.has_memory_metadata()?;
+                    store.meta_set("memory_metadata_v1_enabled", "0")?;
+                    Ok(serde_json::json!({"enabled":false,"mode":mode,
+                        "metadata_retained":retained,"sync_isolation_retained":true}))
+                })?;
+                Ok(())
+            })?;
+        }
+        metadata::Command::Status => return run_metadata_status(),
+    }
+    let mut result = ResultEnvelope::new("metadata", OutputStatus::Ok,
+        serde_json::json!({"action":if matches!(command,metadata::Command::Enable{..}){"enabled"}else{"disabled"},
+            "enabled":matches!(command,metadata::Command::Enable{..})}), Vec::new());
+    result.details = details;
+    emit_result(result)
+}
+
 fn run(args: Cli) -> Result<()> {
     if let Some(Command::Runtime { command }) = args.command.as_ref() {
         return autostart::execute(command);
@@ -6365,6 +6495,23 @@ fn run(args: Cli) -> Result<()> {
         return run_capabilities();
     }
     autostart::check_managed_request()?;
+    let metadata_requested = match args.command.as_ref() {
+        Some(Command::Remember { metadata, r#type, .. }) => metadata.patch().is_some()
+            || r#type.as_deref().is_some_and(|kind| matches!(kind, "hypothesis" | "reflection" | "self")),
+        Some(Command::Update { metadata, kind, .. }) => metadata.patch().is_some()
+            || kind.as_deref().is_some_and(|kind| matches!(kind, "hypothesis" | "reflection" | "self")),
+        _ => false,
+    };
+    if metadata_requested { respire_app::metadata_gate::require_support()?; }
+    if DIRECT_MODE.load(Ordering::Relaxed) && matches!(args.command, Some(Command::Metadata { command: metadata::Command::Status })) {
+        runtime_policy::require_host("direct metadata status")?;
+        set_json_mode(args.json || respire::env::var("RSRS_JSON").is_ok_and(|v| v == "1" || v == "true"));
+        return run_metadata_status();
+    }
+    if let Some(Command::Metadata { command: command @ (metadata::Command::Enable { .. } | metadata::Command::Disable) }) = args.command.as_ref() {
+        set_json_mode(args.json || respire::env::var("RSRS_JSON").is_ok_and(|v| v == "1" || v == "true"));
+        return run_metadata_host(command);
+    }
     if let Some(Command::Snapshot {
         cmd: SnapshotCmd::Restore { id, confirm },
     }) = args.command.as_ref()
@@ -6462,6 +6609,13 @@ fn run(args: Cli) -> Result<()> {
         return rpc::call_existing_from_argv();
     }
     // Host-only migration and repair dispatch must obey the memory gate too.
+    if respire::service::off_mode() && matches!(args.command.as_ref(), Some(Command::Review { .. })) {
+        set_exit_code(1);
+        let mut result = ResultEnvelope::new("review", OutputStatus::Fail, serde_json::json!({"saved":false}), Vec::new());
+        result.details = serde_json::json!({"code":"feature_disabled","saved":false});
+        result.errors.push("memory service is off; due state is unavailable".to_owned());
+        return emit_result(result);
+    }
     if respire::service::off_mode() && args.command.as_ref().is_some_and(|command| !is_off_allowed(command)) {
         return run_local(args);
     }
@@ -6640,6 +6794,7 @@ fn run_local(args: Cli) -> Result<()> {
         return emit_result(result);
     }
     let command = match args.command.as_ref() {
+        Some(Command::Review { .. }) => "review",
         Some(Command::Recall { .. }) => "recall",
         Some(Command::Remember { .. }) => "remember",
         Some(Command::Candidates { .. }) => "candidates",
@@ -6761,6 +6916,9 @@ fn run_local_inner(args: Cli) -> Result<()> {
     }
     // keygen/defrag/scope/config etc. do not need the embedder - handle early
     match args.command.as_ref() {
+        Some(Command::Metadata { command: metadata::Command::Status }) => return run_metadata_status(),
+        Some(Command::Metadata { .. }) => anyhow::bail!("metadata enable/disable must run in the host CLI"),
+        Some(Command::Review { args }) => return review::run(args),
         Some(Command::Grant { command }) => {
             let store = respire::service::open_store()?;
             let (action, result) = match command {
@@ -7391,6 +7549,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
         Command::Remember {
             content,
             r#type,
+            metadata,
             tags,
             title,
             project,
@@ -7403,6 +7562,13 @@ fn run_local_inner(args: Cli) -> Result<()> {
             supersedes,
             see_also,
         } => {
+            let explicit_kind = r#type.is_some();
+            let r#type = r#type.unwrap_or_else(|| "context".to_owned());
+            let metadata_patch = metadata.patch();
+            let requested_kind = Kind::try_from_str(&r#type.trim().to_lowercase())
+                .ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?;
+            let new_kind = matches!(requested_kind, Kind::Hypothesis | Kind::Reflection | Kind::SelfNote);
+            if metadata_patch.is_some() || new_kind { respire_app::metadata_gate::require_support()?; }
             anyhow::ensure!((supersedes.is_none() && see_also.is_empty()) || importance == "important", "associations require important memory");
             // importance enum check: an illegal value (e.g. a kind name "task" by mistake) cannot be filtered by audit/UI after write
             // 2026-09-19 two-tier: normal is retired - new writes are important/trivial only (stock normal still reads)
@@ -7459,6 +7625,9 @@ fn run_local_inner(args: Cli) -> Result<()> {
             }
             let (session, profile_owner) = build_session_with_owner()?;
             let store = build_local()?;
+            if metadata_patch.is_some() || new_kind {
+                anyhow::ensure!(store.memory_metadata_v1_enabled()?, "memory_metadata_v1_disabled");
+            }
             let stamp = now_stamp();
             let mut id = Uuid::new_v4().to_string();
             // Auto-fill device tag: explicit --computer first, else hostname/platform - so recall across devices can tell whose paths they are
@@ -7473,7 +7642,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
             //    an explicit title names an independent entry in either mode.
             //    verbose = one diary entry each (old behavior) --
             let (mut content, mut title) = (content, title);
-            if importance == "trivial" {
+            if importance == "trivial" && merge_ids.is_none() && metadata_patch.is_none() && !new_kind {
                 if respire::service::diary_mode() != "verbose" && title.trim().is_empty() {
                     // Stable identity survives retitling; dated titles remain a fallback
                     // for legacy tracks created before deterministic IDs were used.
@@ -7516,6 +7685,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                         e.content = merged;
                         e.updated_at = store.edit_stamp(&main.id)?;
                         e.modified_by = respire::service::device_tag();
+                        let metadata_receipt = metadata::prepare(&session, &store, &e)?;
                         let stored = MemoryEngine::seal(&session, embedder!(), &e, &main.user)?;
                         anyhow::ensure!(commit_prepared_write(short_write, write_generation, || store.put_diary_checked(&stored, &main.ciphertext, &tracks[1..]))?, "diary was not saved");
                         respire::hooks::fire(
@@ -7539,6 +7709,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                                 format!("id={}", stored.id),
                             )],
                         );
+                        metadata::add_receipt(&mut result, metadata_receipt);
                         result.details = serde_json::to_value(&e)?;
                         emit_result(result)?;
                         return Ok(());
@@ -7564,7 +7735,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 if pending > 0 { rpc::kick_index(); }
                 let q = MemoryQuery::new(&content).limit(5);
                 let candidates:respire::core_sdk::RememberCandidates=respire::core_sdk::execute("remember_candidates",serde_json::json!({
-                    "model":embedder!().model_name(),"snapshots":respire::memory::engine::snapshots(&session,&candidates_all),
+                    "model":embedder!().model_name(),"snapshots":respire::memory::engine::snapshots(&session,&candidates_all)?,
                     "query":q,"query_settings":respire::feedback::query_settings(&store,&q,&candidates_all)?
                 }))?;
                 let merge_cand = candidates.merge;
@@ -7663,12 +7834,23 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     .map(|s| s.trim().to_owned())
                     .filter(|s| !s.is_empty())
                     .collect();
+                let kind = if explicit_kind {
+                    requested_kind
+                } else {
+                    let all = store.all(false)?;
+                    let first = to_merge.first().ok_or_else(|| anyhow!("merge needs at least one live entry"))?;
+                    let full = respire::service::resolve_prefix(&all, first)?;
+                    let row = all.iter().find(|row| row.id == full).ok_or_else(|| anyhow!("missing merge source"))?;
+                    MemoryEngine::open(&session, row)?.kind
+                };
                 let mut entry = respire::MemoryEntry {
+                    metadata: Default::default(),
+                    unknown_fields: Default::default(),
                     supersedes: String::new(),
                     superseded_by: String::new(),
                     see_also: Vec::new(),
                     id,
-                    kind: Kind::from_str(&r#type),
+                    kind,
                     tags: tags
                         .split(',')
                         .map(str::trim)
@@ -7688,15 +7870,12 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     device: respire::service::device_tag(),
                     modified_by: respire::service::device_tag(),
                 };
-                let merged_full = respire::service::merge_entries(
-                    &session,
-                    &store,
-                    embedder!(),
-                    &mut entry,
-                    &to_merge,
-                    &parent,
-                    true,
+                let (merged_full, record_revision) = respire::service::merge_entries_with_metadata_revision(
+                    &session, &store, embedder!(), &mut entry, &to_merge, &parent, true,
+                    metadata_patch.as_ref(),
                 )?;
+                let metadata_receipt = record_revision.as_deref().map(|revision| metadata::receipt(&entry, revision))
+                    .unwrap_or_else(|| serde_json::json!({}));
                 let dropped = merged_full.len();
                 report_orphans(&store, "merge");
                 respire::hooks::fire(
@@ -7731,6 +7910,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 if let Some(h) = hint {
                     result.actions.push(h);
                 }
+                metadata::add_receipt(&mut result, metadata_receipt);
                 result.details = serde_json::to_value(&entry)?;
                 emit_result(result)?;
                 schedule_autosync(&session, &store);
@@ -7756,11 +7936,13 @@ fn run_local_inner(args: Cli) -> Result<()> {
             };
             let parent_id = parent_id.unwrap_or_default();
             let mut entry = respire::MemoryEntry {
+                metadata: Default::default(),
+                unknown_fields: Default::default(),
                 supersedes: String::new(),
                 superseded_by: String::new(),
                 see_also: Vec::new(),
                 id,
-                kind: Kind::from_str(&r#type),
+                kind: Kind::try_from_str(&r#type.trim().to_lowercase()).ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?,
                 tags: tags
                     .split(',')
                     .map(str::trim)
@@ -7780,6 +7962,8 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 device: respire::service::device_tag(),
                 modified_by: respire::service::device_tag(),
             };
+            metadata.apply(&mut entry);
+            let metadata_receipt = metadata::prepare(&session, &store, &entry)?;
             let skill_missing = if entry.kind == Kind::Skill && entry.importance == "important" {
                 let missing = skill::missing_sections(&entry.content);
                 if !missing.is_empty() {
@@ -7843,6 +8027,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 result.actions.push(h);
             }
             result.errors.extend(issues);
+            metadata::add_receipt(&mut result, metadata_receipt);
             result.details = serde_json::to_value(&entry)?;
             emit_result(result)?;
             schedule_autosync(&session, &store);
@@ -7902,14 +8087,40 @@ fn run_local_inner(args: Cli) -> Result<()> {
             project,
             trace,
             titles,
+            brief,
+            render_budget_base64,
+            render_min_score,
             no_related,
             intent,
         } => {
+            anyhow::ensure!(render_budget_base64.is_none() || titles || brief, "render budget requires --titles or --brief");
+            anyhow::ensure!(render_min_score.is_none() || render_budget_base64.is_some() || brief, "render minimum score requires a render budget");
+            let mut render_budget = recall_select::decode_render_budget(render_budget_base64.as_deref(), limit, &intent)?;
+            if brief && render_budget.is_none() { render_budget=Some(recall_select::brief_layout(limit)?); }
+            if brief { recall_select::require_metadata(true,render_min_score)?; }
+            if render_budget.is_some() { recall_select::require_render_budget(render_min_score)?; }
             let recall_generation = rpc::sync_generation();
-            let session = build_session()?;
+            let (session,owner) = build_session_with_owner()?;
+            let owner=owner.unwrap_or_else(||"local".to_owned());
             let store = build_local()?;
-            let (candidates, index_pending, resident) = respire::resident::recall_catalog(&session, &store)?;
-            let _resident_scope = resident.enter();
+            let review=respire_app::review::ReviewService::new(&session,&store,&owner)?;
+            let source=review.recall_source()?;
+            let metadata_aware=brief || source.has_metadata();
+            // Dynamic blocks from new records need complete qualified variants.
+            // Legacy-only title budgets retain their original WP3a bytes.
+            let brief_render=brief || (metadata_aware && render_budget.is_some());
+            if metadata_aware {recall_select::require_metadata(brief_render,render_min_score)?;}
+            let (candidates,index_pending,resident)=if metadata_aware {
+                let rows:Vec<_>=source.memories().iter().filter(|row|!row.deleted).cloned().collect();
+                let pending=rows.iter().filter(|row|row.local_artifact.is_empty()).count();
+                let lease=respire::core_sdk::ResidentLease::publish(uuid::Uuid::new_v4().to_string(),None,
+                    &store.retrieval_model()?,source.snapshots(),&[])?;
+                (Arc::new(rows),pending,Some(lease))
+            } else {
+                let (rows,pending,lease)=respire::resident::recall_catalog(&session,&store)?;
+                (rows,pending,Some(lease))
+            };
+            let _resident_scope=resident.as_ref().map(|lease|lease.enter());
             if index_pending > 0 { rpc::kick_index(); }
             if trace {
                 let preview = &candidates;
@@ -7926,37 +8137,52 @@ fn run_local_inner(args: Cli) -> Result<()> {
             }
             let mut q = MemoryQuery::new(&query).limit(limit);
             if let Some(k) = &r#type {
-                q = q.of_kind(Kind::from_str(k));
+                q = q.of_kind(Kind::try_from_str(&k.trim().to_lowercase()).ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?);
             }
             if let Some(p) = &project {
                 q = q.of_project(p);
             }
+            let core_intent = if metadata_aware || render_budget.is_some() {Some(intent.as_str())}else{None};
             // 3. small-to-big: hit body + ancestor bodies (budget is built-in; RSRS_ANCESTOR_BUDGET=0 turns it off)
-            let (mut ranked, recall_mode, selection_fallback, routing, retrieval) = match mode {
+            let (mut ranked, recall_mode, selection_fallback, routing, retrieval, budget) = if metadata_aware {
+                recall_select::recall_metadata(&review,&source,embedder!(),&q,&store,render_budget,render_min_score,&intent,mode.as_deref())?
+            } else {
+                let (ranked,recall_mode,selection_fallback,routing,retrieval,budget)=match mode {
                 Some(mode) => {
-                    recall_select::recall_with_mode(&session, embedder!(), &candidates, &q, &store, &mode)?
+                    recall_select::recall_with_mode(&session, embedder!(), &candidates, &q, &store, render_budget, render_min_score, core_intent, &mode)?
                 }
-                None => recall_select::recall(&session, embedder!(), &candidates, &q, &store)?,
+                None => recall_select::recall(&session, embedder!(), &candidates, &q, &store, render_budget, render_min_score, core_intent)?,
+                };
+                (ranked,recall_mode,selection_fallback,routing,retrieval,budget.map(serde_json::to_value).transpose()?)
             };
             // Procedural-memory routing (P1/P2): a how-to question gets a second,
             // skill-only pass; the union keeps one procedure inside the top three.
             // Facts keep Core's order and score; run history only ranks procedures.
-            let howto = match intent.as_str() {
+            let howto = if core_intent.is_some() {
+                retrieval["intent"] == "howto"
+            } else { match intent.as_str() {
                 "howto" => true,
                 "fact" => false,
                 _ => r#type.is_none() && skill::howto_intent(&query),
-            };
-            let mut procedure_pass = 0usize;
-            let mut procedure_promoted = false;
-            if howto && r#type.is_none() {
+            }};
+            let mut procedure_pass = if core_intent.is_some() {
+                serde_json::from_value::<usize>(retrieval["procedure_pass"].clone())?
+            } else { 0 };
+            let mut procedure_promoted = if core_intent.is_some() {
+                serde_json::from_value::<bool>(retrieval["procedure_promoted"].clone())?
+            } else { false };
+            if core_intent.is_none() && howto && r#type.is_none() {
                 let mut q_skill = q.clone().of_kind(Kind::Skill);
                 q_skill.limit = limit;
-                let (skills, _, _, _, _) = recall_select::recall_with_mode(
+                let (skills, _, _, _, _, _) = recall_select::recall_with_mode(
                     &session,
                     embedder!(),
                     &candidates,
                     &q_skill,
                     &store,
+                    None,
+                    None,
+                    None,
                     &recall_mode,
                 )?;
                 procedure_pass = skills.len();
@@ -7976,7 +8202,9 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     procedure_promoted = promoted;
                 }
             }
-            let intent_label = if r#type.is_some() {
+            let intent_label = if core_intent.is_some() {
+                retrieval["intent"].as_str().ok_or_else(|| anyhow::anyhow!("missing Core intent receipt"))?
+            } else if r#type.is_some() {
                 "typed"
             } else if howto {
                 "howto"
@@ -7984,10 +8212,16 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 "fact"
             };
             let hit_ids: Vec<String> = ranked.iter().map(|r| r.entry.id.clone()).collect();
-            let associations: respire::memory::model::RelatedResult = if no_related {
+            let associations: respire::memory::model::RelatedResult = if metadata_aware {
+                Default::default()
+            } else if budget.is_some() {
+                respire::memory::model::RelatedResult {
+                    related: Vec::new(), superseded: serde_json::from_value(retrieval["superseded"].clone())?,
+                }
+            } else if no_related {
                 Default::default()
             } else { respire::core_sdk::execute("related_business",serde_json::json!({
-                "model":embedder!().model_name(), "snapshots":respire::memory::engine::snapshots(&session,&candidates),
+                "model":embedder!().model_name(), "snapshots":respire::memory::engine::snapshots(&session,&candidates)?,
                 "query":q,"ids":hit_ids,"pairs":store.recall_pairs(&hit_ids)?
             }))? };
             let query_log_id=if respire::service::workspace_mode()=="normal" {Some(uuid::Uuid::new_v4().to_string())}else{None};
@@ -8026,16 +8260,24 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 }
             }
             if ranked.is_empty() {
-                emit_result(ResultEnvelope::new(
+                let mut result=ResultEnvelope::new(
                     "recall",
                     OutputStatus::Skip,
-                    serde_json::json!({"query":query,"query_log_id":query_log_id,"count":0,"recall_mode":recall_mode,
+                    serde_json::json!({"query":query,"budget":budget,"query_log_id":query_log_id,"count":0,"recall_mode":recall_mode,
                         "selection_fallback":selection_fallback,"embedding_model":store.retrieval_model()?,"routing":routing,"best_cos":retrieval["best_cos"],"best_pre_floor":retrieval["best_pre_floor"],
-                        "dropped_by_floor":retrieval["dropped_by_floor"],"cos_gate":retrieval["cos_gate"],"retrieval":retrieval,
-                        "intent": intent_label,"procedure_pass":procedure_pass,
+                        "dropped_by_floor":retrieval["dropped_by_floor"],"cos_gate":retrieval["cos_gate"],"retrieval":retrieval,"filtered_by_score":retrieval["filtered_by_score"],
+                        "intent": intent_label,"procedure_pass":procedure_pass,"procedure_promoted":procedure_promoted,
                         "index_pending":index_pending,"indexed_candidates":candidates.len().saturating_sub(index_pending),"lexical_candidates":index_pending}),
                     vec![OutputItem::new("results", OutputStatus::Skip, "0")],
-                ))?;
+                );
+                if metadata_aware {
+                    result.summary["metadata_aware"]=serde_json::json!(true);
+                    result.summary["brief"]=serde_json::json!(brief_render);
+                    result.summary["filtered_by_evidence"]=retrieval["filtered_by_evidence"].clone();
+                    result.summary["evidence"]=retrieval["evidence"].clone();
+                    result.details=serde_json::json!([]);
+                }
+                emit_result(result)?;
                 return Ok(());
             }
             let mut items = ranked
@@ -8062,9 +8304,9 @@ fn run_local_inner(args: Cli) -> Result<()> {
             let mut result = ResultEnvelope::new(
                 "recall",
                 OutputStatus::Ok,
-                serde_json::json!({"query":query,"query_log_id":query_log_id,"count":ranked.len(),"limit":limit,"project":project,
+                serde_json::json!({"query":query,"budget":budget,"query_log_id":query_log_id,"count":ranked.len(),"limit":limit,"project":project,
                     "recall_mode":recall_mode,"selection_fallback":selection_fallback,"embedding_model":store.retrieval_model()?,"related":associations.related.len(),"routing":routing,"best_cos":retrieval["best_cos"],"best_pre_floor":retrieval["best_pre_floor"],
-                        "dropped_by_floor":retrieval["dropped_by_floor"],"cos_gate":retrieval["cos_gate"],"retrieval":retrieval,
+                        "dropped_by_floor":retrieval["dropped_by_floor"],"cos_gate":retrieval["cos_gate"],"retrieval":retrieval,"filtered_by_score":retrieval["filtered_by_score"],
                     "intent": intent_label,"procedure_pass":procedure_pass,"procedure_promoted":procedure_promoted,
                     "index_pending":index_pending,"indexed_candidates":candidates.len().saturating_sub(index_pending),"lexical_candidates":index_pending}),
                 items,
@@ -8087,6 +8329,23 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     }))
                     .collect::<Vec<_>>())
             };
+            if metadata_aware {
+                result.summary["metadata_aware"]=serde_json::json!(true);
+                result.summary["brief"]=serde_json::json!(brief_render);
+                result.summary["filtered_by_evidence"]=retrieval["filtered_by_evidence"].clone();
+                if let Some(details)=result.details.as_array_mut() {
+                    for (detail,hit) in details.iter_mut().zip(ranked.iter()) {
+                        detail["evidence"]=retrieval["evidence"].as_array().and_then(|values|values.iter().find(|value|value["id"]==hit.entry.id))
+                            .ok_or_else(||anyhow!("Core omitted recall evidence"))?.clone();
+                        detail["source_refs"]=serde_json::json!(hit.entry.metadata.source_refs);
+                        detail["scope"]=serde_json::json!(hit.entry.metadata.verification.as_ref().map(|value|&value.scope));
+                        detail["valid_until"]=serde_json::json!(hit.entry.metadata.valid_until);
+                        detail["representation"]=budget.as_ref().and_then(|receipt|receipt["items"].as_array())
+                            .and_then(|values|values.iter().find(|value|value["id"]==hit.entry.id)).map(|item|item["representation"].clone())
+                            .unwrap_or_else(||serde_json::json!(if titles{"title"}else{"full"}));
+                    }
+                }
+            }
             emit_result(result)?;
         }
         Command::Attach { id, parent } => {
@@ -8667,6 +8926,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 return Ok(());
             };
             let mut entry = MemoryEngine::open(&session, stored)?;
+            respire_app::metadata_gate::ensure_write(&store, &entry)?;
             let old = entry.title.clone();
             entry.title = new_title.clone();
             // Bump updated_at (LWW needs a new timestamp so a remote old blob cannot push back)
@@ -8701,6 +8961,12 @@ fn run_local_inner(args: Cli) -> Result<()> {
             let all = store.all(true)?;
             let by_id: std::collections::HashMap<&str, &respire::StoredMemory> =
                 all.iter().map(|m| (m.id.as_str(), m)).collect();
+            for item in &items {
+                let id = item["id"].as_str().unwrap_or_default();
+                if let Some(stored) = by_id.get(id).copied().filter(|row| !row.deleted) {
+                    respire_app::metadata_gate::ensure_write(&store, &MemoryEngine::open(&session, stored)?)?;
+                }
+            }
             let mut done = 0usize;
             let mut missing = 0usize;
             for it in &items {
@@ -9370,12 +9636,16 @@ fn run_local_inner(args: Cli) -> Result<()> {
         },
         Command::Update {
             id,
+            metadata,
             title,
             content,
             tags,
             kind,
             importance,
         } => {
+            if metadata.patch().is_some() || kind.as_deref().is_some_and(|kind| matches!(kind, "hypothesis" | "reflection" | "self")) {
+                respire_app::metadata_gate::require_support()?;
+            }
             if let Some(imp) = importance.as_deref() {
                 // Two-tier: normal is retired; update may not set normal either
                 if !matches!(imp, "important" | "trivial") {
@@ -9410,7 +9680,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     .collect();
             }
             if let Some(k) = kind {
-                entry.kind = Kind::from_str(&k);
+                entry.kind = Kind::try_from_str(&k.trim().to_lowercase()).ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?;
             }
             if let Some(imp) = importance {
                 let imp = imp.trim().to_lowercase();
@@ -9421,6 +9691,8 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 }
                 entry.importance = imp;
             }
+            metadata.apply(&mut entry);
+            let metadata_receipt = metadata::prepare(&session, &store, &entry)?;
             let skill_missing = if entry.kind == Kind::Skill && entry.importance == "important" {
                 let missing = skill::missing_sections(&entry.content);
                 if !missing.is_empty() {
@@ -9474,12 +9746,15 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     skill::SECTIONS.join("/")
                 ));
             }
+            metadata::add_receipt(&mut result, metadata_receipt);
             result.details = serde_json::to_value(entry)?;
             emit_result(result)?;
             schedule_autosync(&session, &store);
         }
         // The commands above already returned at the top of this function (no embedder needed); this arm is unreachable - only to exhaust the match.
         Command::MemoryRevision
+        | Command::Metadata { .. }
+        | Command::Review { .. }
         | Command::Capabilities
         | Command::Keygen { .. }
         | Command::Session { .. }

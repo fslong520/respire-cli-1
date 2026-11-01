@@ -33,6 +33,8 @@ impl Fixture {
         )?;
         let fixture = Self { root, port, secret };
         let entry = MemoryEntry {
+            metadata: Default::default(),
+            unknown_fields: Default::default(),
             id: "12345678-1234-4234-8234-123456789abc".into(),
             user: "snapshot-fixture".into(),
             title: "synthetic snapshot".into(),

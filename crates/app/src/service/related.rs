@@ -86,6 +86,9 @@ pub fn store_related<E: Embedder>(
             }
         }
         entry.see_also = linked.into_iter().collect();
+        crate::metadata_gate::ensure_write(store, entry)?;
+        crate::metadata_gate::ensure_sources(keys, store, entry)?;
+        for (_, other) in edits.values() { crate::metadata_gate::ensure_write(store, other)?; }
         let sealed = MemoryEngine::seal(keys, embedder, entry, &entry.user)?;
         ensure!(store.put(&sealed)?, "association entry was not saved");
         for (id, (row, other)) in edits {

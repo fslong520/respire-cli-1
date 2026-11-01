@@ -148,6 +148,17 @@ fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+fn sdk_target() -> Result<String> {
+    let arch = std::env::consts::ARCH;
+    if cfg!(target_os = "windows") { return Ok(format!("{arch}-pc-windows-msvc")); }
+    if cfg!(target_os = "macos") { return Ok(format!("{arch}-apple-darwin")); }
+    if cfg!(target_os = "linux") {
+        let env = if cfg!(target_env = "musl") { "musl" } else { "gnu" };
+        return Ok(format!("{arch}-unknown-linux-{env}"));
+    }
+    anyhow::bail!("snapshot SDK target is unsupported")
+}
+
 pub fn create(
     root: &Path,
     account: &str,
@@ -174,25 +185,8 @@ pub fn create(
         let (entries, sqlite_user_version) = inventory(&database)?;
         let lock: serde_json::Value =
             serde_json::from_str(include_str!("../../core-sdk/core-sdk.lock.json"))?;
-        let versions: std::collections::BTreeSet<&str> = lock["targets"]
-            .as_object()
-            .context("SDK targets missing")?
-            .values()
-            .map(|target| {
-                target["sdk_version"]
-                    .as_str()
-                    .context("SDK lock version missing")
-            })
-            .collect::<Result<_>>()?;
-        anyhow::ensure!(
-            versions.len() == 1,
-            "snapshot SDK versions must agree across targets"
-        );
-        let sdk_version = versions
-            .iter()
-            .next()
-            .context("SDK versions missing")?
-            .to_string();
+        let sdk_version = lock["targets"][sdk_target()?]["sdk_version"]
+            .as_str().context("snapshot SDK target version missing")?.to_owned();
         let source_library = format!(
             "{:x}",
             Sha256::digest(fs::canonicalize(&source)?.to_string_lossy().as_bytes())
@@ -336,6 +330,12 @@ fn read_manifest(root: &Path, id: &str) -> Result<Manifest> {
         entries == manifest.entries && version == manifest.sqlite_user_version,
         "snapshot inventory mismatch"
     );
+    Ok(manifest)
+}
+
+pub(crate) fn verify_backup(root: &Path, id: &str, keys: &crate::SessionKeys) -> Result<Manifest> {
+    let manifest = read_manifest(root, id)?;
+    verify_key(&root.join("snapshots").join(format!("{id}.db")), &manifest, keys)?;
     Ok(manifest)
 }
 
@@ -612,6 +612,7 @@ fn restore_with_hook(
         "snapshot schema differs from the initialized library; explicit migration is required"
     );
     let source = root.join("snapshots").join(format!("{id}.db"));
+    crate::metadata_gate::ensure_restore_allowed(&live, &source)?;
     verify_key(&source, &selected, keys)?;
     let before = create(root, account, &format!("before restore {id}"), keys)?;
     let rollback_file = format!(".snapshot-rollback-{}.db", uuid::Uuid::new_v4().simple());
@@ -880,6 +881,7 @@ pub fn ensure_sync_allowed(root: &Path) -> Result<()> {
         |r| r.get(0),
     )?;
     if has_meta {
+        crate::metadata_gate::ensure_connection_sync_allowed(&connection)?;
         let quarantined: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM meta WHERE key='snapshot_sync_quarantine_v1')",
             [],
@@ -898,6 +900,7 @@ pub fn resume_sync(root: &Path, reviewed_revision: &str) -> Result<()> {
     let connection = Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     connection.execute_batch("BEGIN IMMEDIATE")?;
     ensure_no_incomplete_restore(root)?;
+    crate::metadata_gate::ensure_connection_sync_allowed(&connection)?;
     let revision: String = connection.query_row(
         "SELECT value FROM meta WHERE key='memory_revision_v1'",
         [],
@@ -943,7 +946,7 @@ mod tests {
         let pinned:serde_json::Value=serde_json::from_str(include_str!("../../core-sdk/core-sdk.lock.json"))?;
         let targets=pinned["targets"].as_object().context("pinned SDK targets")?;
         assert_eq!(targets.len(),7);
-        assert!(targets.values().all(|entry|entry["sdk_version"].as_str()==Some(manifest.sdk_version.as_str())));
+        assert_eq!(targets.get(&sdk_target()?).context("current SDK target")?["sdk_version"].as_str(), Some(manifest.sdk_version.as_str()));
         assert_eq!(list(directory.path())?.len(), 1);
         let copied = directory
             .path()

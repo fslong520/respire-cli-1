@@ -3,6 +3,107 @@
 Core owns retrieval, ranking, feature preparation and context selection. CLI-side code
 manages user settings, encrypted data and local index locators.
 
+## Opt-in complete brief and metadata-aware recall
+
+`recall QUERY --brief --json` uses a 1500 Unicode-scalar dynamic block. An
+optional `--render-budget-base64` supplies the same strict wrappers as the title
+interface; public `items` must remain empty. The CLI never accepts a caller's
+rendered_text, completeness, revision, authority checks or root proofs. Default
+brief layouts support limits up to 200. Brief is opt-in; no preference is enabled.
+
+Before loading the provider, the host checks `brief_render_contract=1`,
+`memory_metadata_contract=1`, the existing budget/intent/supersession contracts,
+and `read_heat_contract=1` when read heat is explicitly configured. Missing
+capabilities fail visibly. It reads one authorized `review_snapshot`, decrypts
+the real source fields, and uses review's existing trusted event resolver.
+Unconfigured authority is unavailable; stored human strings never establish
+trust. The same immutable source view is published as a resident lease, keeping
+pending-index lexical recall available without loading a model.
+
+The SDK's query_settings.now is copied exactly to evidence_context.now and
+request_scope.at. The current device tag and requested project are explicit;
+the fact target version remains null. One pure metadata evaluation supplies
+current record revisions. One query_business call then owns evidence filtering,
+how-to union, ranking, score filtering and final representation selection.
+Proofs are request-local and are not accepted from CLI/runtime JSON.
+
+The host provides original full/summary/title variants from that snapshot. Full
+includes the complete body and its original title, source identity, stored
+summary, source references and artifact fields; Core adds status, scope and
+expiry labels before budgeting. Summary and title are always complete=false
+until a trusted source review qualifies them. Their existence is not evidence
+of semantic completeness. Core tries full/summary/title/drop in its own rank
+order, with no truncation or first-item exception. Manual qualification samples
+and production rollout remain required; this path does not summarize content.
+
+The host emits Core's rendered_text unchanged and checks the final Unicode
+scalar count, actual wrappers, selected IDs/order and same-view evidence again.
+Tokens/tokenizer_id stay null and estimated stays true. JSON carries actual
+representation, revision, evidence, scope, expiry and source references.
+
+New-format records require evidence-aware recall even when the library write
+gate is off. Their budgeted output uses complete brief selection, including when
+the caller requested titles. An older consumer must refuse an unsupported new
+receipt rather than treating it as the old title receipt. Non-budgeted new-format
+details include the authoritative evidence and restrictions. Legacy-only recalls
+without --brief preserve the original no-context/title path and title bytes.
+
+## Dynamic title budget (WP3a)
+
+`recall --titles --no-related --render-budget-base64 <BASE64> --json`
+accepts UTF-8 JSON encoded with standard Base64 so Windows npm command shims
+receive one argument without interpreting JSON quotes or shell metacharacters.
+The decoded object is `{budget_chars,prefix_by_count,separator,suffix,items:[]}`.
+Prefixes cover zero through `--limit` and include their own newlines. The CLI validates Base64, the strict layout schema, empty input items and prefix
+coverage, then negotiates Core capabilities before loading the catalog, scheduling
+index work or evaluating the embedder. For rendering, it reads full stored records
+whose IDs belong to the authorized catalog; resident directory entries deliberately
+contain no ciphertext and are never decrypted. The host supplies complete title,
+full ID and authoritative superseded status; it does not truncate or select them. The format is
+`- title（full-id） →superseded`, with the status marker omitted when absent.
+Before rendering, one pure `related_business` metadata call uses the same query
+and authorized view, `all_superseded=true`, empty `ids/pairs`, and
+`related_settings.enabled=false`. It requires `superseded_status_contract=1`
+and returns the complete in-scope map computed by Core from authoritative
+`supersedes` edges. Stored reverse hints are ignored. The host reuses this map
+after recall; budgeted requests perform no second relationship call or kNN pass.
+
+The same option travels through the existing runtime argv/JSON request. Before
+its single `query_business` call, the host requires
+`capabilities.render_budget_contract=1`. It passes the complete `render_budget`
+to Core, which owns ordering, deduplication and hard Unicode scalar counting.
+Budgeted calls pass the actual `auto|fact|howto` intent and authorized
+`skill_runs` counts, requiring `howto_recall_contract=1`. One `query_business`
+call performs the original ordinary and skill-only passes, their existing merge,
+then the final-score filter and budget inside Core. The host returns Core's
+`intent`, `procedure_pass` and `procedure_promoted` diagnostics and performs no
+second merge. Core payloads without this option omit `intent` and `skill_runs`,
+keeping the existing CLI procedure branch.
+
+Both successful and empty recall envelopes include `summary.budget`. Its
+`rendered_text` is the exact dynamic block; `items`, `chars`, `budget_chars`,
+`selected_count`, `candidate_count`, drop counts and `status` explain the result.
+The host verifies the selected IDs, complete rendering and scalar count before
+returning the envelope. Missing capability, a missing receipt or a mismatch is
+an explicit error, never an unbudgeted fallback. The caller must send that text
+unchanged and refuse overflow. The Qoder adapter further limits the maximum to
+1500 scalars and checks the receipt before emission.
+
+`--render-min-score <f32>` passes a finite final-score threshold to Core; negative
+values are allowed. It requires `render_min_score_contract=1` before any catalog
+or model work. Core applies `score >= threshold` after its existing gates, ranking
+and quality selection, before budgeting, without replenishing removed candidates.
+This is separate from retrieval admission controls such as `sim_min`. The recall
+summary exposes `filtered_by_score`, including zero when the filter is requested.
+Qoder forwards nonzero `recall_threshold` through this option and does no local
+score filtering.
+
+This phase supports complete `title` representations only. Without a target
+generation tokenizer, Core returns `tokens=null`, `tokenizer_id=null` and
+`estimated=true`; character counts remain exact. Notifications and later slots
+must be part of the supplied wrappers before selection. Independent `show`
+responses are outside this automatic block.
+
 ## Research routing and ablation
 
 The Core applies the research query routing by default: recency is enabled only

@@ -201,6 +201,8 @@ fn track_id(user: &str, day: &str) -> String {
 /// Build synthetic metadata whose preservation can be checked after appends.
 fn entry(id: &str, user: &str, title: &str, content: &str) -> MemoryEntry {
     MemoryEntry {
+        metadata: Default::default(),
+        unknown_fields: Default::default(),
         id:id.into(), user:user.into(), title:title.into(), content:content.into(),
         supersedes:String::new(), superseded_by:String::new(), see_also:Vec::new(),
         kind:respire::Kind::Context, tags:vec!["preserve-tag".into()],

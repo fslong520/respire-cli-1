@@ -11,6 +11,9 @@ pub use respire_core_sdk::env;
 mod test_lock;
 
 pub mod auth;
+pub mod review_approval;
+pub mod review;
+pub mod metadata_gate;
 pub mod input_error;
 pub mod login_transaction;
 pub mod inject;
@@ -20,6 +23,7 @@ pub mod service;
 pub mod diary;
 pub mod snapshot;
 pub mod feedback;
+pub mod read_heat;
 pub mod session_import;
 pub mod resident;
 pub mod sync;

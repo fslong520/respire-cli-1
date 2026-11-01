@@ -41,7 +41,7 @@ fn main() -> Result<()> {
         "library index is not ready; prepare the isolated copy before benchmarking"
     );
     let model = store.retrieval_model()?;
-    let snapshots = respire::memory::engine::snapshots(&keys, &candidates);
+    let snapshots = respire::memory::engine::snapshots(&keys, &candidates)?;
     let cases = bench::parse_evalset(&std::fs::read_to_string(&args.evalset)?)?;
     let mut results = Vec::with_capacity(cases.len());
     for case in cases {

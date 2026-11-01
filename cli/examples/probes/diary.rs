@@ -16,6 +16,8 @@ pub fn run(exe: &std::path::Path) -> Result<Value> {
     anyhow::ensure!(embedder.dims() == 1024, "real model dimensions");
     let body = "Today I repaired a bicycle wheel and replaced its damaged tyre. 中文骑车日记 🧠";
     let mut diary = MemoryEntry {
+        metadata: Default::default(),
+        unknown_fields: Default::default(),
         id: "00000000-0000-4000-8000-000000000091".into(),
         user: "synthetic-diary".into(),
         title: "Synthetic daily notes".into(),

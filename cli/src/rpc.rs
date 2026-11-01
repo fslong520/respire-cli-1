@@ -1923,6 +1923,10 @@ fn dispatch_loop(rx: Receiver<Job>, limit: usize, idle: Option<Duration>, _lock:
         }
     }) };
     respire::service::install_runtime_profile(respire::service::data_dir());
+    if let Err(error) = respire_app::read_heat::reload() {
+        eprintln!("runtime failed to load read_heat configuration: {error:#}");
+        stop_process(1);
+    }
     let (classify_tx, classify_rx) = mpsc::sync_channel::<Job>(16);
     let classifier = std::thread::Builder::new()
         .name("respire-classify".into())

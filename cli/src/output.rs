@@ -276,7 +276,7 @@ pub fn sanitize_details(command: &str, value: &Value) -> Value {
             || (key.eq_ignore_ascii_case("secret") && explicit != "secret")
             || (key.eq_ignore_ascii_case("secret_key") && explicit != "secret")
             || (key.eq_ignore_ascii_case("grant") && explicit != "grant")
-            || (key.eq_ignore_ascii_case("code") && explicit != "grant" && explicit != "space")
+            || (key.eq_ignore_ascii_case("code") && explicit != "grant" && explicit != "space" && explicit != "review")
             || (key.eq_ignore_ascii_case("payload")
                 && explicit != "share"
                 && explicit != "share-import")
@@ -871,5 +871,8 @@ mod tests {
             }),
         );
         assert_eq!(share["payload"], "1MEMSHARE1:encoded");
+        let review = sanitize_details("review", &serde_json::json!({"code":"evidence_unavailable","token":"not-public"}));
+        assert_eq!(review["code"], "evidence_unavailable");
+        assert!(review.get("token").is_none());
     }
 }

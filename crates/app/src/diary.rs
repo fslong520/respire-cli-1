@@ -222,6 +222,8 @@ fn split(entry: &MemoryEntry, source_version: &str) -> Vec<Fragment> {
 fn indexed_entry(source: &MemoryEntry, fragment: &Fragment) -> MemoryEntry {
     // Never clone a whole day's plaintext to immediately replace its content.
     MemoryEntry {
+        metadata: source.metadata.clone(),
+        unknown_fields: source.unknown_fields.clone(),
         id: format!("diary-fragment:{}", fragment.index_id),
         content: fragment.text.clone(),
         kind: source.kind,
