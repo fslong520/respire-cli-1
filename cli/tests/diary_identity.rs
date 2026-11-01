@@ -116,9 +116,13 @@ impl Fixture {
         Ok(self.run(&["show", id])?["details"]["entry"].clone())
     }
 
-    /// Open only this fixture's local database for synthetic setup and assertions.
+    /// Seed before startup; assertions against a running owner stay read-only.
+    /// Reopening with migrations/WAL setup races the runtime's own startup writes
+    /// and can also change the data whose immutability these tests are checking.
     fn store(&self) -> anyhow::Result<LocalStore> {
-        LocalStore::open(&self.home.path().join("data/rsrs.db"))
+        let path = self.home.path().join("data/rsrs.db");
+        if self.child.is_some() { LocalStore::open_read_only(&path) }
+        else { LocalStore::open(&path) }
     }
 
     /// Seed a synthetic entry whose payload author and wire owner agree.
