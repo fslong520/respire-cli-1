@@ -381,18 +381,26 @@ pub mod bge {
             anyhow::ensure!(model_files_present(&user), "BGE-M3 quantized files missing in {}; need tokenizer.json and onnx/model_quantized.onnx; run rsrs model install-m3", user.display());
             return Ok(user);
         }
-        let mut candidates = vec![user.clone()];
+        let mut legacy = Vec::new();
         if crate::env::var_os("RSRS_DATA_DIR").is_none() {
             if let Some(home) = dirs::home_dir() {
-                candidates.extend([home.join(".respire/models/bge-m3"), home.join(".onememory/models/bge-m3")]);
+                legacy.extend([home.join(".respire/models/bge-m3"), home.join(".onememory/models/bge-m3")]);
             }
         }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() { candidates.insert(0, parent.join("models/bge-m3")); }
-        }
-        candidates.push(PathBuf::from("/usr/lib/respire/models/bge-m3"));
+        let packaged = std::env::current_exe().ok()
+            .and_then(|exe| exe.parent().map(|parent| parent.join("models/bge-m3")));
+        let candidates = model_directory_candidates(user.clone(), legacy, packaged);
         for directory in candidates { if model_files_present(&directory) { return Ok(directory); } }
         bail!("BGE-M3 quantized files missing; need tokenizer.json and onnx/model_quantized.onnx; run rsrs model install-m3 or set RSRS_M3_DIR (expected {})", user.display())
+    }
+    pub(crate) fn model_directory_candidates(user: PathBuf, legacy: Vec<PathBuf>, packaged: Option<PathBuf>) -> Vec<PathBuf> {
+        // Installers write the user model first. Packaged/system models remain
+        // fallbacks, so an installed variant cannot be shadowed by a baseline.
+        let mut candidates = vec![user];
+        candidates.extend(legacy);
+        candidates.extend(packaged);
+        candidates.push(PathBuf::from("/usr/lib/respire/models/bge-m3"));
+        candidates
     }
     pub fn expand_home(value: &str) -> PathBuf {
         match value.strip_prefix("~/") {
@@ -412,12 +420,37 @@ pub mod onnx {
             match value { "cpu" => Ok(Self::Cpu), "gpu" => Ok(Self::Gpu), "npu" => Ok(Self::Npu), _ => bail!("engine must be npu, gpu, or cpu; automatic mode is no longer supported") }
         }
     }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ModelVariant { pub name: &'static str, pub sha256: &'static str, pub size: u64 }
+    /// Pinned Xenova/bge-m3@4de13258 single-file onnx variants. fp32 (external
+    /// .onnx_data), bnb4 and sentence_transformers files cannot load from memory
+    /// or conflict with CLS pooling, so they are not offered.
+    pub const MODEL_VARIANTS: &[ModelVariant] = &[
+        ModelVariant { name: "quantized", sha256: "0826f8c1ab9edf1801db86c61919d4d108e8bfc0b809ec823ad366882ff0b77d", size: 569694530 },
+        ModelVariant { name: "fp16", sha256: "4f1a646a3d4f39985589e9991a717044ede8278617fe55e3d246838bc05055e9", size: 1133992936 },
+        ModelVariant { name: "int8", sha256: "a206e10e995aa2a833924bcd725ba5dd6c3425cd34bac3cf2b5677cd2a1c51d6", size: 568456694 },
+        ModelVariant { name: "uint8", sha256: "3222211565d0d5da2fe89e0c40856ed879e5c5dd3369fbbe685213469498e811", size: 568456765 },
+        ModelVariant { name: "q4", sha256: "4f6d9786712f8dbf00efbb08ffd819395ef05d860249e852b4efc16022f753a6", size: 1248237611 },
+        ModelVariant { name: "q4f16", sha256: "8305fdfa48b5702ecb4a6d84c1a52a4d1cb27d69880ff7f69d1a93d795864f25", size: 699932840 },
+    ];
+    pub fn parse_variant(value: &str) -> Result<ModelVariant> {
+        let wanted = value.trim().to_ascii_lowercase();
+        MODEL_VARIANTS.iter().copied().find(|variant| variant.name == wanted).ok_or_else(|| {
+            anyhow::anyhow!("model variant must be one of: {}",
+                MODEL_VARIANTS.iter().map(|variant| variant.name).collect::<Vec<_>>().join(", "))
+        })
+    }
+    pub fn variant_file_name(variant: &str) -> String { format!("onnx/model_{variant}.onnx") }
+    /// CPU keeps the quantized graph; accelerators default to fp16.
+    pub fn default_variant(engine: Engine) -> &'static str {
+        match engine { Engine::Cpu => "quantized", _ => "fp16" }
+    }
     fn settings_dir() -> std::path::PathBuf {
         crate::env::var_os("RSRS_DATA_DIR").map(std::path::PathBuf::from)
             .unwrap_or_else(|| bge::expand_home("~/.rsrs"))
     }
     pub(crate) fn host_cache_dir() -> std::path::PathBuf { settings_dir().join("engines/openvino-cache") }
-    pub fn configured_engine() -> Result<Engine> {
+    fn read_inference_json() -> Result<(std::path::PathBuf, Value)> {
         let mut path = settings_dir().join("inference.json");
         if !path.exists() && crate::env::var_os("RSRS_DATA_DIR").is_none() {
             if let Some(home) = dirs::home_dir() {
@@ -427,13 +460,35 @@ pub mod onnx {
                 }
             }
         }
-        let value = if path.exists() { serde_json::from_slice::<Value>(&std::fs::read(path)?)? }
+        let value = if path.exists() { serde_json::from_slice::<Value>(&std::fs::read(&path)?)? }
             else { json!({"engine":"cpu"}) };
+        anyhow::ensure!(value.is_object(), "inference.json must contain an object");
+        Ok((path, value))
+    }
+    fn stored_variant(value: &Value) -> Result<Option<ModelVariant>> {
+        value.get("model").map(|model| {
+            parse_variant(model.as_str().context("inference.json model must be a string")?)
+        }).transpose()
+    }
+    pub fn configured_engine() -> Result<Engine> {
+        let (_, value) = read_inference_json()?;
         if value["force_cpu"].as_bool() == Some(true) { return Ok(Engine::Cpu); }
         if let Ok(value) = crate::env::var("RSRS_ENGINE") { return Engine::parse(&value); }
         match value["engine"].as_str().context("inference.json missing engine")? {
             "auto" => Ok(Engine::Cpu), value => Engine::parse(value),
         }
+    }
+    /// Selected onnx variant; falls back to the engine default when unset.
+    pub fn configured_variant(engine: Engine) -> Result<ModelVariant> {
+        if let Ok(value) = crate::env::var("RSRS_MODEL_VARIANT") { return parse_variant(&value); }
+        let (_, value) = read_inference_json()?;
+        stored_variant(&value)?.map_or_else(|| parse_variant(default_variant(engine)), Ok)
+    }
+    /// Whether the operator picked a variant (setting or env), not the engine default.
+    pub fn explicit_model_selection() -> Result<bool> {
+        if crate::env::var("RSRS_MODEL_VARIANT").is_ok() { return Ok(true); }
+        let (_, value) = read_inference_json()?;
+        Ok(stored_variant(&value)?.is_some())
     }
     pub fn inference_status() -> Result<Value> {
         if crate::worker::enabled() { return crate::worker::status(); }
@@ -445,12 +500,28 @@ pub mod onnx {
     fn write_engine(engine: Engine, force_cpu: bool) -> Result<()> {
         let directory = settings_dir();
         std::fs::create_dir_all(&directory)?;
-        std::fs::write(directory.join("inference.json"), serde_json::to_vec_pretty(&json!({"engine":engine,"force_cpu":force_cpu}))?)?;
+        let path = directory.join("inference.json");
+        // Preserve an explicitly selected model variant across engine changes,
+        // including settings read through the legacy-directory fallback.
+        let (_, existing) = read_inference_json()?;
+        let model = stored_variant(&existing)?.map(|variant| variant.name);
+        let mut value = json!({"engine":engine,"force_cpu":force_cpu});
+        if let Some(model) = model { value["model"] = json!(model); }
+        std::fs::write(path, serde_json::to_vec_pretty(&value)?)?;
         Ok(())
     }
     pub fn save_engine(engine: Engine) -> Result<()> {
         reset_sessions()?;
         write_engine(engine, false)
+    }
+    /// Persist an explicit model variant selection without touching the engine.
+    pub fn save_model_variant(model: &str) -> Result<()> {
+        let (path, mut value) = read_inference_json()?;
+        if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+        value["model"] = json!(parse_variant(model)?.name);
+        if value.get("engine").is_none() { value["engine"] = json!("cpu"); }
+        std::fs::write(path, serde_json::to_vec_pretty(&value)?)?;
+        Ok(())
     }
     pub fn reset_sessions() -> Result<()> {
         execute::<()>("engine_control", json!({"action":"reset"}))?;
@@ -480,6 +551,20 @@ pub mod onnx {
             for (name, path) in saved { providers.push(crate::host_winml::Provider { name, ready:path.is_file(), path:Some(path) }); }
         }
         Ok(providers)
+    }
+    #[cfg(test)]
+    mod variant_settings_tests {
+        use super::*;
+        #[test]
+        fn missing_legacy_selection_is_distinct_from_malformed_selection() -> Result<()> {
+            assert_eq!(stored_variant(&json!({"engine":"gpu"}))?, None);
+            assert_eq!(stored_variant(&json!({"model":" FP16 "}))?.map(|v| v.name), Some("fp16"));
+            for value in [json!(null), json!(1), json!(false), json!([]), json!({})] {
+                assert!(stored_variant(&json!({"model":value})).is_err());
+            }
+            assert!(stored_variant(&json!({"model":"unknown"})).is_err());
+            Ok(())
+        }
     }
     pub fn install_accelerators() -> Result<Vec<String>> { bail!("accelerator installation is host-managed; run rsrs model install-engines from the host CLI") }
 }

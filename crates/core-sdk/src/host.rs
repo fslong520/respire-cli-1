@@ -177,6 +177,7 @@ pub(crate) fn request_settings(payload: &mut Value) -> Result<()> {
 struct ModelStamp {
     directory: PathBuf,
     engine: crate::onnx::Engine,
+    variant: String,
     model: (u64, std::time::SystemTime),
     tokenizer: (u64, std::time::SystemTime),
     session_options_id: String,
@@ -184,6 +185,7 @@ struct ModelStamp {
 struct LoadedModel {
     stamp: ModelStamp,
     asset_id: String,
+    registration_errors: Vec<String>,
 }
 static LOADED: Mutex<Option<LoadedModel>> = Mutex::new(None);
 static PROVIDER_DIAGNOSTICS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -217,15 +219,39 @@ pub(crate) fn reset_model_cache() -> Result<()> {
     Ok(())
 }
 
-fn model_file_metadata(path: &std::path::Path, custom_cpu_file: bool) -> Result<(u64, std::time::SystemTime)> {
+fn model_file_metadata(path: &std::path::Path, custom_cpu_file: bool, variant: &str) -> Result<(u64, std::time::SystemTime)> {
     let recovery = if custom_cpu_file {
-        "correct or unset RSRS_CPU_OWNED_ORT_FILE; installing the default model does not repair this custom path"
+        "correct or unset RSRS_CPU_OWNED_ORT_FILE; installing the default model does not repair this custom path".to_owned()
     } else {
-        "run rsrs model install-m3 in this profile before direct inference"
+        format!("run rsrs model install-m3 --model {variant} in this profile before direct inference")
     };
     let metadata = std::fs::metadata(path).with_context(|| format!(
         "model file unavailable at {}; {recovery}", path.display()))?;
     Ok((metadata.len(), metadata.modified()?))
+}
+
+fn read_model_bytes(path: &std::path::Path, expected_size: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    anyhow::ensure!(file.metadata()?.len() == expected_size, "model size mismatch; reinstall the selected variant");
+    let mut bytes = Vec::new();
+    file.take(expected_size + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(bytes.len() as u64 == expected_size, "model size changed while reading");
+    Ok(bytes)
+}
+
+fn model_diagnostics(fallback: &str, registration_errors: &[String]) -> Vec<String> {
+    let mut diagnostics = registration_errors.to_vec();
+    if !fallback.is_empty() { diagnostics.push(fallback.to_owned()); }
+    diagnostics
+}
+
+#[cfg(any(windows, test))]
+fn register_selected_catalog(engine: crate::onnx::Engine,
+    register: impl FnOnce() -> Result<Vec<String>>) -> Result<Vec<String>> {
+    // DirectML GPU sessions register their provider in Core. Only NPU discovery
+    // needs the Windows ML catalog; a missing catalog must not block GPU/CPU.
+    if engine == crate::onnx::Engine::Npu { register() } else { Ok(Vec::new()) }
 }
 
 pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
@@ -235,20 +261,39 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
     )?;
     let directory = crate::bge::resolve_model_dir()?;
     let engine = crate::onnx::configured_engine()?;
+    let selected_variant = crate::onnx::configured_variant(engine)?;
+    // The owned container is the fixed quantized model, not a container for
+    // arbitrary ONNX variants. Explicit non-quantized selections use legacy ORT.
     let cpu_owned_experiment = crate::bge::cpu_owned_mode(engine)?;
     anyhow::ensure!(!cpu_owned_experiment || cfg!(feature = "cpu-owned-ort-experiment"), "CPU owned ORT experiment requires an experimental SDK build");
     anyhow::ensure!(!cpu_owned_experiment || engine == crate::onnx::Engine::Cpu, "CPU owned ORT experiment requires CPU; GPU/NPU remain legacy");
     anyhow::ensure!(!cpu_owned_experiment || crate::env::var_os("RSRS_ORT_PROFILE").is_none(),
         "CPU owned ORT experiment does not support host profiling callbacks; disable the experiment for legacy profiling");
+    let mut variant = selected_variant;
+    // Accelerator installs upgraded before variant selection existed may lack
+    // the fp16 default file. Keep them inferring on quantized until the
+    // operator picks a variant explicitly; explicit selections stay strict.
+    let mut fallback_note = String::new();
+    if !cpu_owned_experiment
+        && engine != crate::onnx::Engine::Cpu
+        && !crate::onnx::explicit_model_selection()?
+        && !directory.join(crate::onnx::variant_file_name(variant.name)).exists()
+    {
+        fallback_note = format!(
+            "accelerator default {} is not installed; using quantized until `rsrs model install --model {}` completes",
+            variant.name, variant.name
+        );
+        variant = crate::onnx::parse_variant("quantized")?;
+    }
     let model_path = if cpu_owned_experiment {
         crate::env::var_os("RSRS_CPU_OWNED_ORT_FILE").map(std::path::PathBuf::from)
             .unwrap_or_else(|| crate::bge::cpu_ort_path(&directory))
-    } else { directory.join("onnx/model_quantized.onnx") };
+    } else { directory.join(crate::onnx::variant_file_name(variant.name)) };
     let tokenizer_path = directory.join("tokenizer.json");
     let metadata = |path: &std::path::Path| -> Result<_> {
         let custom_cpu_file = cpu_owned_experiment && path == model_path.as_path()
             && crate::env::var_os("RSRS_CPU_OWNED_ORT_FILE").is_some();
-        model_file_metadata(path, custom_cpu_file)
+        model_file_metadata(path, custom_cpu_file, variant.name)
     };
     let legacy_options_id = digest(
         format!(
@@ -272,6 +317,7 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
     let stamp = ModelStamp {
         directory,
         engine,
+        variant: variant.name.to_owned(),
         model: metadata(&model_path)?,
         tokenizer: metadata(&tokenizer_path)?,
         session_options_id: session_options_id.clone(),
@@ -282,7 +328,11 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
             "execution_timeout_secs":120,"background_intra_threads":background_intra_threads,"session_options_id":session_options_id,"reuse_current":true});
         if cpu_owned_experiment { request["cpu_owned_ort_experiment"] = json!(true); }
         let reused = core.load_model(request, &[], &[]);
-        if reused.is_ok() { return Ok(()); }
+        if reused.is_ok() {
+            *PROVIDER_DIAGNOSTICS.lock().map_err(|_| anyhow::anyhow!("host provider diagnostics poisoned"))? =
+                model_diagnostics(&fallback_note, &existing.registration_errors);
+            return Ok(());
+        }
         // A reset or failed replacement may have retired the canonical group.
         // Cached reuse is initialization, not a replay of a business operation.
         *loaded = None;
@@ -306,18 +356,19 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
         *loaded = None;
         *PROVIDER_DIAGNOSTICS.lock().map_err(|_| anyhow::anyhow!("host provider diagnostics poisoned"))? = Vec::new();
         input.commit(request, &tokenizer)?;
-        *loaded = Some(LoadedModel { stamp, asset_id });
+        *loaded = Some(LoadedModel { stamp, asset_id, registration_errors: Vec::new() });
         return Ok(());
     }
-    let model = std::fs::read(&model_path).context("read host BGE-M3 model (CPU upgrades are prepared by the runtime model task; run rsrs model install-m3 if unavailable)")?;
+    let model = read_model_bytes(&model_path, if cpu_owned_experiment { crate::bge::CPU_ORT_SIZE } else { variant.size }).context("read host BGE-M3 model (CPU upgrades are prepared by the runtime model task; run rsrs model install-m3 if unavailable)")?;
     let tokenizer = std::fs::read(&tokenizer_path).context("read host BGE-M3 tokenizer")?;
     let model_hash = digest(&model);
     let tokenizer_hash = digest(&tokenizer);
     anyhow::ensure!(
-        model_hash == if cpu_owned_experiment {
+        model_hash.eq_ignore_ascii_case(if cpu_owned_experiment {
             "7ff152e912bc234f5c90e4012f99897a7b2ce180f016db2321304057756b64ff"
-        } else { "0826f8c1ab9edf1801db86c61919d4d108e8bfc0b809ec823ad366882ff0b77d" },
-        "BGE-M3 quantized model checksum mismatch; reinstall the model"
+        } else { variant.sha256 }),
+        "BGE-M3 {} model checksum mismatch; run rsrs model install-m3 --model {}",
+        variant.name, variant.name
     );
     anyhow::ensure!(
         tokenizer_hash == "6710678b12670bc442b99edc952c4d996ae309a7020c1fa0096dd245c2faf790",
@@ -327,11 +378,7 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
     let registration_errors: Vec<String> = {
         #[cfg(windows)]
         {
-            if engine != crate::onnx::Engine::Cpu {
-                core.register_providers()?
-            } else {
-                Vec::new()
-            }
+            register_selected_catalog(engine, || core.register_providers())?
         }
         #[cfg(not(windows))]
         {
@@ -341,7 +388,7 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
     *PROVIDER_DIAGNOSTICS
         .lock()
         .map_err(|_| anyhow::anyhow!("host provider diagnostics poisoned"))? =
-        registration_errors.clone();
+        model_diagnostics(&fallback_note, &registration_errors);
     // Core retires the old group before constructing a replacement. Its failure
     // leaves no usable canonical group; never preserve an apparently live stamp.
     *loaded = None;
@@ -359,7 +406,7 @@ pub(crate) fn initialize_model(core: &mut crate::Core) -> Result<()> {
             )
         })?;
     }
-    *loaded = Some(LoadedModel { stamp, asset_id });
+    *loaded = Some(LoadedModel { stamp, asset_id, registration_errors });
     Ok(())
 }
 

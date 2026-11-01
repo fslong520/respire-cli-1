@@ -70,7 +70,7 @@ Startup preserves the selected account and does not import old profiles automati
 
 ## Plugins
 
-One engine, one plugin per host. Every adapter hooks the same `rsrs` engine into an agent loop: title-tier recall on each turn, one-prefix store (`记：` / `存：` / `remember:`), and a Stop storage check. A plugin never bundles the engine — when `rsrs` is missing it hands `npm i -g @rsrsai/cli@latest` to the agent. Setup guides: [plugin guides](https://docs.rsrs.rs/plugins/).
+One engine, one plugin per host. Every adapter hooks the same `rsrs` engine into an agent loop: title-tier recall on each turn and one-prefix store (`记：` / `存：` / `remember:`). Storage triggers and lifecycle hooks differ per host — Magpie archives on the host `onResponse` callback and Hermes exposes `sync_turn()`; each guide documents its own contract. A plugin never bundles the engine — when `rsrs` is missing it hands `npm i -g @rsrsai/cli@latest` to the agent. Setup guides: [plugin guides](https://docs.rsrs.rs/plugins/).
 
 | | Host | Install | Repository |
 | --- | --- | --- | --- |
@@ -85,7 +85,7 @@ One engine, one plugin per host. Every adapter hooks the same `rsrs` engine into
 | <img src="docs/plugins/icons/dsh.svg" width="28" height="28" alt="DeepSeek Harness"> | DeepSeek Harness (`@rsrsai/dsh`) | `plugin_manager` with `{"action":"install_bundle","target":"@rsrsai/dsh"}` | [risense-ai/respire-dsh](https://github.com/risense-ai/respire-dsh) |
 | <img src="docs/plugins/icons/magpie.svg" width="28" height="28" alt="Magpie"> | Magpie (`@rsrsai/magpie`) | `magpie plugin add @rsrsai/magpie` | [risense-ai/respire-magpie](https://github.com/risense-ai/respire-magpie) |
 
-Icons are copied from each plugin repository into `docs/plugins/icons/`. Kimi Code, Qoder and Pi ship no logo file, so their rows use the shared Respire mark (`respire.svg`). All plugins read the same `respire.config.json` beside their hooks and invoke only `rsrs --client-only`.
+Icons are copied from each plugin repository into `docs/plugins/icons/`. Kimi Code, Qoder and Pi ship no logo file, so their rows use the shared Respire mark (`respire.svg`). Configuration and transport are per host: Codex, Kimi Code, Dim, Qoder, WorkBuddy, Pi, DeepSeek Harness and ZCode read `respire.config.json` beside their hooks and invoke `rsrs --client-only`; Hermes uses `$HERMES_HOME/respire.json`; Magpie uses plugin settings over the local HTTP runtime.
 
 ## Clients
 
