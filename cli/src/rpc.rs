@@ -1254,6 +1254,9 @@ fn serve(flags: RuntimeFlags) -> Result<()> {
     RUNNING.store(0, Ordering::Release);
     std::thread::Builder::new()
         .name("respire-dispatch".into())
+        // Deep native call chains (DML EP initialization, ORT graph
+        // optimization) overflow the 1 MB default on Windows debug builds.
+        .stack_size(16 * 1024 * 1024)
         .spawn(move || dispatch_loop(rx, limit, idle, library))
         .context("failed to start the runtime dispatcher")?;
     // Keep the host entry alive on its actual listener. Drain/worker shutdown

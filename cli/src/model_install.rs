@@ -1,4 +1,4 @@
-//! Explicitly install the local BGE-M3 quantized model (tokenizer.json + onnx/model_quantized.onnx).
+//! Explicitly install the local BGE-M3 model files.
 //!
 //! Does not touch the session or create a memory store. A failed download leaves
 //! partial files outside the loader's paths. A model that already
@@ -74,6 +74,28 @@ pub fn install_target_dir(explicit: Option<&str>) -> PathBuf {
 pub fn install_m3(mirror: Option<&str>) -> Result<InstallReport> {
     let _operation = model_progress::Operation::begin_download()?;
     install_m3_inner(mirror)
+}
+
+/// Fetch one extra onnx variant (e.g. fp16 for GPU/NPU) into the model dir.
+/// Skips when the pinned file already verifies. Never removes other variants.
+pub fn install_variant(variant_name: &str, mirror: Option<&str>) -> Result<()> {
+    use crate::memory::onnx::{parse_variant, variant_file_name};
+    let _operation = model_progress::Operation::begin_download()?;
+    let variant = parse_variant(variant_name)?;
+    let file = variant_file_name(variant.name);
+    let dest = install_target_dir(None);
+    let origins = model_origins(mirror)?;
+    std::fs::create_dir_all(&dest)?;
+    let tmp = dest.join(format!(".download-{MODEL_REVISION}"));
+    std::fs::create_dir_all(tmp.join("onnx"))?;
+    if !file_valid(&dest.join(&file), variant.sha256)? && !file_valid(&tmp.join(&file), variant.sha256)? {
+        let sources = origins.iter().map(|origin| file_url(origin, &file)).collect::<Vec<_>>();
+        download_with_fallback(&sources, &tmp.join(&file), variant.sha256, true, DownloadTimeouts::default())?;
+        std::fs::create_dir_all(dest.join("onnx"))?;
+        replace_file(&tmp.join(&file), &dest.join(&file))?;
+    }
+    anyhow::ensure!(file_valid(&dest.join(&file), variant.sha256)?, "BGE-M3 {} install is incomplete", variant.name);
+    Ok(())
 }
 
 /// Used by the runtime's reserved background operation after a source change.
