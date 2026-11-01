@@ -88,13 +88,19 @@ pub fn install_variant(variant_name: &str, mirror: Option<&str>) -> Result<()> {
     std::fs::create_dir_all(&dest)?;
     let tmp = dest.join(format!(".download-{MODEL_REVISION}"));
     std::fs::create_dir_all(tmp.join("onnx"))?;
-    if !file_valid(&dest.join(&file), variant.sha256)? && !file_valid(&tmp.join(&file), variant.sha256)? {
-        let sources = origins.iter().map(|origin| file_url(origin, &file)).collect::<Vec<_>>();
-        download_with_fallback(&sources, &tmp.join(&file), variant.sha256, true, DownloadTimeouts::default())?;
+    let dest_path = dest.join(&file);
+    let tmp_path = tmp.join(&file);
+    if !file_valid(&dest_path, variant.sha256)? {
+        // A verified leftover from an earlier attempt is published without
+        // re-downloading; only an unverified destination downloads.
+        if !file_valid(&tmp_path, variant.sha256)? {
+            let sources = origins.iter().map(|origin| file_url(origin, &file)).collect::<Vec<_>>();
+            download_with_fallback(&sources, &tmp_path, variant.sha256, true, DownloadTimeouts::default())?;
+        }
         std::fs::create_dir_all(dest.join("onnx"))?;
-        replace_file(&tmp.join(&file), &dest.join(&file))?;
+        replace_file(&tmp_path, &dest_path)?;
     }
-    anyhow::ensure!(file_valid(&dest.join(&file), variant.sha256)?, "BGE-M3 {} install is incomplete", variant.name);
+    anyhow::ensure!(file_valid(&dest_path, variant.sha256)?, "BGE-M3 {} install is incomplete", variant.name);
     Ok(())
 }
 
