@@ -79,28 +79,33 @@ pub fn install_m3(mirror: Option<&str>) -> Result<InstallReport> {
 /// Fetch one extra onnx variant (e.g. fp16 for GPU/NPU) into the model dir.
 /// Skips when the pinned file already verifies. Never removes other variants.
 pub fn install_variant(variant_name: &str, mirror: Option<&str>) -> Result<()> {
-    use crate::memory::onnx::{parse_variant, variant_file_name};
+    use crate::memory::onnx::parse_variant;
     let _operation = model_progress::Operation::begin_download()?;
     let variant = parse_variant(variant_name)?;
-    let file = variant_file_name(variant.name);
     let dest = install_target_dir(None);
     let origins = model_origins(mirror)?;
+    install_variant_into(variant, &dest, &origins)
+}
+
+fn install_variant_into(variant: crate::memory::onnx::ModelVariant, dest: &Path, origins: &[String]) -> Result<()> {
+    let file = crate::memory::onnx::variant_file_name(variant.name);
     std::fs::create_dir_all(&dest)?;
-    let tmp = dest.join(format!(".download-{MODEL_REVISION}"));
+    let tmp = variant_staging_dir(&dest);
     std::fs::create_dir_all(tmp.join("onnx"))?;
     let dest_path = dest.join(&file);
     let tmp_path = tmp.join(&file);
-    if !file_valid(&dest_path, variant.sha256)? {
+    if !variant_file_valid(&dest_path, variant)? {
         // A verified leftover from an earlier attempt is published without
         // re-downloading; only an unverified destination downloads.
-        if !file_valid(&tmp_path, variant.sha256)? {
+        if !variant_file_valid(&tmp_path, variant)? {
             let sources = origins.iter().map(|origin| file_url(origin, &file)).collect::<Vec<_>>();
             download_with_fallback(&sources, &tmp_path, variant.sha256, true, DownloadTimeouts::default())?;
         }
         std::fs::create_dir_all(dest.join("onnx"))?;
+        anyhow::ensure!(variant_file_valid(&tmp_path, variant)?, "downloaded variant size or checksum mismatch");
         replace_file(&tmp_path, &dest_path)?;
     }
-    anyhow::ensure!(file_valid(&dest_path, variant.sha256)?, "BGE-M3 {} install is incomplete", variant.name);
+    anyhow::ensure!(variant_file_valid(&dest_path, variant)?, "BGE-M3 {} install is incomplete", variant.name);
     Ok(())
 }
 
@@ -333,12 +338,31 @@ fn m3_model_valid(path: &Path) -> Result<bool> {
     file_valid(path, ONNX_SHA256)
 }
 
+fn variant_staging_dir(dest: &Path) -> PathBuf {
+    dest.join(format!(".variants-{MODEL_REVISION}"))
+}
+
+fn variant_file_valid(path: &Path, variant: crate::memory::onnx::ModelVariant) -> Result<bool> {
+    if !path.is_file() || path.metadata()?.len() != variant.size { return Ok(false); }
+    file_valid(path, variant.sha256)
+}
+
+fn pinned_size(expected: &str) -> Option<u64> {
+    if expected == crate::memory::bge::CPU_ORT_SHA256 {
+        Some(crate::memory::bge::CPU_ORT_SIZE)
+    } else {
+        crate::memory::onnx::MODEL_VARIANTS.iter()
+            .find(|variant| variant.sha256.eq_ignore_ascii_case(expected)).map(|variant| variant.size)
+    }
+}
+
 fn file_valid(path: &Path, expected: &str) -> Result<bool> {
     if !path.is_file() {
         return Ok(false);
     }
-    if expected == ONNX_SHA256 && path.metadata()?.len() != ONNX_SIZE { return Ok(false); }
-    if expected == crate::memory::bge::CPU_ORT_SHA256 && path.metadata()?.len() != crate::memory::bge::CPU_ORT_SIZE { return Ok(false); }
+    if let Some(size) = pinned_size(expected) {
+        if path.metadata()?.len() != size { return Ok(false); }
+    }
     let actual = sha256_file(path)?;
     Ok(actual.eq_ignore_ascii_case(expected))
 }
@@ -417,9 +441,16 @@ fn download_verified(url: &str, dest: &Path, expected: &str) -> Result<()> {
 }
 
 fn download_verified_with_timeouts(url: &str, dest: &Path, expected: &str, timeouts: DownloadTimeouts) -> Result<()> {
+    download_verified_bounded(url, dest, expected, timeouts, pinned_size(expected))
+}
+
+fn download_verified_bounded(url: &str, dest: &Path, expected: &str, timeouts: DownloadTimeouts, expected_size: Option<u64>) -> Result<()> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if dest.is_file() && expected_size.is_some_and(|size| dest.metadata().map(|m| m.len() > size).unwrap_or(false)) {
+        std::fs::remove_file(dest)?;
     }
     let offset = if dest.is_file() { dest.metadata()?.len() } else { 0 };
     let resp = match download_response(url, dest, offset, timeouts) {
@@ -440,6 +471,9 @@ fn download_verified_with_timeouts(url: &str, dest: &Path, expected: &str, timeo
         anyhow::ensure!(resp.status() == 200, "unexpected download status {}", resp.status());
         resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok())
     };
+    if let (Some(pinned), Some(reported)) = (expected_size, total) {
+        anyhow::ensure!(pinned == reported, "model size mismatch: response {reported}, expected {pinned}");
+    }
     let item = dest.file_name().unwrap_or_default().to_string_lossy();
     let mut reader = resp.into_reader();
     let mut file =
@@ -453,6 +487,10 @@ fn download_verified_with_timeouts(url: &str, dest: &Path, expected: &str, timeo
         if n == 0 {
             break;
         }
+        if let Some(limit) = expected_size {
+            anyhow::ensure!(written <= limit && n as u64 <= limit - written,
+                "model response exceeds pinned size {limit}");
+        }
         file.write_all(&buf[..n])
             .with_context(|| format!("failed to write {}", dest.display()))?;
         written += n as u64;
@@ -463,6 +501,9 @@ fn download_verified_with_timeouts(url: &str, dest: &Path, expected: &str, timeo
     if let Some(total) = total {
         anyhow::ensure!(written == total, "download incomplete: {written}/{total} bytes; partial file retained");
     }
+    if let Some(expected) = expected_size {
+        anyhow::ensure!(written == expected, "model size mismatch: {written}/{expected}");
+    }
     model_progress::update("verify", &item, written, Some(written))?;
     let actual = sha256_file(dest)?;
     if !actual.eq_ignore_ascii_case(expected) {
@@ -470,7 +511,7 @@ fn download_verified_with_timeouts(url: &str, dest: &Path, expected: &str, timeo
         // the fresh request cannot enter this branch with a nonzero offset.
         if resumed && offset > 0 {
             std::fs::remove_file(dest)?;
-            return download_verified_with_timeouts(url, dest, expected, timeouts);
+            return download_verified_bounded(url, dest, expected, timeouts, expected_size);
         }
         // Unknown-length EOF may be a truncated response. Preserve resumable bytes.
         if total.is_some() { std::fs::remove_file(dest)?; }
@@ -527,6 +568,9 @@ fn download_parallel_with_timeouts(url: &str, dest: &Path, expected: &str, minim
     let range = response.header("Content-Range").ok_or_else(|| anyhow!("range probe has no Content-Range"))?;
     let (start, total) = parse_content_range(range)?;
     anyhow::ensure!(start == 0, "range probe starts at {start}");
+    if let Some(pinned) = pinned_size(expected) {
+        anyhow::ensure!(total == pinned, "model size mismatch: response {total}, expected {pinned}");
+    }
     drop(response);
     if total < minimum || total < 4 { return Ok(false); }
     let parts = download_parts_path(dest);
@@ -663,6 +707,92 @@ fn read_download(reader: &mut impl Read, buf: &mut [u8], url: &str) -> Result<us
 mod tests {
     use super::*;
     use anyhow::Result;
+
+    #[test]
+    fn missing_explicit_cpu_variant_does_not_load_the_owned_quantized_container() -> Result<()> {
+        let _lock = crate::TEST_ENV_LOCK.lock().map_err(|error| anyhow!("{error}"))?;
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in &self.0 {
+                    if let Some(value) = value { std::env::set_var(key, value); }
+                    else { std::env::remove_var(key); }
+                }
+            }
+        }
+        let keys = ["RSRS_M3_DIR", "RSRS_DATA_DIR", "RSRS_ENGINE", "RSRS_MODEL_VARIANT", "RSRS_CPU_OWNED_ORT_EXPERIMENT"];
+        let _restore = Restore(keys.into_iter().map(|key| (key, std::env::var_os(key))).collect());
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir_all(dir.path().join("onnx"))?;
+        std::fs::write(dir.path().join("onnx/model_quantized.onnx"), b"baseline presence only")?;
+        std::fs::write(dir.path().join("tokenizer.json"), b"{}")?;
+        std::env::set_var("RSRS_M3_DIR", dir.path());
+        std::env::set_var("RSRS_DATA_DIR", dir.path());
+        std::env::set_var("RSRS_ENGINE", "cpu");
+        std::env::set_var("RSRS_MODEL_VARIANT", "fp16");
+        std::env::remove_var("RSRS_CPU_OWNED_ORT_EXPERIMENT");
+        let error = crate::memory::bge::BgeEmbedder::load().err()
+            .ok_or_else(|| anyhow!("missing explicit fp16 must fail"))?;
+        let message = format!("{error:#}");
+        assert!(message.contains("model_fp16.onnx"), "{message}");
+        assert!(message.contains("--model fp16"), "{message}");
+        assert!(!message.contains("model_quantized.cpu-v1.ort"), "{message}");
+        Ok(())
+    }
+
+    #[test]
+    fn verified_variant_survives_base_cleanup_and_publishes_without_network() -> Result<()> {
+        let _lock = crate::TEST_ENV_LOCK.lock().map_err(|error| anyhow!("{error}"))?;
+        let dir = tempfile::tempdir()?;
+        let variant = crate::memory::onnx::ModelVariant { name: "fp16", size: 3,
+            sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" };
+        let staging = variant_staging_dir(dir.path());
+        std::fs::create_dir_all(staging.join("onnx"))?;
+        std::fs::write(staging.join("onnx/model_fp16.onnx"), b"abc")?;
+        let base_staging = dir.path().join(format!(".download-{MODEL_REVISION}"));
+        std::fs::create_dir_all(&base_staging)?;
+        std::fs::remove_dir_all(base_staging)?;
+        install_variant_into(variant, dir.path(), &[])?;
+        install_variant_into(variant, dir.path(), &[])?;
+        assert_eq!(std::fs::read(dir.path().join("onnx/model_fp16.onnx"))?, b"abc");
+        assert!(!staging.join("onnx/model_fp16.onnx").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_download_rejects_headers_stream_overflow_and_short_eof() -> Result<()> {
+        let _lock = crate::TEST_ENV_LOCK.lock().map_err(|error| anyhow!("{error}"))?;
+        let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        for (headers, body, valid) in [
+            ("Content-Length: 4\r\n", "abcd", false),
+            ("Transfer-Encoding: chunked\r\n", "4\r\nabcd\r\n0\r\n\r\n", false),
+            ("", "ab", false),
+            ("Content-Length: 3\r\n", "abc", true),
+        ] {
+            let dir = tempfile::tempdir()?;
+            let target = dir.path().join("model");
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+            let url = format!("http://{}/model", listener.local_addr()?);
+            let response = format!("HTTP/1.1 200 OK\r\nConnection: close\r\n{headers}\r\n{body}");
+            let worker = std::thread::spawn(move || -> Result<()> {
+                let (mut socket, _) = listener.accept()?;
+                socket.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    anyhow::ensure!(socket.read(&mut byte)? == 1, "request ended early");
+                    request.push(byte[0]);
+                }
+                socket.write_all(response.as_bytes())?;
+                Ok(())
+            });
+            let result = download_verified_bounded(&url, &target, expected, fast_timeouts(), Some(3));
+            worker.join().map_err(|_| anyhow!("server panicked"))??;
+            assert_eq!(result.is_ok(), valid, "unexpected result: {result:?}");
+            if target.exists() { assert!(target.metadata()?.len() <= 3); }
+        }
+        Ok(())
+    }
 
     #[test]
     fn parse_source_and_mirror() -> Result<()> {
