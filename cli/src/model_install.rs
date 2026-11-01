@@ -39,7 +39,6 @@ pub const MODEL_REPO: &str = "Xenova/bge-m3";
 /// Verified revision (this commit's tokenizer/onnx hashes match the local read-only model).
 pub const MODEL_REVISION: &str = "4de13258303883538bd53b696b452bf8099f0858";
 const ONNX_SHA256: &str = "0826f8c1ab9edf1801db86c61919d4d108e8bfc0b809ec823ad366882ff0b77d";
-const ONNX_SIZE: u64 = 569694530;
 const TOKENIZER_SHA256: &str = "6710678b12670bc442b99edc952c4d996ae309a7020c1fa0096dd245c2faf790";
 
 /// Preserve the upstream model card/license separately from the Core SDK license.
@@ -348,6 +347,8 @@ fn variant_file_valid(path: &Path, variant: crate::memory::onnx::ModelVariant) -
 }
 
 fn pinned_size(expected: &str) -> Option<u64> {
+    // tokenizer.json at the same fixed upstream revision (LFS size/hash verified).
+    if expected == TOKENIZER_SHA256 { return Some(17_082_821); }
     if expected == crate::memory::bge::CPU_ORT_SHA256 {
         Some(crate::memory::bge::CPU_ORT_SIZE)
     } else {
