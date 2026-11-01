@@ -83,6 +83,8 @@ pub fn anchor_text(c: &Category) -> String {
 fn category_entry(c: &Category) -> MemoryEntry {
     let now = Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     MemoryEntry {
+        metadata: Default::default(),
+        unknown_fields: Default::default(),
         supersedes: String::new(),
         superseded_by: String::new(),
         see_also: Vec::new(),

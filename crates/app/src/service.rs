@@ -21,7 +21,7 @@ use crate::transport::local::LocalStore;
 use crate::transport::MemoryTransport;
 
 mod merge;
-pub use merge::merge_entries;
+pub use merge::{merge_entries, merge_entries_with_metadata, merge_entries_with_metadata_revision};
 
 /// Shared candidate receipt contract for agent and client consumers.
 pub fn write_decision_actions() -> &'static [&'static str] {
@@ -194,8 +194,10 @@ impl App {
             q = q.of_kind(k);
         }
         let (candidates, _) = recall_candidates(&self.store)?;
-        let ranked =
-            MemoryEngine::recall_local_scored(&self.keys, &self.embedder, &candidates, &q)?;
+        let ranked:Vec<(f32,MemoryEntry)>=crate::core_sdk::execute("query",serde_json::json!({
+            "model":self.embedder.model_name(),"snapshots":crate::memory::engine::snapshots(&self.keys,&candidates)?,
+            "query":q,"mode":"scored","query_settings":crate::feedback::query_settings(&self.store,&q,&candidates)?
+        }))?;
         for (score, e) in &ranked {
             if !readonly_mode() && !off_mode() { let _ = self.store.bump_recall_count(&e.id); }
             let _ = score;
@@ -362,6 +364,7 @@ impl App {
 
     /// Store a memory (after picking one of three): force write / parent as cause / merge_ids merge (delete old, store new, rehang children, inherit first item's parent).
     pub fn create(&self, req: &CreateReq) -> Result<MemoryEntry> {
+        ensure!(req.metadata.verification.is_none(), "verification is only accepted by review commit");
         anyhow::ensure!(req.merge_ids.is_none() || (req.supersedes.is_none() && req.see_also.is_empty()), "merge and associations are mutually exclusive");
         let stamp = now_stamp();
         let title = if req.title.trim().is_empty() {
@@ -377,11 +380,15 @@ impl App {
             final_parent = resolve_prefix(&all, &final_parent).unwrap_or_default();
         }
         let mut entry = MemoryEntry {
+            metadata: req.metadata.clone(),
+            unknown_fields: Default::default(),
             supersedes: String::new(),
             superseded_by: String::new(),
             see_also: Vec::new(),
             id,
-            kind: Kind::from_str(&req.kind),
+            kind: if req.kind.trim().is_empty() { Kind::Context } else {
+                Kind::try_from_str(&req.kind.trim().to_lowercase()).ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?
+            },
             tags: split_tags(&req.tags),
             title,
             content: req.content.clone(),
@@ -402,8 +409,12 @@ impl App {
                 .clone()
                 .unwrap_or_else(|| "trivial".to_owned()),
         };
+        if req.merge_ids.is_none() {
+            crate::metadata_gate::ensure_write(&self.store, &entry)?;
+            crate::metadata_gate::ensure_sources(&self.keys, &self.store, &entry)?;
+        }
         if let Some(ids) = &req.merge_ids {
-            merge_entries(
+            merge_entries_with_metadata(
                 &self.keys,
                 &self.store,
                 &self.embedder,
@@ -411,6 +422,7 @@ impl App {
                 ids,
                 req.parent.as_deref().unwrap_or_default(),
                 false,
+                req.merge_metadata.as_ref(),
             )?;
         } else if req.supersedes.is_some() || !req.see_also.is_empty() {
             store_related(&self.keys,&self.store,&self.embedder,&mut entry,req.supersedes.as_deref(),&req.see_also)?;
@@ -431,6 +443,13 @@ impl App {
         tags: Option<String>,
         kind: Option<String>,
     ) -> Result<MemoryEntry> {
+        self.update_with_metadata(id, title, content, tags, kind, None)
+    }
+
+    pub fn update_with_metadata(
+        &self, id: &str, title: Option<String>, content: Option<String>,
+        tags: Option<String>, kind: Option<String>, metadata: Option<&MetadataPatch>,
+    ) -> Result<MemoryEntry> {
         let all = self.store.all(true)?;
         let full = resolve_prefix(&all, id)?;
         let stored = all
@@ -448,8 +467,11 @@ impl App {
             entry.tags = split_tags(&tg);
         }
         if let Some(k) = kind {
-            entry.kind = Kind::from_str(&k);
+            entry.kind = Kind::try_from_str(&k.trim().to_lowercase()).ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?;
         }
+        if let Some(patch) = metadata { patch.apply(&mut entry.metadata); }
+        crate::metadata_gate::ensure_write(&self.store, &entry)?;
+        crate::metadata_gate::ensure_sources(&self.keys, &self.store, &entry)?;
         entry.updated_at = self.store.edit_stamp(&stored.id)?;
         let user = entry.user.clone();
         let new_stored = MemoryEngine::seal(&self.keys, &self.embedder, &entry, &user)?;
@@ -481,6 +503,8 @@ impl App {
             return Ok(entry);
         }
         entry.updated_at = self.store.edit_stamp(&stored.id)?;
+        crate::metadata_gate::ensure_write(&self.store, &entry)?;
+        crate::metadata_gate::ensure_sources(&self.keys, &self.store, &entry)?;
         let restored = MemoryEngine::seal(&self.keys, &self.embedder, &entry, &entry.user)?;
         self.store.put(&restored)?;
         self.auto_sync();
@@ -647,8 +671,30 @@ pub struct CandidateReport {
     pub parent: Vec<ScoredEntry>,
 }
 
+/// Outer None preserves a field; Some(None) explicitly clears it.
+#[derive(Debug, Clone, Default)]
+pub struct MetadataPatch {
+    pub summary: Option<Option<String>>,
+    pub source_refs: Option<Vec<crate::memory::model::SourceRef>>,
+    pub valid_until: Option<Option<String>>,
+    pub review_at: Option<Option<String>>,
+    pub artifact: Option<Option<crate::memory::model::Artifact>>,
+}
+
+impl MetadataPatch {
+    pub fn apply(&self, metadata: &mut crate::memory::model::MemoryMeta) {
+        metadata.memory_contract = 1;
+        if let Some(value) = &self.summary { metadata.summary = value.clone(); }
+        if let Some(value) = &self.source_refs { metadata.source_refs = value.clone(); }
+        if let Some(value) = &self.valid_until { metadata.valid_until = value.clone(); }
+        if let Some(value) = &self.review_at { metadata.review_at = value.clone(); }
+        if let Some(value) = &self.artifact { metadata.artifact = value.clone(); }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CreateReq {
+    pub metadata: crate::memory::model::MemoryMeta,
     pub content: String,
     pub title: String,
     pub tags: String,
@@ -658,6 +704,7 @@ pub struct CreateReq {
     pub emotion: Option<f32>,
     pub parent: Option<String>,
     pub merge_ids: Option<Vec<String>>,
+    pub merge_metadata: Option<MetadataPatch>,
     pub supersedes: Option<String>,
     pub see_also: Vec<String>,
     pub force: bool,
@@ -686,7 +733,7 @@ pub fn candidate_report<E: crate::memory::search::Embedder>(
     respire_core_sdk::execute(
         "candidate_report",
         serde_json::json!({
-            "model":embedder.model_name(), "snapshots":respire_crypto::engine::snapshots(keys, all), "content":content,
+            "model":embedder.model_name(), "snapshots":respire_crypto::engine::snapshots(keys, all)?, "content":content,
         }),
     )
 }
@@ -712,6 +759,7 @@ pub fn reparent(
             anyhow::bail!("cycle: new parent is a descendant of this entry");
         }
     }
+    crate::metadata_gate::ensure_write(store, &MemoryEngine::open(keys, stored)?)?;
     let stamp = store.edit_stamp(&stored.id)?;
     let out = MemoryEngine::reseal_parent(keys, stored, new_parent, &stamp)?;
     store.put(&out)?;
@@ -1191,6 +1239,12 @@ pub fn read_agent_config() -> serde_json::Value {
 }
 
 pub fn write_agent_config_key(key: &str, value: &serde_json::Value) -> Result<()> {
+    let key = key.trim();
+    if key == "read_heat" {
+        anyhow::ensure!(value.is_boolean(), "read_heat must be true or false");
+        crate::read_heat::configured()?;
+        crate::read_heat::require_support()?;
+    }
     if matches!(key, "memory_off" | "readonly") {
         let enabled = value.as_bool().ok_or_else(|| anyhow!("{key} must be true or false"))?;
         return set_workspace_mode(if !enabled { "normal" } else if key == "memory_off" { "off" } else { "readonly" });
@@ -1212,7 +1266,11 @@ pub fn write_agent_config_key(key: &str, value: &serde_json::Value) -> Result<()
         let _ = std::fs::create_dir_all(parent);
     }
     std::fs::write(agent_config_path(), serde_json::to_vec_pretty(&v)?)
-        .map_err(|e| anyhow::anyhow!("failed to write agent.json: {e}"))
+        .map_err(|e| anyhow::anyhow!("failed to write agent.json: {e}"))?;
+    if key == "read_heat" {
+        crate::read_heat::reload()?;
+    }
+    Ok(())
 }
 
 /// Read-only mode (team read-only members): local flag; when true every write command is refused.
@@ -1469,6 +1527,7 @@ pub fn resume_session() -> Result<serde_json::Value> {
 }
 
 pub fn set_server_addr(addr: &str) -> Result<()> {
+    if database_path(&data_dir())?.exists() { crate::metadata_gate::ensure_sync_allowed(&open_store()?)?; }
     let addr = addr.trim();
     if !(addr.starts_with("http://") || addr.starts_with("https://")) {
         anyhow::bail!("server address must start with http:// or https://");
@@ -1498,10 +1557,11 @@ pub fn autosync_enabled() -> bool {
 /// split_exec / deepen_apply each missed this and got one-off patches; this is the single gate:
 /// every write-path auto-sync goes through this fn; new write paths do not need a private check.
 pub fn autosync_active() -> bool {
-    !cfg!(test) && autosync_enabled()
+    !cfg!(test) && autosync_enabled() && crate::snapshot::ensure_sync_allowed(&data_dir()).is_ok()
 }
 
 pub fn set_autosync(on: bool) -> Result<()> {
+    if on && database_path(&data_dir())?.exists() { crate::metadata_gate::ensure_sync_allowed(&open_store()?)?; }
     let mut data = read_client_config().unwrap_or_else(|| serde_json::json!({}));
     data["autosync"] = serde_json::json!(on);
     write_client_config(&data)
@@ -1759,6 +1819,14 @@ impl Default for ImportTags {
 
 #[derive(serde::Deserialize)]
 struct ImportItem {
+    #[serde(default, flatten)]
+    metadata: crate::memory::model::MemoryMeta,
+    #[serde(default, flatten)]
+    unknown_fields: crate::memory::model::ExtraFields,
+    #[serde(default, rename = "device")]
+    _device: String,
+    #[serde(default, rename = "modified_by")]
+    _modified_by: String,
     #[serde(default)]
     supersedes: String,
     #[serde(default)]
@@ -1823,6 +1891,10 @@ pub fn import_json_text(text: &str) -> Result<ImportReport> {
         if !item.id.is_empty() {
             if let Some(previous) = old_ids.get(&item.id) {
                 ensure!(entries[*previous].content == item.content, "duplicate id with different content at record {}", index + 1);
+                let mut metadata = item.metadata.clone();
+                metadata.verification = None;
+                ensure!(entries[*previous].metadata == metadata && entries[*previous].unknown_fields == item.unknown_fields,
+                    "duplicate id with different metadata at record {}", index + 1);
                 report.skipped += 1;
                 report.duplicates += 1;
                 continue;
@@ -1830,7 +1902,7 @@ pub fn import_json_text(text: &str) -> Result<ImportReport> {
             old_ids.insert(item.id, entries.len());
         }
         let kind = item.kind.unwrap_or_else(|| "context".to_owned()).to_lowercase();
-        if !matches!(kind.as_str(), "context" | "decision" | "preference" | "task" | "emotion" | "time" | "skill" | "knowledge") {
+        if !matches!(kind.as_str(), "context" | "decision" | "preference" | "task" | "emotion" | "time" | "skill" | "knowledge" | "hypothesis" | "reflection" | "self") {
             anyhow::bail!("invalid kind at record {}: {kind}", index + 1);
         }
         let importance = item.importance.unwrap_or_else(|| "trivial".to_owned());
@@ -1841,11 +1913,15 @@ pub fn import_json_text(text: &str) -> Result<ImportReport> {
         if emotion != -1.0 && !(0.0..=1.0).contains(&emotion) {
             anyhow::bail!("invalid emotion at record {}", index + 1);
         }
+        item.metadata.validate()?;
+        crate::memory::model::metadata::validate_extra_fields(&item.unknown_fields)?;
         let created_at = item.created_at.filter(|s| !s.is_empty()).unwrap_or_else(now_stamp);
         let updated_at = item.updated_at.filter(|s| !s.is_empty()).unwrap_or_else(|| created_at.clone());
         entries.push(MemoryEntry {
+            metadata: crate::memory::model::MemoryMeta { verification: None, ..item.metadata },
+            unknown_fields: item.unknown_fields,
             supersedes: item.supersedes, superseded_by: item.superseded_by, see_also: item.see_also,
-            id: uuid::Uuid::new_v4().to_string(), kind: Kind::from_str(&kind),
+            id: uuid::Uuid::new_v4().to_string(), kind: Kind::try_from_str(&kind).ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?,
             tags: match item.tags { ImportTags::List(tags) => tags, ImportTags::Text(tags) => split_tags(&tags) },
             title: item.title, content: item.content, user: item.user.unwrap_or_else(current_user),
             computer: item.computer, project: item.project, device: device_tag(), modified_by: device_tag(),
@@ -1875,9 +1951,19 @@ pub fn import_json_text(text: &str) -> Result<ImportReport> {
             contents.entry(entry.content.clone()).or_insert(entry.id.clone());
             canonical.insert(entry.id.clone(), (stored, entry));
         }
+        let incoming: HashMap<_, _> = entries.iter().map(|entry| (entry.id.clone(), entry.clone())).collect();
         let mut retained = Vec::new();
         for (index, entry) in entries.iter_mut().enumerate() {
             if let Some(id) = contents.get(&entry.content) {
+                let existing = canonical.get(id).map(|(_, old)| old)
+                    .or_else(|| incoming.get(id)).context("missing content duplicate")?;
+                if entry.metadata.memory_contract != 0 || existing.metadata.memory_contract != 0 {
+                    let mut previous = existing.metadata.clone();
+                    previous.verification = None;
+                    ensure!(entry.metadata == previous && entry.kind == existing.kind
+                        && entry.title == existing.title && entry.unknown_fields == existing.unknown_fields,
+                        "import duplicate content has different metadata; import was rolled back");
+                }
                 entry.id = id.clone();
                 report.skipped += 1;
                 report.duplicates += 1;
@@ -1930,6 +2016,14 @@ pub fn import_json_text(text: &str) -> Result<ImportReport> {
                     }
                 }
             }
+        }
+        for id in &linked {
+            let (_, entry) = canonical.get(id).context("missing deduplicated association target")?;
+            crate::metadata_gate::ensure_write(&app.store, entry)?;
+        }
+        for entry in &fresh {
+            crate::metadata_gate::ensure_write(&app.store, entry)?;
+            crate::metadata_gate::ensure_sources(&app.keys, &app.store, entry)?;
         }
         for id in linked {
             let (row, entry) = canonical.get(&id).context("missing deduplicated association target")?;
@@ -1996,11 +2090,13 @@ pub fn export_subtree_payload(root_prefix: &str) -> Result<(crate::share::ShareP
             .get(id)
             .and_then(|s| MemoryEngine::open(&keys, s).ok())
             .map(|entry| MemoryEntry {
+                metadata: entry.metadata,
+                unknown_fields: entry.unknown_fields,
                 supersedes: entry.supersedes,
                 superseded_by: entry.superseded_by,
                 see_also: entry.see_also,
                 id: entry.id,
-                kind: Kind::from_str(entry.kind.as_str()),
+                kind: entry.kind,
                 tags: entry.tags,
                 title: entry.title,
                 content: entry.content,
@@ -2194,22 +2290,10 @@ pub fn import_share_payload(
             skipped += 1;
             continue;
         }
+        it.metadata.validate()?;
+        crate::memory::model::metadata::validate_extra_fields(&it.unknown_fields)?;
         let kind = it.kind.trim().to_lowercase();
-        let kind = if matches!(
-            kind.as_str(),
-            "context"
-                | "decision"
-                | "preference"
-                | "task"
-                | "emotion"
-                | "time"
-                | "skill"
-                | "knowledge"
-        ) {
-            kind
-        } else {
-            "context".to_owned()
-        };
+        let parsed_kind = Kind::try_from_str(&kind).ok_or_else(|| anyhow!("unsupported_metadata: unknown imported memory kind"))?;
         let importance = match it.importance.trim() {
             "important" => "important",
             _ => "trivial",
@@ -2225,11 +2309,13 @@ pub fn import_share_payload(
             it.updated_at.clone()
         };
         entries.push(MemoryEntry {
+            metadata: crate::memory::model::MemoryMeta { verification: None, ..it.metadata.clone() },
+            unknown_fields: it.unknown_fields.clone(),
             supersedes: it.supersedes.clone(),
             superseded_by: it.superseded_by.clone(),
             see_also: it.see_also.clone(),
             id: new_ids[i].clone(),
-            kind: Kind::from_str(&kind),
+            kind: parsed_kind,
             tags: it.tags.clone(),
             title: it.title.clone(),
             content: it.content.clone(),
@@ -2259,6 +2345,10 @@ pub fn import_share_payload(
     if entries.is_empty() {
         return Ok(report);
     }
+    for entry in &entries {
+        crate::metadata_gate::ensure_write(&store, entry)?;
+        crate::metadata_gate::ensure_sources(&keys, &store, entry)?;
+    }
     let stored = entries
         .iter()
         .map(|e| MemoryEngine::seal(&keys, embedder, e, &e.user))
@@ -2279,8 +2369,17 @@ pub fn import_share_payload(
 pub fn backup_db(dest: &std::path::Path) -> Result<PathBuf> {
     crate::input_error::validate_output_parent(dest)?;
     let src = database_path(&data_dir())?;
+    backup_database(&src, dest)
+}
+
+pub(crate) fn backup_database(src: &std::path::Path, dest: &std::path::Path) -> Result<PathBuf> {
+    backup_database_policy(src,dest,true)
+}
+
+pub(crate) fn backup_database_policy(src: &std::path::Path, dest: &std::path::Path, strip_grants: bool) -> Result<PathBuf> {
+    crate::input_error::validate_output_parent(dest)?;
     let connection =
-        rusqlite::Connection::open_with_flags(&src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        rusqlite::Connection::open_with_flags(src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let target = dest
         .to_str()
         .ok_or_else(|| anyhow!("backup path must be valid UTF-8"))?;
@@ -2300,8 +2399,8 @@ pub fn backup_db(dest: &std::path::Path) -> Result<PathBuf> {
         let has_grants = backup
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='access_grants'")?
             .exists([])?;
-        if has_grants {
-            backup.execute("DELETE FROM access_grants", [])?;
+        if has_grants && strip_grants {
+            backup.execute_batch("PRAGMA secure_delete=ON; DELETE FROM access_grants; VACUUM;")?;
         }
         Ok(())
     })();
@@ -2450,12 +2549,21 @@ impl App {
         if !go {
             return Ok(TreeFloatReport { items, applied: 0 });
         }
-        let mut applied = 0;
-        for (child_id, new_parent) in &cands {
-            if reparent(&self.keys, &self.store, child_id, new_parent).is_ok() {
-                applied += 1;
+        let applied = self.store.write_transaction(|| {
+            let current = self.store.all(false)?;
+            for (child_id, _) in &cands {
+                if let Some(row) = current.iter().find(|row| &row.id == child_id) {
+                    crate::metadata_gate::ensure_write(&self.store, &MemoryEngine::open(&self.keys, row)?)?;
+                }
             }
-        }
+            let mut applied = 0;
+            for (child_id, new_parent) in &cands {
+                if reparent(&self.keys, &self.store, child_id, new_parent).is_ok() {
+                    applied += 1;
+                }
+            }
+            Ok(applied)
+        })?;
         self.auto_sync();
         Ok(TreeFloatReport { items, applied })
     }
@@ -2544,49 +2652,59 @@ pub fn deepen_apply<E: crate::memory::search::Embedder>(
             plan.sub_roots.len()
         );
     }
-    let root = store
-        .all(true)?
-        .into_iter()
-        .find(|m| m.id == root_id)
-        .ok_or_else(|| anyhow!("root does not exist: {root_id}"))?;
-    let user = root.user.clone();
-    let stamp = now_stamp();
-    let mut built = 0usize;
-    let mut moved = 0usize;
-    for (sub, title) in plan.sub_roots.iter().zip(titles) {
-        let node = MemoryEntry {
-            supersedes: String::new(),
-            superseded_by: String::new(),
-            see_also: Vec::new(),
-            id: uuid::Uuid::new_v4().to_string(),
-            kind: Kind::Context,
-            tags: {
-                let mut t = root.local_tags.split(',').map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned).collect::<Vec<_>>();
-                t.push("子纲".to_owned());
-                t
-            },
-            title: title.clone(),
-            content: format!("sub-outline of `{}` — absorbs {} same-topic entries (auto-outline from tree-deepen 2026-09-06).", root.local_title, sub.member_ids.len()),
-            user: user.clone(),
-            computer: root.local_computer.clone(),
-            device: device_tag(),
-            modified_by: device_tag(),
-            project: root.local_project.clone(),
-            created_at: stamp.clone(),
-            updated_at: stamp.clone(),
-            emotion: -1.0,
-            parent_id: root_id.to_owned(),
-            importance: "normal".to_owned(),
-        };
-        let stored = MemoryEngine::seal(keys, embedder, &node, &user)?;
-        store.put(&stored)?;
-        built += 1;
-        for mid in &sub.member_ids {
-            if reparent(keys, store, mid, &node.id).is_ok() {
-                moved += 1;
+    let (built, moved) = store.write_transaction(|| {
+        let all = store.all(true)?;
+        let root = all.iter().find(|m| m.id == root_id)
+            .ok_or_else(|| anyhow!("root does not exist: {root_id}"))?;
+        for mid in plan.sub_roots.iter().flat_map(|sub| &sub.member_ids) {
+            if let Ok(full) = resolve_prefix(&all, mid) {
+                if let Some(row) = all.iter().find(|row| row.id == full && !row.deleted) {
+                    crate::metadata_gate::ensure_write(store, &MemoryEngine::open(keys, row)?)?;
+                }
             }
         }
-    }
+        let user = root.user.clone();
+        let stamp = now_stamp();
+        let mut built = 0usize;
+        let mut moved = 0usize;
+        for (sub, title) in plan.sub_roots.iter().zip(titles) {
+            let node = MemoryEntry {
+                metadata: Default::default(),
+                unknown_fields: Default::default(),
+                supersedes: String::new(),
+                superseded_by: String::new(),
+                see_also: Vec::new(),
+                id: uuid::Uuid::new_v4().to_string(),
+                kind: Kind::Context,
+                tags: {
+                    let mut t = root.local_tags.split(',').map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned).collect::<Vec<_>>();
+                    t.push("子纲".to_owned());
+                    t
+                },
+                title: title.clone(),
+                content: format!("sub-outline of `{}` — absorbs {} same-topic entries (auto-outline from tree-deepen 2026-09-06).", root.local_title, sub.member_ids.len()),
+                user: user.clone(),
+                computer: root.local_computer.clone(),
+                device: device_tag(),
+                modified_by: device_tag(),
+                project: root.local_project.clone(),
+                created_at: stamp.clone(),
+                updated_at: stamp.clone(),
+                emotion: -1.0,
+                parent_id: root_id.to_owned(),
+                importance: "normal".to_owned(),
+            };
+            let stored = MemoryEngine::seal(keys, embedder, &node, &user)?;
+            store.put(&stored)?;
+            built += 1;
+            for mid in &sub.member_ids {
+                if reparent(keys, store, mid, &node.id).is_ok() {
+                    moved += 1;
+                }
+            }
+        }
+        Ok((built, moved))
+    })?;
     // Write-path gate autosync_active(): always off in tests — otherwise fixtures would be pushed to the real cloud
     // (proven 2026-09-16: 14 test rows polluted the cloud).
     if autosync_active() && remote_configured() {
@@ -2670,6 +2788,7 @@ pub fn split_exec<E: crate::memory::search::Embedder>(
             "a single child without keeping the outline is a rewrite — edit instead of split".into()
         ).into());
     }
+    crate::metadata_gate::ensure_write(store, entry)?;
     let user = entry.user.clone();
     let all = store.all(true)?;
     for (i, op) in spec.items.iter().enumerate() {
@@ -2680,11 +2799,13 @@ pub fn split_exec<E: crate::memory::search::Embedder>(
         };
         let stamp = now_stamp();
         let child = MemoryEntry {
+            metadata: Default::default(),
+            unknown_fields: Default::default(),
             supersedes: String::new(),
             superseded_by: String::new(),
             see_also: Vec::new(),
             id: uuid::Uuid::new_v4().to_string(),
-            kind: Kind::from_str(&op.kind),
+            kind: Kind::try_from_str(&op.kind.trim().to_lowercase()).ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?,
             tags: {
                 let mut t = op.tags.clone();
                 t.push("拆分".to_owned());
@@ -2726,12 +2847,14 @@ pub fn split_exec<E: crate::memory::search::Embedder>(
 // ── small helpers ──
 
 pub fn open_store() -> Result<LocalStore> {
+    crate::snapshot::ensure_no_incomplete_restore(&data_dir())?;
     open_store_with_profile().map(|(_, store)| store)
 }
 
 /// Return the identity captured for this exact connection, not a later config read.
 pub fn open_store_with_profile() -> Result<(PathBuf, LocalStore)> {
     let root = data_dir();
+    crate::snapshot::ensure_no_incomplete_restore(&root)?;
     check_runtime_profile(&root)?;
     respire_core_sdk::set_index_root(&root)?;
     let db = database_path(&root)?;
@@ -2743,11 +2866,26 @@ pub fn open_store_with_profile() -> Result<(PathBuf, LocalStore)> {
     Ok((root, store))
 }
 
+/// Bootstrap under actual runtime library ownership without opening business access.
+pub fn open_runtime_store(ownership:&crate::lock::LibraryLock)->Result<(LocalStore,Option<String>)> {
+    let root=data_dir();check_runtime_profile(&root)?;
+    anyhow::ensure!(ownership.protects(&root)?,"runtime bootstrap requires matching library ownership");
+    let expected=crate::snapshot::runtime_bootstrap_target(&root)?;
+    respire_core_sdk::set_index_root(&root)?;
+    let store=LocalStore::open(&database_path(&root)?)?;
+    if let Some(id)=expected.as_ref() {
+        store.verify_sqlite_integrity()?;
+        anyhow::ensure!(store.snapshot_quarantine_id()?.as_ref()==Some(id),"opened library does not match the restored snapshot transaction");
+    }
+    Ok((store,expected))
+}
+
 /// Initialize the runtime's owned library after normal service is restored.
 /// Disabled startup deliberately leaves a new database uncreated.
 pub fn initialize_runtime_store() -> Result<LocalStore> {
     anyhow::ensure!(!service_paused(), "database initialization requires normal service");
     let root = data_dir();
+    crate::snapshot::ensure_no_incomplete_restore(&root)?;
     check_runtime_profile(&root)?;
     respire_core_sdk::set_index_root(&root)?;
     LocalStore::open(&database_path(&root)?)
@@ -3286,6 +3424,8 @@ mod tests {
 
     fn test_entry(content: &str) -> MemoryEntry {
         MemoryEntry {
+            metadata: Default::default(),
+            unknown_fields: Default::default(),
             supersedes: String::new(),
             superseded_by: String::new(),
             see_also: Vec::new(),

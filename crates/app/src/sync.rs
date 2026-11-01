@@ -85,7 +85,11 @@ pub fn sync_controlled(
     control: &impl SyncControl,
     boundary: Option<i64>,
 ) -> Result<SyncStats> {
-    control.local(|| local.maintain_sync_storage())?;
+    control.local(|| {
+        local.ensure_snapshot_sync_allowed()?;
+        crate::metadata_gate::ensure_sync_allowed(local)?;
+        local.maintain_sync_storage()
+    })?;
     let captured_boundary = boundary.is_some();
     let mut boundary = match boundary {
         Some(value) => value,
@@ -204,6 +208,13 @@ pub fn sync_controlled(
             if sent {
                 pull_resolution_pages(local, remote, control, &cap.epoch)?;
             }
+            // A processed explicit decision can release a protected diary
+            // working branch. Apply that decision in this sync, not a later one.
+            let mut after = String::new();
+            control.progress("materialize");
+            while let Some(next) = control.local(|| local.materialize_received_batch(keys, &after))? {
+                after = next;
+            }
         }
     } else {
         if control.local(|| local.meta_get("sync_v2_epoch"))?.is_some() {
@@ -254,7 +265,11 @@ pub fn sync_controlled(
         }
     }
     control.progress("verify");
-    control.local(|| local.maintain_sync_storage())?;
+    control.local(|| {
+        local.ensure_snapshot_sync_allowed()?;
+        crate::metadata_gate::ensure_sync_allowed(local)?;
+        local.maintain_sync_storage()
+    })?;
     (stats.pending, stats.conflicts, stats.undecodable) = control.local(|| local.sync_counts())?;
     (
         stats.conflict_history,
@@ -332,9 +347,30 @@ fn pull_pages(
     } else {
         None
     };
+    let mut restarted = false;
     loop {
         control.progress("pull");
-        let page = control.remote(|| remote.pull_v2(epoch, after, until, snapshot))?;
+        let page = match control.remote(|| remote.pull_v2(epoch, after, until, snapshot)) {
+            Ok(page) => page,
+            Err(error)
+                if !restarted
+                    && error
+                        .to_string()
+                        .contains("sync history compacted; restart snapshot") =>
+            {
+                restarted = true;
+                if snapshot {
+                    control.local(|| {
+                        local.meta_set("sync_v2_snapshot_cursor", "0")?;
+                        local.meta_set("sync_v2_snapshot_until", "")
+                    })?;
+                    after = 0;
+                }
+                until = None;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if page.epoch != epoch || until.is_some_and(|h| h != page.until) {
             anyhow::bail!("server page snapshot changed");
         }
@@ -427,6 +463,7 @@ fn test_blob(id: &str) -> StoredMemory {
         local_modified_by: String::new(),
         local_chunks: Vec::new(),
         local_artifact: Vec::new(),
+        local_meta: Default::default(),
     }
 }
 
@@ -439,6 +476,8 @@ mod tests {
 
     fn entry(id: &str, content: &str) -> MemoryEntry {
         MemoryEntry {
+            metadata: Default::default(),
+            unknown_fields: Default::default(),
             supersedes: String::new(),
             superseded_by: String::new(),
             see_also: Vec::new(),
@@ -619,6 +658,42 @@ mod tests {
         sync_all(&keys, &a, &cloud_transport4)?;
         let a_all = a.all(false)?;
         assert!(a_all.iter().all(|m| m.id != "a-2"));
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_quarantine_refuses_sync_before_any_remote_callback() -> Result<()> {
+        struct UnreachableRemote;
+        impl MemoryTransport for UnreachableRemote {
+            fn capabilities(&self) -> Result<Option<crate::transport::protocol::Capabilities>> {
+                panic!("quarantined remote capabilities")
+            }
+            fn put(&self, _: &StoredMemory) -> Result<bool> {
+                panic!("quarantined push")
+            }
+            fn all(&self, _: bool) -> Result<Vec<StoredMemory>> {
+                panic!("quarantined pull")
+            }
+            fn max_updated_at(&self) -> Result<Option<String>> {
+                panic!("quarantined cursor")
+            }
+            fn forget(&self, _: &str) -> Result<bool> {
+                panic!("quarantined delete")
+            }
+            fn count(&self) -> Result<i64> {
+                panic!("quarantined count")
+            }
+        }
+        let root = tempfile::tempdir()?;
+        let local = LocalStore::open(&root.path().join("rsrs.db"))?;
+        local.meta_set("snapshot_sync_quarantine_v1", "synthetic")?;
+        let error = sync_all(&SessionKeys::from_urk([7; 32])?, &local, &UnreachableRemote)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("quarantined sync succeeded"))?;
+        anyhow::ensure!(
+            error.to_string().contains("quarantined"),
+            "unexpected sync error: {error}"
+        );
         Ok(())
     }
 

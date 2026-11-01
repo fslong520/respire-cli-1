@@ -7,6 +7,7 @@ import {validateSource, assertSourceRun, validateScoped, assertDraft} from './re
 import {validateRecoveryBuilds, verifyRecoveryPackages, verifyRecoveryAlias} from './dev6-publication-recovery.mjs';
 const copy = structuredClone;
 const m = JSON.parse(readFileSync(new URL('../artifact-manifest.json', import.meta.url))); m.cliVersion = DEV6.version;
+m.targets=m.targets.filter(t=>TARGETS.includes(t.triple)); // immutable historical DEV6 platform inventory
 const env = {GITHUB_REPOSITORY: DEV6.repository, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', RECOVERY_REF: DEV6.sha,
   RECOVERY_VERSION: DEV6.version, RECOVERY_PUBLISH: 'true', RECOVERY_FULL: 'true', RECOVERY_REUSE: 'false',
   RECOVERY_REPAIR12: 'false', RECOVERY_REPAIR14: 'false'};
@@ -138,7 +139,8 @@ test('resume workflow retains trusted identity, no builds/scoped writes, and bot
   const workflow=readFileSync(new URL('.github/workflows/release.yml',root),'utf8').replace(/\r\n/g,'\n');
   const resume=workflow.split('  dev6-publication-resume:')[1];
   assert.match(resume,/name: \$\{\{ inputs.resume_dev6_publication && 'publish' \|\| 'unused-dev6-publication-resume' \}\}/);
-  assert.match(resume,/contents: write\n      actions: read/);
+  assert.match(resume,/contents: write\n      actions: write/);
+  assert(resume.indexOf('name: scoped-ready-')<resume.indexOf('gh workflow run npm-alias.yml'));
   assert.doesNotMatch(resume,/id-token:|cargo|--clobber|release upload|--publish|workflow_call|npm publish/);
   assert(resume.indexOf('recovery-ready')<resume.indexOf('name: scoped-ready-'));
   assert(resume.indexOf('name: scoped-ready-')<resume.indexOf('await-alias'));

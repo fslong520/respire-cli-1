@@ -9,6 +9,87 @@ import unittest
 from unittest.mock import Mock, patch
 
 import dev_model_fixture as model
+# This existing CI entry covers both native public input caches.
+from test_native_psutil_wheel_cache import NativePsutilWheelCacheTest
+
+cache_spec = importlib.util.spec_from_file_location("native_model_cache", Path(__file__).with_name("native-model-cache.py"))
+model_cache = importlib.util.module_from_spec(cache_spec)
+cache_spec.loader.exec_module(model_cache)
+
+
+class NativeModelCacheTests(unittest.TestCase):
+    def test_public_pins_match_existing_consumers_and_key_covers_every_input(self):
+        root = Path(__file__).parents[1]
+        installer = (root / "cli/src/model_install.rs").read_text(encoding="utf-8")
+        cpu = (root / "crates/core-sdk/src/cpu_model.rs").read_text(encoding="utf-8")
+        fixture = (root / "scripts/test-real-m3-account-switch.py").read_text(encoding="utf-8")
+        self.assertIn(model_cache.REVISION, installer)
+        for name, digest in model_cache.FILES.items():
+            self.assertIn(digest, cpu if name.endswith(".ort") else fixture)
+        self.assertEqual(len(model_cache.FILES), 4)
+        key = model_cache.cache_key()
+        self.assertRegex(key, r"^native-model-v1-[a-f0-9]{64}$")
+        with patch.object(model_cache, "REVISION", "changed"):
+            self.assertNotEqual(key, model_cache.cache_key())
+        for name in model_cache.FILES:
+            with patch.dict(model_cache.FILES, {name: "f" * 64}):
+                self.assertNotEqual(key, model_cache.cache_key())
+
+    def test_roundtrip_excludes_fixture_state_and_bad_cache_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            active, legacy, cache = root / "active models", root / "legacy models", root / "cache"
+            contents = {name: name.encode() for name in model_cache.FILES}
+            pins = {name: hashlib.sha256(body).hexdigest() for name, body in contents.items()}
+            for name, source in model_cache.sources(active, legacy).items():
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(contents[name])
+            (active / "session.json").write_text("never-cache-fixture-state")
+            with patch.dict(model_cache.FILES, pins):
+                model_cache.stage(cache, active, legacy)
+                self.assertEqual({p.relative_to(cache).as_posix() for p in cache.rglob("*") if p.is_file()}, set(pins))
+                restored, old = root / "restored", root / "restored legacy"
+                model_cache.restore(cache, restored, old)
+                model_cache.verify_sources(restored, old)
+                (cache / "session.json").write_text("forbidden")
+                with self.assertRaisesRegex(RuntimeError, "Unexpected"):
+                    model_cache.restore(cache, root / "untouched", root / "untouched legacy")
+                self.assertFalse((root / "untouched").exists())
+                (cache / "session.json").unlink()
+                (cache / "onnx/model_fp16.onnx").write_bytes(b"corrupt")
+                with self.assertRaisesRegex(RuntimeError, "checksum"):
+                    model_cache.restore(cache, root / "untouched", root / "untouched legacy")
+                self.assertFalse((root / "untouched").exists())
+                (cache / "onnx/model_fp16.onnx").unlink()
+                with self.assertRaisesRegex(RuntimeError, "missing"):
+                    model_cache.restore(cache, root / "untouched", root / "untouched legacy")
+                self.assertFalse((root / "untouched").exists())
+                with patch.object(Path, "is_symlink", return_value=True):
+                    with self.assertRaisesRegex(RuntimeError, "linked"):
+                        model_cache.verify_cache(cache)
+
+    def test_workflow_keeps_real_validation_and_only_trusted_main_saves_inputs(self):
+        workflow = (Path(__file__).parents[1] / ".github/workflows/release-native-validation.yml").read_text(encoding="utf-8")
+        self.assertNotIn("actions/cache@v4", workflow)
+        self.assertIn("enableCrossOsArchive: true", workflow)
+        self.assertIn("enableCrossOsArchive: false", workflow)
+        self.assertIn('test "$MATCHED_KEY" = "$EXPECTED_KEY"', workflow)
+        self.assertIn('"$exe" --direct model install-m3 --json', workflow)
+        self.assertIn('"$exe" --direct model probe --json', workflow)
+        self.assertIn('"$py" scripts/test-published-upgrades.py', workflow)
+        self.assertIn('scripts/native-model-cache.py verify', workflow)
+        self.assertIn("pip==26.2.2 setuptools==84.2.1 wheel==0.48.0", workflow)
+        self.assertIn('scripts/native-psutil-wheel-cache.py validate --directory .native-psutil-wheels', workflow)
+        self.assertIn('scripts/native-psutil-wheel-cache.py install --directory .native-psutil-wheels', workflow)
+        self.assertIn('"${ACTIONS_CACHE_MODE:-}" = write', workflow)
+        for block in workflow.split("      - uses: actions/cache/save@v4\n")[1:]:
+            block = block.split("\n      - ")[0]
+            self.assertIn("continue-on-error: true", block)
+            self.assertIn("steps.cache-write.outputs.may_save == 'true'", block)
+            self.assertIn("github.ref == 'refs/heads/main'", block)
+            self.assertIn("inputs.ref == github.sha", block)
+            self.assertIn("github.event_name == 'push' || github.event_name == 'workflow_dispatch'", block)
+            self.assertRegex(block, r"path: \.native-(?:model-cache|psutil-wheels)\n")
 
 
 class ModelFixtureTests(unittest.TestCase):

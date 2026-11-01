@@ -1555,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "respire"
-version = "1.0.16"
+version = "1.0.19"
 dependencies = [
  "anyhow",
  "axum",
@@ -1571,6 +1571,7 @@ dependencies = [
  "ratatui",
  "respire_app",
  "respire_spawn",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha1",
@@ -1600,6 +1601,7 @@ dependencies = [
  "respire_core_sdk",
  "respire_crypto",
  "respire_protocol",
+ "respire_spawn",
  "respire_storage",
  "rpassword",
  "rusqlite",
@@ -1619,6 +1621,7 @@ version = "2.0.0-dev.3"
 dependencies = [
  "anyhow",
  "base64",
+ "chrono",
  "dirs",
  "hex",
  "libloading",
@@ -1650,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "respire_protocol"
-version = "2.0.0-dev.1"
+version = "2.0.0-dev.2"
 dependencies = [
  "anyhow",
  "serde",

@@ -25,6 +25,8 @@ On PowerShell, set `$env:RSRS_CORE_SDK_DIR`. Include the staged runtime librarie
 
 ## Usage
 
+Desktop integrations can use the bounded [host account RPC](docs/host-rpc.md) for password registration, login/TOTP, recovery and super-password reset without placing credentials in process arguments.
+
 ```sh
 rsrs doctor
 rsrs help
@@ -48,7 +50,7 @@ Use `rsrs login --oauth` for browser authorization, or `rsrs login --interactive
 
 Login selects a nonempty `--addr`, then the selected account's nonempty `session.json` address, then `https://api.rsrs.rs`. `RSRS_ADDR` and `client.json` do not override this choice. OAuth and password login both require HTTPS; HTTP is allowed only for loopback fixtures. If a legacy stored address is rejected, select your server's HTTPS origin explicitly. For the official service, use `rsrs login --oauth --addr https://api.rsrs.rs`. Custom OAuth servers require a dashboard origin (`--dashboard <https-origin>` for noninteractive login). An invalid dashboard is reported separately from an invalid login server; rejected addresses are never automatically upgraded or echoed in the diagnostic.
 
-For DEV acceptance, use `rsrs login --addr https://api.dev.rsrs.rs --oauth`. GitHub binding and unbinding are in the dashboard security page. Unbinding preserves the session; a GitHub-only account needs another login password before it can unlink GitHub. Production activation is separate from DEV delivery.
+For DEV acceptance, use `rsrs login --addr https://api-dev.rsrs.rs --oauth`. GitHub binding and unbinding are in the dashboard security page. Unbinding preserves the session; a GitHub-only account needs another login password before it can unlink GitHub. Production activation is separate from DEV delivery.
 
 Startup preserves the selected account and does not import old profiles automatically. Use the TUI's Migrate old version action or `rsrs migrate` to choose a source and target account. Migration preserves encrypted data, settings and available credentials, keeps original directories intact and does not overwrite an existing account. Missing decryption credentials require the original recovery material.
 
@@ -62,6 +64,7 @@ Startup preserves the selected account and does not import old profiles automati
 | [Inference](docs/inference.md) | Model installation and engines |
 | [Retrieval](docs/retrieval.md) | Retrieval modes and index migration |
 | [npm launcher](npm/README.md) | Package layout and platform selection |
+| [Platform support](docs/platform-support.md) | Release targets, requirements and blocked architectures |
 | [WorkBuddy connector](connectors/workbuddy/README.md) | Tool integration |
 | [Command checks](docs/command-regression.md) | Existing validation commands |
 
@@ -89,6 +92,11 @@ Icons are copied from each plugin repository into `docs/plugins/icons/`. Kimi Co
 | | Client | Scope | Repository |
 | --- | --- | --- | --- |
 | <img src="docs/plugins/icons/client2.png" width="28" height="28" alt="Respire Client 2"> | Respire Client 2 | Wails v3 + Go desktop client for Windows, macOS and Linux. Native tray, runtime health, memory tree, recall, diary, model and index tasks, accounts and synchronization over loopback RPC. It downloads and manages its own `rsrs` CLI. [Releases](https://github.com/risense-ai/respire-client2/releases) | [risense-ai/respire-client2](https://github.com/risense-ai/respire-client2) |
+
+## Release
+
+DEV and stable releases run automatically after pushing `vX.Y.Z-dev.N` or
+`vX.Y.Z` tags. See [release workflow](docs/releasing.md) for gates and timing.
 
 ## Test
 

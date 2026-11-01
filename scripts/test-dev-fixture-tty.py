@@ -24,6 +24,15 @@ def fixture_env(root):
     return env
 
 
+def descendant_exited(status):
+    """Read once: reaping can remove /proc status between exists() and open()."""
+    try:
+        state = status.read_text()
+    except FileNotFoundError:
+        return True
+    return "State:\tZ" in state
+
+
 @unittest.skipUnless(sys.platform.startswith("linux"), "Linux fixture driver")
 class HiddenInputTests(unittest.TestCase):
     def run_fixture(self, source, prompts, timeout=3):
@@ -143,6 +152,17 @@ print(json.dumps({"status": "ok"}))
 
     def test_timeout_kills_descendants_holding_output_pipes(self):
         """A sleeping descendant cannot keep the driver or its output pipes alive."""
+        def disappeared():
+            raise FileNotFoundError("synthetic reaped descendant")
+
+        def denied():
+            raise PermissionError("synthetic inaccessible status")
+
+        self.assertTrue(descendant_exited(SimpleNamespace(read_text=disappeared)))
+        self.assertTrue(descendant_exited(SimpleNamespace(read_text=lambda: "State:\tZ (zombie)\n")))
+        self.assertFalse(descendant_exited(SimpleNamespace(read_text=lambda: "State:\tS (sleeping)\n")))
+        with self.assertRaises(PermissionError):
+            descendant_exited(SimpleNamespace(read_text=denied))
         with tempfile.TemporaryDirectory() as root:
             script = Path(root) / "fixture.py"
             script.write_text("import subprocess,sys,time\nchild=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'])\nopen('child','w').write(str(child.pid))\ntime.sleep(30)")
@@ -151,7 +171,7 @@ print(json.dumps({"status": "ok"}))
                     env=fixture_env(root), timeout=0.3)
             status = Path("/proc", (Path(root) / "child").read_text(), "status")
             for _ in range(50):
-                if not status.exists() or "State:\tZ" in status.read_text():
+                if descendant_exited(status):
                     break
                 time.sleep(0.01)
             else:

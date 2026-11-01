@@ -16,7 +16,34 @@ impl std::fmt::Display for SyncVersionNotFound {
 
 impl std::error::Error for SyncVersionNotFound {}
 
+#[cfg(test)]
+#[path = "sync_diary_tests.rs"]
+mod diary_tests;
+
 impl LocalStore {
+    /// A transport conflict receipt is not permission to discard a confirmed
+    /// diary working copy. Keep distinct live diary branches visible until an
+    /// explicit resolution; the canonical head and conflict bytes remain intact.
+    pub(super) fn protects_diary_working_copy(&self, incoming: &StoredMemory) -> Result<bool> {
+        if incoming.deleted || incoming.local_importance != "trivial" {
+            return Ok(false);
+        }
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM memories m WHERE m.id=?1 AND m.deleted=0 AND m.importance='trivial'
+            AND (m.ciphertext<>?2 OR m.nonce<>?3 OR m.updated_at<>?4)
+            AND (EXISTS(SELECT 1 FROM sync_outbox o WHERE o.id=m.id AND o.state='conflict_saved'
+                AND o.ciphertext=m.ciphertext AND o.nonce=m.nonce AND o.updated_at=m.updated_at AND o.deleted=m.deleted
+                AND NOT EXISTS(SELECT 1 FROM sync_inbox i JOIN sync_resolutions r ON r.epoch=i.epoch AND r.conflict_rev=i.rev
+                    WHERE i.epoch=(SELECT value FROM meta WHERE key='sync_v2_epoch') AND i.op_id=o.op_id))
+            OR EXISTS(SELECT 1 FROM sync_inbox i WHERE i.epoch=(SELECT value FROM meta WHERE key='sync_v2_epoch')
+                AND i.id=m.id AND i.status IN ('conflict_saved','legacy_rejected') AND json_valid(i.wire)
+                AND json_extract(i.wire,'$.ciphertext')=m.ciphertext AND json_extract(i.wire,'$.nonce')=m.nonce
+                AND json_extract(i.wire,'$.updated_at')=m.updated_at AND json_extract(i.wire,'$.deleted')=m.deleted
+                AND NOT EXISTS(SELECT 1 FROM sync_resolutions r WHERE r.epoch=i.epoch AND r.conflict_rev=i.rev))))",
+            params![incoming.id, incoming.ciphertext, incoming.nonce, incoming.updated_at], |r| r.get(0),
+        )?)
+    }
+
     /// Read a bounded immutable batch; the same op_id always carries the same bytes.
     pub fn outgoing(&self) -> Result<Vec<Operation>> {
         self.outgoing_through(i64::MAX)
@@ -41,6 +68,7 @@ impl LocalStore {
                 ))?;
             }
         }
+        self.connection.execute_batch(include_str!("sync_revision_schema.sql"))?;
         self.connection.execute(
             "UPDATE sync_remote_heads AS h SET (wire,op_id,decode_error)=(
                 SELECT i.wire,i.op_id,i.decode_error FROM sync_inbox i
@@ -302,7 +330,7 @@ impl LocalStore {
                     [&b.id],
                     |r| r.get(0),
                 )?;
-                if !pending && error.is_empty() {
+                if !pending && error.is_empty() && !self.protects_diary_working_copy(&b)? {
                     self.put_inner_policy(&b, false, true)?;
                     self.connection.execute("INSERT INTO sync_base(id,rev) VALUES (?1,?2) ON CONFLICT(id) DO UPDATE SET rev=excluded.rev",params![b.id,change.rev])?;
                 }
@@ -371,6 +399,9 @@ impl LocalStore {
                 if !(b.deleted && b.ciphertext.is_empty()) {
                     hydrate_local(keys, &mut b)?;
                 }
+                if self.protects_diary_working_copy(&b)? {
+                    continue;
+                }
                 self.put_inner_policy(&b, false, true)?;
             }
             self.connection.execute("INSERT INTO sync_base(id,rev) VALUES (?1,?2) ON CONFLICT(id) DO UPDATE SET rev=excluded.rev",params![b.id,rev])?;
@@ -406,6 +437,15 @@ impl LocalStore {
     pub fn reset_sync_snapshot(&self) -> Result<()> {
         let tx = self.connection.unchecked_transaction()?;
         self.requeue_pending()?;
+        // A reset invalidates unconfirmed recovery decisions even when their
+        // content was already acknowledged. Keep operation/history and intent
+        // identities, but never resend or reuse their old resolution binding.
+        self.connection.execute(
+            "DELETE FROM sync_resolution_outbox AS r WHERE EXISTS(
+                SELECT 1 FROM sync_recovery_intents i WHERE i.epoch=r.epoch
+                AND i.conflict_rev=r.conflict_rev AND i.op_id=r.restore_op_id)",
+            [],
+        )?;
         // A server backup can replace current content; keep one recovery snapshot, not its edit history.
         self.connection.execute(
             "INSERT INTO sync_inbox(epoch,rev,id,status,op_id,wire,decode_error)
@@ -829,7 +869,9 @@ mod tests {
             serde_json::to_string(&reopened.outgoing()?)?,
             expected_pending
         );
-        assert_eq!(reopened.meta_get("memory_revision_v1")?, expected_revision);
+        // Backfilling the newly available remote wire changes review CAS inputs.
+        let upgraded_revision = reopened.memory_revision()?;
+        assert_ne!(Some(&upgraded_revision), expected_revision.as_ref());
         assert_eq!(reopened.sync_counts()?, (1, 1, 1));
         assert_eq!(reopened.conflict_metrics()?, (2, 1, 0, 0));
         assert_eq!(reopened.meta_get("sync_v2_cursor")?.as_deref(), Some("1"));
@@ -853,7 +895,7 @@ mod tests {
             serde_json::to_string(&reopened.outgoing()?)?,
             expected_pending
         );
-        assert_eq!(reopened.meta_get("memory_revision_v1")?, expected_revision);
+        assert_eq!(reopened.memory_revision()?, upgraded_revision);
         Ok(())
     }
 

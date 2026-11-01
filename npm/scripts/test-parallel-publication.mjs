@@ -1,10 +1,11 @@
-// Offline only: no real registry, accounts, models, or npm subprocesses.
+// Offline only: no real registry, accounts, models, or npm publication.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {spawn} from 'node:child_process';
 import {publishScopedPackages} from './parallel-publication.mjs';
 import {publishPackage} from './registry-publication.mjs';
 
@@ -127,4 +128,100 @@ test('configured propagation options reach every platform and umbrella publisher
     },
   });
   assert.deepEqual(calls, batch.map(r => r.name));
+});
+
+test('default npm children overlap, retain tarballs until close, and drain failure before cleanup', {timeout:60000}, async t => {
+  for(const fail of [false,true]) {
+    const root=mkdtempSync(path.join(tmpdir(),'rsrs-npm-children-'));
+    const bin=path.join(root,'bin');mkdirSync(bin);
+    const names=Array.from({length:7},(_,i)=>`@rsrsai/platform-${i}`).concat(umbrella);
+    const id=name=>name.replace(/\W/g,'_');
+    const version='1.0.12-dev.7';
+    for(const name of names) {
+      const dir=path.join(root,id(name));mkdirSync(dir);
+      writeFileSync(path.join(dir,'package.json'),JSON.stringify({name,version}));
+    }
+    // The default helper resolves only these local fake npm executables in a separate Node process.
+    writeFileSync(path.join(bin,'npm.cjs'),String.raw`
+      const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),crypto=require('node:crypto');
+      const args=process.argv.slice(2),root=process.env.FIXTURE_ROOT,id=name=>name.replace(/\W/g,'_');
+      if(args[0]==='pack') {
+        const pkg=JSON.parse(fs.readFileSync('package.json','utf8')),bytes=Buffer.from(pkg.name),filename='package.tgz';
+        fs.writeFileSync(path.join(args[args.indexOf('--pack-destination')+1],filename),bytes);
+        console.log(JSON.stringify([{...pkg,filename,integrity:'sha512-'+crypto.createHash('sha512').update(bytes).digest('base64'),shasum:crypto.createHash('sha1').update(bytes).digest('hex')}]));
+      } else {
+        assert.equal(args[0],'publish');const tarball=args[1],name=fs.readFileSync(tarball,'utf8'),key=id(name);
+        assert(fs.existsSync(path.join(root,'intent-'+key)),'submission intent must precede child startup');
+        if(name==='@rsrsai/cli')for(let i=0;i<7;i++)assert(fs.existsSync(path.join(root,'finished-'+id('@rsrsai/platform-'+i))),'umbrella started before platform completion');
+        fs.writeFileSync(path.join(root,'started-'+key),JSON.stringify({tarball,pid:process.pid}));
+        const timer=setInterval(()=>{
+          if(!fs.existsSync(path.join(root,'release-all'))&&!fs.existsSync(path.join(root,'release-'+key)))return;
+          clearInterval(timer);assert.equal(fs.readFileSync(tarball,'utf8'),name,'tarball removed while child was running');
+          fs.writeFileSync(path.join(root,'finished-'+key),'done');
+          process.exit(process.env.FAIL_FIRST==='true'&&name==='@rsrsai/platform-0'?1:0);
+        },10);
+      }
+    `);
+    writeFileSync(path.join(bin,'npm.cmd'),'@"'+process.execPath+'" "%~dp0npm.cjs" %*\r\n');
+    writeFileSync(path.join(bin,'npm'),'#!/bin/sh\nexec "'+process.execPath+'" "'+path.join(bin,'npm.cjs')+'" "$@"\n',{mode:0o755});
+    const harness=String.raw`
+      import assert from 'node:assert/strict';
+      import fs from 'node:fs';import path from 'node:path';import {createHash} from 'node:crypto';
+      const {acceptScopedPackages}=await import(process.env.PUBLICATION_MODULE);
+      const names=JSON.parse(process.env.PACKAGE_NAMES),root=process.env.FIXTURE_ROOT,id=name=>name.replace(/\W/g,'_');
+      const packs=names.map(name=>({name,version:'1.0.12-dev.7',dir:path.join(root,id(name)),filename:'package.tgz',integrity:'sha512-'+createHash('sha512').update(name).digest('base64'),shasum:createHash('sha1').update(name).digest('hex')}));
+      let clock=0;
+      try {
+        const result=await acceptScopedPackages(packs,'@rsrsai/cli','dev',{
+          timeoutMs:30,pollMs:10,now:()=>clock,sleep:async ms=>{clock+=ms;},
+          fetchImpl:async url=>url.includes('/dist-tags')?new Response('{}'):new Response('',{status:404}),
+          onSubmission:event=>{assert.equal(event.state,'unknown');fs.writeFileSync(path.join(root,'intent-'+id(event.package.name)),'unknown');},
+        });
+        assert.equal(process.env.FAIL_FIRST,'false');
+        assert(result.every(p=>p.acceptance.evidence==='npm-exit-zero'));
+      } catch(error) {
+        if(process.env.FAIL_FIRST!=='true')throw error;
+        assert(error instanceof AggregateError);assert.match(error.errors[0].message,/failed or was uncertain/);
+      }
+      fs.writeFileSync(path.join(root,'settled'),'done');
+    `;
+    let output='';
+    const child=spawn(process.execPath,['--input-type=module','-e',harness],{env:{...process.env,
+      PATH:bin+path.delimiter+process.env.PATH,FIXTURE_ROOT:root,FAIL_FIRST:String(fail),PACKAGE_NAMES:JSON.stringify(names),
+      PUBLICATION_MODULE:new URL('./parallel-publication.mjs',import.meta.url).href},stdio:['ignore','pipe','pipe']});
+    child.stdout.on('data',chunk=>{output+=chunk;});child.stderr.on('data',chunk=>{output+=chunk;});
+    const closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',code=>resolve(code));});
+    const wait=async predicate=>{
+      const deadline=Date.now()+10000;
+      while(!predicate()) {
+        assert(Date.now()<deadline,'child barrier timed out: '+output);
+        assert.equal(child.exitCode,null,'harness exited before barrier: '+output);
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+    };
+    try {
+      const started=()=>readdirSync(root).filter(name=>name.startsWith('started-'));
+      await wait(()=>started().length===4);
+      assert.equal(readdirSync(root).filter(name=>name.startsWith('finished-')).length,0,'four real npm children must overlap');
+      if(fail) {
+        writeFileSync(path.join(root,'release-'+id(names[0])),'go');
+        await wait(()=>existsSync(path.join(root,'finished-'+id(names[0]))));
+        await new Promise(resolve=>setTimeout(resolve,100));
+        assert(!existsSync(path.join(root,'settled')),'failure must drain blocked siblings');
+        assert.equal(started().length,4,'failure must not start queued packages or umbrella');
+      }
+      for(const file of started().filter(file=>!existsSync(path.join(root,file.replace('started-','finished-'))))) {
+        assert(existsSync(JSON.parse(readFileSync(path.join(root,file),'utf8')).tarball));
+      }
+      writeFileSync(path.join(root,'release-all'),'go');
+      assert.equal(await closed,0,output);
+      assert(existsSync(path.join(root,'settled')));
+      assert.equal(started().length,fail?4:8);
+      for(const file of started())assert(!existsSync(JSON.parse(readFileSync(path.join(root,file),'utf8')).tarball),'cleanup follows child close');
+    } finally {
+      writeFileSync(path.join(root,'release-all'),'go');
+      await closed;
+      rmSync(root,{recursive:true,force:true});
+    }
+  }
 });

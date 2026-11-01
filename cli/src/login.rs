@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, ensure, Context, Result};
 use serde_json::{json, Value};
 
-fn origin(value: &str) -> Result<String> {
+pub(crate) fn origin(value: &str) -> Result<String> {
     let url = url::Url::parse(value).context("login server must be an absolute origin")?;
     let local = matches!(url.host(), Some(url::Host::Domain("localhost")))
         || matches!(url.host(), Some(url::Host::Ipv4(address)) if address.is_loopback())
@@ -32,7 +32,7 @@ fn browser_authorization(addr: &str, user: Option<&str>, dashboard: Option<&str>
     let dashboard = match dashboard {
         Some(value) => origin(value).context("invalid OAuth dashboard from --dashboard; supply an HTTPS origin")?,
         None if addr == "https://api.rsrs.rs" => "https://dash.rsrs.rs".to_owned(),
-        None if addr == "https://api.dev.rsrs.rs" => "https://dash.dev.rsrs.rs".to_owned(),
+        None if addr == "https://api.dev.rsrs.rs" || addr == "https://api-dev.rsrs.rs" => "https://dash.dev.rsrs.rs".to_owned(),
         None if respire::prompt::interactive() => origin(&respire::prompt::ask("dashboard origin: ")?).context("invalid OAuth dashboard from terminal input; supply an HTTPS origin")?,
         None => anyhow::bail!("custom login servers require --dashboard <dashboard-origin>"),
     };
@@ -99,7 +99,7 @@ pub(crate) fn run(addr: Option<&str>, user: Option<&str>, pass: Option<&str>, su
             None if respire::prompt::interactive() => respire::prompt::ask_secret("login password: ")?,
             None => anyhow::bail!("interactive login requires a terminal or --pass"),
         };
-        respire::auth::password_authorization(&addr, user.trim(), &password)?
+        respire::auth::password_authorization_with_totp(&addr, user.trim(), &password,crate::host_rpc::totp_code().as_deref())?
     } else { browser_authorization(&addr, user, dashboard, no_open)? };
     let vault = respire_app::login_transaction::PreparedLogin::fetch_vault(&addr, &authorization)?;
     ensure!(!vault.is_null(), "account has no cloud vault; explicitly migrate the original local library before login");

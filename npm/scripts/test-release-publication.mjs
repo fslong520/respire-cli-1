@@ -7,7 +7,7 @@ import path from 'node:path';
 import {promisify} from 'node:util';
 import {createHash} from 'node:crypto';
 import {execFile, execFileSync} from 'node:child_process';
-import {waitForPublicInstall, publicInstallArgs, PUBLICATION_MAX_BUFFER, publicationCommand, scopedPublisherFinished, selectRelease, validateArtifact, assertTagCommit, assertDraft, assertSourceRun, validateAlias, validateScoped, validateSource, readyName, aliasName} from './release-publication.mjs';
+import {waitForPublicInstall, publicInstallArgs, publicInstallPlatform, PUBLICATION_MAX_BUFFER, publicationCommand, scopedPublisherFinished, selectRelease, validateArtifact, assertTagCommit, assertDraft, assertSourceRun, validateAlias, validateScoped, validateSource, readyName, aliasName} from './release-publication.mjs';
 
 const m = JSON.parse(readFileSync(new URL('../artifact-manifest.json', import.meta.url)));
 const integrity = 'sha512-' + createHash('sha512').update('synthetic package').digest('base64');
@@ -134,7 +134,8 @@ test('workflow contract keeps trust identities, unprivileged waiting and acyclic
   const child = readFileSync(new URL('.github/workflows/npm-alias.yml', root), 'utf8').replace(/\r\n/g, '\n');
   const parent = readFileSync(new URL('.github/workflows/release.yml', root), 'utf8').replace(/\r\n/g, '\n');
   const helper = readFileSync(new URL('npm/scripts/release-publication.mjs', root), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(child, /types: \[in_progress\]/);
+  assert.doesNotMatch(child, /workflow_run:/);
+  assert.match(child, /release_attempt:/);
   assert.doesNotMatch(child.slice(0, child.indexOf('jobs:')), /concurrency:/);
   const waiting = child.split('  await-scoped:')[1].split('  publish-integrated:')[0];
   assert.doesNotMatch(waiting, /concurrency:|id-token:/);
@@ -144,18 +145,48 @@ test('workflow contract keeps trust identities, unprivileged waiting and acyclic
   assert.match(publishing, /group: npm-rsrs-cli-publication\n      queue: max\n      cancel-in-progress: false/);
   assert.match(publishing, /contents: read\n      actions: read\n      id-token: write/);
   assert.doesNotMatch(publishing, /contents: write|actions: write|workflow_call/);
+  assert.match(waiting, /Read this Release attempt scoped publication receipt once/);
+  assert.doesNotMatch(waiting, /concurrency:|id-token:/);
   assert.match(child.split('\n  publish:')[1], /if: github.event_name == 'workflow_dispatch'/);
   const final = parent.split('\n  publish:')[1];
-  const indices = ['--publish --tag', 'scoped-ready', 'name: scoped-ready-', 'await-alias', 'release-publication.mjs finalize'].map(s => final.indexOf(s));
+  const indices = ['--publish --accepted-only --tag', 'scoped-accepted', 'name: scoped-accepted-', 'gh workflow run npm-alias.yml', 'await-alias-accepted', 'release-publication.mjs finalize-accepted'].map(s => final.indexOf(s));
   assert(indices.every(i => i >= 0));
   assert.deepEqual(indices, [...indices].sort((a,b) => a-b));
   assert.equal((helper.match(/'--draft=false'/g) || []).length, 1);
-  assert(final.indexOf('release-publication.mjs protocol') < final.indexOf('--publish --tag'));
-  assert.match(parent, /- 'npm\/scripts\/pack\.mjs'/);
+  assert(final.indexOf('release-publication.mjs protocol') < final.indexOf('--publish --accepted-only --tag'));
+  assert.match(parent, /tags: \['v\*'\]/);
   assert.match(final, /group: cli-release-publication\n      queue: max\n      cancel-in-progress: false/);
-  for (const name of ['Verify scoped registry propagation', 'Require the matching short-package', 'Make the complete release public']) {
+  assert.match(final, /contents: write\n      actions: write\n      id-token: write/);
+  const resolver=helper.split('async function awaitScoped()')[1].split('// Retry only')[0];
+  assert.doesNotMatch(resolver,/while\s*\(|sleep\(|deadline/);
+  assert.match(resolver,/Exact scoped receipt missing/);
+  for (const name of ['Bind successful scoped npm submissions', 'Require every matching npm submission', 'Make the complete release public']) {
     assert.match(final.slice(final.indexOf(`- name: ${name}`)).split('\n      - ')[0], /!\(inputs.repair_dev12 \|\| inputs.repair_dev14\)/);
   }
+});
+
+test('same-run scoped tarball reuse is explicit current-main only; historical, prepared and repair paths keep packing',()=>{
+  const workflow=readFileSync(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
+  const publisher=workflow.split('\n  publish:')[1];
+  const expression=publisher.match(/^      REUSE_VALIDATED_PACKS: \$\{\{ (.+) \}\}$/m)?.[1];
+  assert(expression,'reuse must be selected from the workflow trust context');
+  const repository=expression.match(/github.repository == '([^']+)'/)?.[1];assert(repository);
+  const selected=new Function('github','needs','inputs',`return (${expression});`);
+  for(const owner of [repository,'fork/repo']) for(const event of ['workflow_dispatch','push']) for(const ref of ['refs/heads/main','refs/heads/feature'])
+    for(const exact of [true,false]) for(const prepared of ['', '100']) for(const repair12 of [false,true])
+    for(const repair14 of [false,true]) for(const reuse of [false,true]) {
+      const github={repository:owner,event_name:event,ref,sha:'a'.repeat(40)},needs={plan:{outputs:{sha:(exact?'a':'b').repeat(40)}}};
+      const inputs={prepared_run:prepared,repair_dev12:repair12,repair_dev14:repair14,reuse_dev12_validation:reuse};
+      assert.equal(selected(github,needs,inputs),owner===repository&&event==='workflow_dispatch'&&ref==='refs/heads/main'&&exact&&!prepared&&!repair12&&!repair14&&!reuse);
+    }
+  const verify=publisher.split('- name: Verify release artifacts and prepare every scoped npm package')[1].split('\n      - ')[0];
+  assert.match(verify,/CLI_SHA: \$\{\{ needs.plan.outputs.sha \}\}/);
+  assert.match(verify,/if \[ "\$REUSE_VALIDATED_PACKS" = true \]; then\n\s+node npm\/scripts\/verify-packages.mjs release-assets --reuse-packs "\$RUNNER_TEMP\/validated-npm" --download\n\s+else\n\s+node npm\/scripts\/verify-packages.mjs release-assets\n\s+fi/);
+  const publish=publisher.split('- name: Publish npm using Trusted Publishing')[1].split('\n      - ')[0];
+  assert.match(publish,/if \[ "\$REUSE_VALIDATED_PACKS" = true \]; then/);
+  assert.match(publish,/--publish --accepted-only --verified-packs "\$RUNNER_TEMP\/validated-npm" --tag/);
+  assert.match(publish,/else\n\s+node npm\/scripts\/pack.mjs --root target\/ci --publish --accepted-only --tag/);
+  assert.match(publisher,/if: inputs.prepared_run != ''\n\s+run: node npm\/scripts\/verify-packages.mjs release-assets --pack npm\/release-packages/);
 });
 test('two overlapping Releases progress without waiting while holding the opposite alias lock', () => {
   // Model the actual lock graph asserted above. B's early ready wait has no lock.
@@ -173,6 +204,8 @@ test('two overlapping Releases progress without waiting while holding the opposi
 test('existing lightweight or resolved annotated tag must identify the release source', () => {
   assertTagCommit(null, source);
   assertTagCommit({type: 'commit', sha: source.sha}, source);
+  assert.throws(() => assertTagCommit(null, source, {allowMissing: false}));
+  assertTagCommit({type: 'commit', sha: source.sha}, source, {allowMissing: false});
   assert.throws(() => assertTagCommit({type: 'commit', sha: 'f'.repeat(40)}, source));
   assert.throws(() => assertTagCommit({type: 'tag', sha: source.sha}, source));
 });
@@ -200,7 +233,11 @@ test('all Actions uploads, including both handshake receipts, retain evidence fo
       uploads++;
     }
   }
-  assert.equal(uploads, 29, 'preserve existing uploads, both handshake receipts and both strict recovery evidence uploads');
+  // The release dependency cache adds one upload declaration to the existing evidence inventory.
+  assert.equal(uploads, 49, 'preserve active evidence, registered consumer, verified platform copies, import proof and release dependency cache');
+  const crates = readFileSync(new URL('publish-crates.yml', root), 'utf8');
+  assert.match(crates, /name: protocol-package-verification/);
+  assert.doesNotMatch(crates, /name: sdk-package-verification/);
 });
 
 test('draft release is resolved from every list page with exactly one matching tag', () => {
@@ -236,8 +273,9 @@ test('alias job and parent receipt budgets cover both propagation waits and clea
   assert(scoped >= 30);
   assert(job > scoped + alias + install, 'Job must leave room for setup and packaging');
   assert(receipt > job, 'Receipt observer must outlive the publisher');
-  const observers = [...parent.matchAll(/timeout-minutes: (\d+)\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: node npm\/scripts\/release-publication\.mjs await-alias/g)];
-  assert.equal(observers.length, 2);
+  const legacyParent = parent.slice(parent.indexOf('  dev6-publication-resume:'));
+  const observers = [...legacyParent.matchAll(/timeout-minutes: (\d+)\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: node npm\/scripts\/release-publication\.mjs await-alias/g)];
+  assert.equal(observers.length, 1);
   assert(observers.every(match => Number(match[1]) > receipt));
   const recovery = minutes(parent.split('\n  dev6-publication-resume:')[1], /timeout-minutes: (\d+)/);
   const revalidation = minutes(helper, /options\.timeoutMs \?\? (\d+) \* 60 \* 1000/);
@@ -356,4 +394,15 @@ test('actual npm resolver recovers from an offline registry index delay with a f
   assert.equal(attempts, 2);
   assert(indexRequests >= 2, 'The retry must fetch the registry again rather than reuse stale cache');
   assert.equal(JSON.parse(readFileSync(path.join(root, 'install/node_modules/rsrs-cli/package.json'))).version, version);
+});
+
+
+test('public installation selects explicit libc and requires actual matching host architecture',()=>{
+  assert.equal(publicInstallPlatform('linux-x64-gnu',{platform:'linux',arch:'x64'}).libc,'glibc');
+  for(const [platform,libc] of [['linux-arm64','musl'],['linux-arm64-gnu','glibc']]){
+    assert.deepEqual(publicInstallPlatform(platform,{platform:'linux',arch:'arm64'}),{arch:'arm64',libc,pkg:'@rsrsai/'+platform,platform});
+    assert.throws(()=>publicInstallPlatform(platform,{platform:'linux',arch:'x64'}));
+    assert.throws(()=>publicInstallPlatform(platform,{platform:'darwin',arch:'arm64'}));
+  }
+  assert.throws(()=>publicInstallPlatform('foreign',{platform:'linux',arch:'arm64'}));
 });

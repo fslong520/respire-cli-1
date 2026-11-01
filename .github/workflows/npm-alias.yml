@@ -12,26 +12,29 @@ on:
         type: string
         required: true
         default: ''
-  workflow_run:
-    workflows: [Release]
-    types: [in_progress]
+      release_attempt:
+        description: 'Exact active Release attempt; provided only after its scoped receipt is uploaded'
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
-  # Waiting never holds the alias lock: another Release may hold the scoped
-  # publication lock while waiting for its own alias. Locking here deadlocks A/B.
+  # Release dispatches this only after uploading the exact scoped receipt.
   await-scoped:
-    if: github.event_name == 'workflow_run'
+    if: inputs.release_attempt != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 245
+    timeout-minutes: 5
     permissions:
       contents: read
       actions: read
     outputs:
       eligible: ${{ steps.ready.outputs.eligible }}
       sha: ${{ steps.ready.outputs.sha }}
+      protocol: ${{ steps.ready.outputs.protocol }}
+      artifact: ${{ steps.ready.outputs.artifact }}
+      file: ${{ steps.ready.outputs.file }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -41,19 +44,20 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
-      - name: Wait for this Release attempt to verify all scoped packages
+      - name: Read this Release attempt scoped publication receipt once
         id: ready
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN: ${{ github.event.workflow_run.id }}
-          SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_RUN: ${{ inputs.release_run }}
+          SOURCE_ATTEMPT: ${{ inputs.release_attempt }}
         run: node npm/scripts/release-publication.mjs await-scoped
 
   publish-integrated:
     needs: await-scoped
     if: needs.await-scoped.outputs.eligible == 'true'
     runs-on: ubuntu-latest
-    # 30m scoped index + 30m alias propagation + 10m clean install + setup.
+    # Legacy protocol retains its propagation/install budget. Protocol 2 only
+    # submits npm here; independent read-only verification holds no write lock.
     timeout-minutes: 75
     concurrency:
       group: npm-rsrs-cli-publication
@@ -77,27 +81,34 @@ jobs:
       - run: npm install -g npm@12.2.0
       - uses: actions/download-artifact@v4
         with:
-          name: scoped-ready-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
-          run-id: ${{ github.event.workflow_run.id }}
+          name: ${{ needs.await-scoped.outputs.artifact }}
+          run-id: ${{ inputs.release_run }}
           github-token: ${{ github.token }}
       - run: node npm/scripts/test-wrapper.mjs
-      - name: Publish and clean-install the matching short entry
+      - name: Publish the matching short entry (legacy also verifies installation)
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN: ${{ github.event.workflow_run.id }}
-          SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-        run: node npm/scripts/release-publication.mjs publish-alias
+          SOURCE_RUN: ${{ inputs.release_run }}
+          SOURCE_ATTEMPT: ${{ inputs.release_attempt }}
+        run: node npm/scripts/release-publication.mjs ${{ needs.await-scoped.outputs.protocol == '2' && 'publish-alias-accepted' || 'publish-alias' }}
+      - uses: actions/upload-artifact@v4
+        if: always() && needs.await-scoped.outputs.protocol == '2'
+        with:
+          retention-days: 1
+          name: alias-submissions-${{ inputs.release_run }}-${{ inputs.release_attempt }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: alias-submissions.json
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           retention-days: 1
-          name: alias-ready-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: alias-ready.json
+          name: ${{ needs.await-scoped.outputs.protocol == '2' && 'alias-accepted' || 'alias-ready' }}-${{ inputs.release_run }}-${{ inputs.release_attempt }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ needs.await-scoped.outputs.protocol == '2' && 'alias-accepted.json' || 'alias-ready.json' }}
           if-no-files-found: error
 
   # Explicit recovery for already-public historical releases only. Automatic
   # releases use the draft-aware barrier above, never this completed-run path.
   publish:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.release_attempt == ''
     concurrency:
       group: npm-rsrs-cli-publication
       queue: max
@@ -157,7 +168,7 @@ jobs:
                 (process.env.GITHUB_EVENT_NAME === 'workflow_run' && run.status !== 'completed')) {
               throw new Error('Expected a Release run from this repository; automatic runs must be completed');
             }
-            const jobs = api(`repos/${repo}/actions/runs/${sourceRun}/jobs?per_page=100`).jobs;
+            const jobs = JSON.parse(execFileSync('gh', ['api','--paginate','--slurp',`repos/${repo}/actions/runs/${sourceRun}/jobs?per_page=10`], {encoding:'utf8'})).flatMap(page=>page.jobs);
             if (!['plan', 'publish'].every(name => jobs.some(job => job.name === name && job.conclusion === 'success'))) {
               if (process.env.GITHUB_EVENT_NAME !== 'workflow_run') throw new Error('Release publication did not succeed');
               appendFileSync(process.env.GITHUB_OUTPUT, 'eligible=false\n');

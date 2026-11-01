@@ -217,6 +217,8 @@ impl LocalStore {
         action: &str,
         content: Option<&str>,
     ) -> Result<()> {
+        // epoch 检查与读取 head、创建操作必须共享写锁，避免换库快照插入其间。
+        let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         if self.meta_get("sync_v2_epoch")?.as_deref() != Some(epoch) {
             bail!("sync the current epoch first; older epoch versions can be restored with sync-restore");
         }
@@ -229,15 +231,16 @@ impl LocalStore {
         if (action == "merge") != content.is_some() {
             bail!("only merge needs --content");
         }
-        // Keep the inspected state and its resolution in one reserved write transaction.
-        let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         let processed: bool = self.connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM sync_resolutions WHERE epoch=?1 AND conflict_rev=?2)",
             params![epoch, rev],
             |r| r.get(0),
         )?;
         if processed {
-            if action != "keep_current" {
+            if action != "keep_current"
+                && !(action == "take_incoming"
+                    && self.processed_conflict_action(epoch, rev)?.as_deref() == Some(action))
+            {
                 bail!("this record is already resolved and no new version was created; use update or sync-restore to change it again");
             }
             tx.commit()?;
@@ -245,6 +248,31 @@ impl LocalStore {
         }
         let wire:String=self.connection.query_row("SELECT wire FROM sync_inbox WHERE epoch=?1 AND rev=?2 AND status IN ('conflict_saved','legacy_rejected')",params![epoch,rev],|r|r.get(0))?;
         let candidate: StoredMemory = serde_json::from_str(&wire)?;
+        // 对同一候选和已审阅 head 的重试复用不可变操作。服务端拒绝后也不能
+        // 再造新 op_id，否则重复调用会不断累积 conflict_saved 历史。
+        if action == "take_incoming" {
+            let prior: Option<bool> = self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sync_resolution_outbox r
+                    JOIN sync_outbox o ON o.op_id=r.restore_op_id
+                    WHERE r.epoch=i.epoch AND r.conflict_rev=i.conflict_rev
+                    AND r.restore_op_id=i.op_id AND r.action='take_incoming'
+                    AND o.state IN ('pending','applied','conflict_saved'))
+                 FROM sync_recovery_intents i
+                 WHERE i.epoch=?1 AND i.conflict_rev=?2 AND i.head_rev=?3",
+                    params![epoch, rev, inspected_head_rev],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(queued) = prior {
+                if !queued {
+                    bail!("this recovery was already attempted or invalidated by a sync reset; refresh sync-conflicts and inspect the new head before retrying");
+                }
+                tx.commit()?;
+                return Ok(());
+            }
+        }
         let (head_rev, current) = self
             .conflict_head(epoch, &candidate.id)?
             .ok_or_else(|| anyhow::anyhow!("sync the current version first"))?;
@@ -258,8 +286,12 @@ impl LocalStore {
                 ON CONFLICT(epoch,conflict_rev) DO UPDATE SET action=excluded.action,expected_head_rev=excluded.expected_head_rev,restore_op_id=NULL",params![epoch,rev,head_rev])?;
         } else {
             let pending: bool = self.connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sync_outbox WHERE id=?1 AND state='pending')",
-                [&candidate.id],
+                "SELECT EXISTS(SELECT 1 FROM sync_outbox WHERE id=?1 AND state='pending')
+                    OR EXISTS(SELECT 1 FROM memories WHERE id=?1 AND dirty=1)
+                    OR EXISTS(SELECT 1 FROM sync_resolution_outbox r
+                        JOIN sync_outbox o ON o.op_id=r.restore_op_id WHERE r.epoch=?2 AND o.id=?1
+                        AND o.state IN ('pending','applied','conflict_saved'))",
+                params![candidate.id, epoch],
                 |r| r.get(0),
             )?;
             let base: Option<i64> = self
@@ -270,8 +302,36 @@ impl LocalStore {
                     |r| r.get(0),
                 )
                 .optional()?;
-            if pending || base != Some(head_rev) {
-                bail!("current content is not applied or still has pending local changes; finish sync first");
+            if pending {
+                bail!("current content still has pending local changes or a queued resolution; finish sync first");
+            }
+            let undecodable: bool = self.connection.query_row(
+                "SELECT decode_error<>'' FROM sync_remote_heads WHERE id=?1 AND rev=?2",
+                params![candidate.id, head_rev],
+                |r| r.get(0),
+            )?;
+            let recovery = undecodable && MemoryEngine::open(keys, &current).is_err();
+            if recovery && action != "take_incoming" {
+                bail!("current revision is undecodable; inspect a readable candidate and use take-incoming with its current head revision");
+            }
+            let mut inspected = current.clone();
+            let preserved_diary = if !recovery && !current.deleted {
+                crate::hydrate_local(keys, &mut inspected)?;
+                self.protects_diary_working_copy(&inspected)?
+            } else {
+                false
+            };
+            if base != Some(head_rev) && !recovery && !preserved_diary {
+                bail!("current content is not applied; finish sync first");
+            }
+            let mut stamp = self.edit_stamp(&candidate.id)?;
+            if (recovery || preserved_diary)
+                && !super::super::compare_timestamps(&stamp, &current.updated_at)?.is_gt()
+            {
+                // The server requires both the inspected CAS revision and a
+                // monotonic timestamp. This head was not installed in the
+                // working copy, so its local edit clock alone can be behind it.
+                stamp = super::super::timestamp_after(Some(&current.updated_at))?;
             }
             let mut selected = if action == "merge" {
                 current
@@ -279,7 +339,6 @@ impl LocalStore {
                 candidate
             };
             let deleted = selected.deleted && action == "take_incoming";
-            let stamp = self.edit_stamp(&selected.id)?;
             if selected.ciphertext.is_empty() {
                 if !deleted {
                     bail!("this version has no mergeable content");
@@ -293,6 +352,27 @@ impl LocalStore {
                 bail!("resolution version was not written");
             }
             self.track_restoration(epoch, rev, &selected.id, action)?;
+            if recovery || preserved_diary {
+                // Only the new, unexposed resolution operation may use the
+                // explicitly inspected head. The working copy's sync_base is
+                // still its last applied revision; server CAS remains required.
+                let op_id: String = self.connection.query_row(
+                    "SELECT restore_op_id FROM sync_resolution_outbox WHERE epoch=?1 AND conflict_rev=?2",
+                    params![epoch, rev], |r| r.get(0),
+                )?;
+                let changed = self.connection.execute(
+                    "UPDATE sync_outbox SET base_rev=?1 WHERE op_id=?2 AND id=?3
+                        AND state='pending' AND parent_op_id IS NULL",
+                    params![head_rev, op_id, selected.id],
+                )?;
+                anyhow::ensure!(changed == 1, "recovery operation was not queued safely");
+                if recovery || action == "take_incoming" {
+                    self.connection.execute(
+                        "INSERT INTO sync_recovery_intents(epoch,conflict_rev,head_rev,op_id) VALUES(?1,?2,?3,?4)",
+                        params![epoch, rev, head_rev, op_id],
+                    )?;
+                }
+            }
         }
         tx.commit()?;
         Ok(())
@@ -390,6 +470,7 @@ impl LocalStore {
             };
             result.push(serde_json::json!({"epoch":scope,"rev":rev,"id":id,"original_status":status,"kind":kind,"reason":reason,
                 "state":state,"resolution":processed,"queued_action":queued,"candidate":describe(&candidate),
+                "current_scope":"remote_canonical",
                 "current":head.map(|(rev,b)|serde_json::json!({"rev":rev,"value":describe(&b)}))}));
         }
         if include_processed {
@@ -659,4 +740,5 @@ mod tests {
         assert_eq!(store.sync_counts()?.1, 2);
         Ok(())
     }
+    include!("conflict_recovery_tests.rs");
 }

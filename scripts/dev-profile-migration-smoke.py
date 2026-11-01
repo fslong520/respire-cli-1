@@ -12,6 +12,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+from dev_witness_fixture import register_witness_functions, verify_fixture_witness, sqlite_failure_details
 import subprocess
 import sys
 import time
@@ -293,6 +294,7 @@ class Smoke(support.Smoke):
             self.api(account, "POST", "/api/self/vault", {
                 "version": 4, **{key: session[key] for key in ("kdf_salt", "wrapped_urk", "urk_nonce")}})
         connection = sqlite3.connect(db)
+        register_witness_functions(connection)
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA wal_autocheckpoint=0")
         connection.execute("CREATE TABLE IF NOT EXISTS migration_wal_fixture(marker TEXT PRIMARY KEY)")
@@ -320,6 +322,7 @@ class Smoke(support.Smoke):
                     "VALUES (?,?,?,?,?,0,?,?)", tombstone + (tombstone_time, tombstone_time))
                 tombstones.append(tombstone)
         connection.commit()
+        verify_fixture_witness(connection)
         require(Path(str(db) + "-wal").stat().st_size > 0, "migration_wal_fixture_empty")
         row = connection.execute("SELECT ciphertext,nonce FROM memories WHERE id=?", (memory_id,)).fetchone()
         require(row and connection.execute("SELECT COUNT(*) FROM sync_outbox WHERE state='pending'").fetchone()[0] > 0,
@@ -566,12 +569,15 @@ class Smoke(support.Smoke):
                     self.keys.track_created_login(committed, fixture["account"]["user"],
                         fixture["code"], fixture["password"])
                     self.cli(profile_env, "sync")
+                    self.report["fixture_operation"] = "post_sync_deleted_payload_erasure"
+                    self.save()
                     with sqlite3.connect((fixture["destination"] / "rsrs.db").as_uri() + "?mode=ro", uri=True) as db:
                         for tombstone in fixture["legacy_tombstones"]:
-                            row = db.execute("SELECT id,user,ciphertext,nonce,deleted FROM memories WHERE id=?", (tombstone[0],)).fetchone()
-                            require(row[:2] == tombstone[:2] and row[4] == 1
-                                and support.decrypt_content(fixture["urk"], row[2], row[3]) == fixture["payload"],
-                                "sync_changed_deleted_payload")
+                            row = db.execute("SELECT id,user,ciphertext,nonce,deleted,embedding_enc FROM memories WHERE id=?", (tombstone[0],)).fetchone()
+                            # Server 1.0.1 erases deleted payloads after sync; pre-sync re-encryption is checked above.
+                            require(row is not None and row[:2] == tombstone[:2] and row[4] == 1
+                                and row[2] == row[3] == row[5] == "",
+                                "sync_retained_deleted_payload")
                 user = fixture["account"]["user"]
                 remote = self.env("independent-" + user, user)
                 remote["RSRS_SUPER"] = fixture["code"]
@@ -582,7 +588,8 @@ class Smoke(support.Smoke):
                 self.read_entry(remote, new_id, "New-directory migration write")
                 rows = self.cli(remote, "list", "--limit", "100")
                 require("post-migration" in json.dumps(rows), "new_directory_write_not_synced")
-            self.passed("migrated_outbox_sync_and_independent_decrypt", profiles=len(fixtures))
+            self.passed("migrated_outbox_sync_and_independent_decrypt", profiles=len(fixtures),
+                deleted_payloads_erased=sum(len(f["legacy_tombstones"]) for f in fixtures))
         elif interrupt:
             self.passed("migration_interrupted_restart_recovered", real_stage_observed=True)
         elif not target:
@@ -730,6 +737,9 @@ def main():
         smoke.run()
     except Exception as error:
         smoke.report.update(status="failed", failure=str(error) if isinstance(error, RuntimeError) else type(error).__name__)
+        sqlite_failure = sqlite_failure_details(error)
+        if sqlite_failure is not None:
+            smoke.report["sqlite_failure"] = sqlite_failure
     finally:
         for connection in smoke.wal_connections:
             connection.close()

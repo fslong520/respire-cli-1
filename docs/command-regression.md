@@ -25,6 +25,7 @@ Current parser behavior and `rsrs --help` define the command contract.
 | Isolated data | `RSRS_DATA_DIR=<path>` |
 | Split | `split <ID>` preview; `split <ID> --go --spec <JSON>` apply |
 | Tree maintenance | `tree-cure` report; explicit `--id` and `--parent` apply |
+| Procedures | `run-log <ID> --status ok|fail|confounded|no_effect` (skill/knowledge only; other kinds return `status: skip`); `recall --intent auto|howto|fact` |
 
 Plugins use the platform shell and do not inherit account-key variables. Explicit and
 background sync share one persistent outbox. Foreground mutations wait for local
@@ -46,7 +47,7 @@ must describe version, mode, sample and network conditions.
 Runtime checks must not bypass sandbox confinement. Release sweeps must not use real
 user libraries or the production server.
 
-Release smoke uses only `https://api.dev.rsrs.rs`. The manual `Dev server sweep` requires
+Release smoke uses only `https://api-dev.rsrs.rs`. The manual `Dev server sweep` requires
 the original successful build run and its exact source SHA; it never selects a
 floating npm version. Reports contain no session files, credentials or raw payloads.
 

@@ -29,6 +29,127 @@ Client-only mode forbids lifecycle changes, binary copies, upgrades, CPU recover
 `--direct` execution. MCP stdio does not copy the executable. A failed request never
 triggers sandbox takeover. An idle runtime stays running until the host stops it.
 
+## Opt-in current-user supervision
+
+Startup is **off by default**. Installing or updating the CLI never registers a
+service. A host user can opt in explicitly:
+
+```sh
+rsrs runtime autostart status --json
+rsrs runtime autostart enable          # future sign-ins; does not start a stopped runtime
+rsrs runtime autostart enable --now    # also start now
+rsrs runtime stop                     # stays stopped until explicit start/restart
+rsrs runtime start
+rsrs runtime restart
+rsrs runtime autostart disable --stop
+rsrs runtime autostart remove --stop   # remove registration, retain libraries and keys
+```
+
+`runtime run` serves in the foreground. The adapters supervise that process:
+Linux uses the existing systemd **user** session, macOS uses the current user's
+LaunchAgent, and Windows uses a Limited, interactive current-user logon task.
+The Windows task keeps a native foreground supervisor alive; it retries a failed
+foreground runtime child after 60 seconds, with at most three consecutive failed
+children before explicit start/restart is needed. A child that ran for two minutes
+resets that consecutive-failure budget. Maintenance or manual stop prevents retry.
+A non-inheritable, process-owned Windows job also removes the child tree if the
+supervisor itself exits unexpectedly; automatic parent recovery is not promised,
+and an explicit host restart may be needed. Normal CLI stop drains the runtime
+before stopping the supervisor or replacing its executable.
+They do not install a system service, enable linger, elevate privileges, store a
+Windows password, or start before anyone signs in. Missing user service-manager
+support is an error, without an automatic system-wide fallback.
+Systemd itself rejects quotes/backslashes in an executable pathname. Such a data
+root remains usable with a separate safe absolute `RSRS_BIN_DIR`; enable rejects
+an unsupported native path before creating lifecycle/registration state.
+
+Status is read-only and does not create a profile, download a model, start a
+runtime or change a registration. It reports configuration separately from the
+actual OS registration and runtime/store readiness. Store readiness does not
+prove that the OS keyring is unlocked, a model is installed or the network is
+available. Unlock/login and model preparation remain host operations; a service
+must not generate replacement recovery material to bypass an unavailable keyring.
+
+The registration belongs to one installation root and OS user. Its native path,
+arguments, owner and service-file hash must match before changing it. Unknown
+units, task actions and loaded systemd drop-ins are refused, including removal.
+Existing manually created startup tasks are not adopted or deleted automatically;
+remove an old task yourself after checking its ownership to avoid competing owners.
+
+Host binary/profile changes use the same installation coordinator as normal
+runtime lifecycle operations. A durable maintenance marker blocks queued/direct
+access and background indexing/sync until the replacement store is verified.
+An interrupted change stays paused; explicit `runtime restart` recovers the
+lifecycle marker, while a snapshot/login interruption still requires its own
+indicated recovery command. The control marker is not proof that a snapshot or
+login transaction completed.
+
+Startup settings are captured when registering. To change the saved port/native
+location or environment, first `remove --stop` using the old registered settings,
+then explicitly enable again with the new settings. A mismatched caller port is
+refused before stopping a service, so an unreachable old endpoint cannot silently
+turn into a forced shutdown. Status reports `configured_rpc_port`.
+
+Only non-secret allowlisted runtime settings are saved, including explicit
+`RSRS_NO_AUTOSYNC` and `RSRS_UPDATE_CHECK` opt-outs (legacy prefixes are read and
+saved under their canonical names). Credentials and recovery
+material are never stored in a service command line or registration. Managed
+launches have a persistent limit of three attempts per 120 seconds, plus the OS
+restart delay. Explicit start/restart resets the owned unit's launch budget.
+Fixed-field lifecycle events are kept under `runtime/autostart/events.jsonl`,
+with a 64 KiB limit and one previous file; they contain no raw errors, command
+arguments or account content. Disabling/removing startup preserves data and keys.
+
+The platform acceptance workflow uses disposable GitHub-hosted runner profiles;
+passing it does not establish physical reboot, logout/login, real-account keyring
+or model readiness on every machine.
+
+## Existing manual Windows sign-in setup
+
+For client-only tools after a restart, configure one host-owned Windows Task
+Scheduler task. It runs after the same Windows user signs in, so the user's
+selected profile and OS keyring remain available. This is a sign-in task, not a
+SYSTEM service before login. The CLI does not install it automatically.
+
+1. In an ordinary host terminal, run `rsrs status --json`, followed by
+   `rsrs --runtime-internal --status --json`. Verify the selected account and
+   running host. The first command installs/updates the managed native executable
+   and its verified runtime files in the installation's `bin` directory.
+2. Open **Task Scheduler → Create Task**. Name it **Respire host runtime**, select
+   your current Windows user, choose **Run only when user is logged on**, and
+   leave **Run with highest privileges** unchecked. No stored password is needed.
+3. Add **At log on** for that specific user. Add **Start a program** using the
+   absolute managed executable path (normally
+   `C:\Users\<your-user>\.rsrs\bin\rsrs.exe`) and arguments `status --json`.
+   Use the actual installation `bin` path if you configured another location.
+   Use your user home as **Start in**. Do not select an account subdirectory's
+   copy, a temporary build directory or a sandbox/client-only launcher.
+4. In **Settings**, allow on-demand execution and choose **Do not start a new
+   instance**. Disable the task's maximum-running-time stop condition: the
+   resident child must remain available. Power/battery conditions can delay a
+   task; choose these according to your own power policy.
+5. Run the task once. `status` performs normal host startup and then returns;
+   the owned runtime keeps running. Check **Last Run Result** and verify
+   `rsrs --runtime-internal --status --json` again before relying on a sandbox
+   connection. Repeat this check after your next sign-in.
+
+After a CLI update, run the new host `rsrs status --json` once to update the
+managed executable used by the task. Custom `RSRS_DATA_DIR`, `RSRS_BIN_DIR` or
+port settings must also be present in the task's user environment; terminal-only
+variables are not inherited by Task Scheduler. The task uses the profile selected
+in the installation's `client.json`; it does not log in, generate keys or choose
+another account.
+
+To remove startup, disable/delete only your **Respire host runtime** task. Stop
+the existing owned runtime separately from a host terminal with
+`rsrs --runtime-internal --stop`. Client-only tools continue to leave lifecycle
+management to the host. `rsrs --runtime-internal --help` lists lifecycle flags
+without creating a profile or starting a runtime.
+
+The doctor injection count measures detected installed hosts, rather than every
+catalog target. Absent hosts are not failed injections; stale installed-host
+instructions can be refreshed with an explicitly requested `rsrs inject --all`.
+
 `rsrs doctor` includes a `Runtime version` check. Its JSON summary exposes
 `runtime_version`, which is `null` when no runtime is connected. The TUI home
 and version pages show the connected runtime's version separately from the CLI
@@ -154,3 +275,21 @@ completed files are published only after their SHA256 matches the pinned model.
 Progressing downloads do not expire merely because 30 minutes elapsed. The
 existing bounded network-read timeout still applies. Parallel connections do not
 guarantee faster transfers when the server or network limits total bandwidth.
+
+## Background inference thread policy
+
+The SDK must advertise `inference_thread_contract: 1`. Foreground sessions use
+one intra-op thread. Background indexing uses the host's available CPU count
+minus one, bounded to 1–16. `RSRS_INTRA_THREADS` explicitly selects the background
+count; numeric values are clamped to 1–16 and invalid values fail clearly. It
+does not change the foreground session. Set it before starting the runtime and
+restart that owned runtime when changing it; the supervised worker receives a
+startup snapshot. Core receives explicit configuration, never environment access.
+The policy participates in model reuse identity for both ONNX and owned ORT.
+
+For an isolated synthetic measurement using verified model files, run
+`cargo run --locked -p respire_core_sdk --example index-thread-probe -- /path/to/model`.
+Add `--legacy` to exercise borrowed ONNX instead of streamed owned ORT. The probe
+reports background prepare and concurrent foreground latency for background
+counts 1 and 4; it also checks cache-policy rejection and native pool creation.
+These fixture timings are measurements, not a production speedup guarantee.

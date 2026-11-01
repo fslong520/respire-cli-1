@@ -178,6 +178,25 @@ fn runtime_serves_status_and_stops() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("status envelope command was {}", value["command"]).into());
     }
 
+    // Exercise the actual packaged policy through this test's owned runtime.
+    // The preview must preserve an existing user file and must not write it.
+    let prompt = run(dir.path(), port, &["--client-only", "prompt", "--json"])?;
+    assert!(prompt.status.success(), "{}", String::from_utf8_lossy(&prompt.stdout));
+    let prompt: serde_json::Value = serde_json::from_slice(&prompt.stdout)?;
+    assert_eq!(prompt["summary"]["instructions"], respire_app::inject::INSTRUCTIONS_MD);
+    let codex = dir.path().join(".codex/AGENTS.md");
+    std::fs::create_dir_all(codex.parent().unwrap())?;
+    let owned = "Synthetic owned Codex instructions\n";
+    std::fs::write(&codex, owned)?;
+    let preview = run(dir.path(), port, &["--client-only", "inject", "--id", "codex", "--preview", "--json"])?;
+    assert!(preview.status.success(), "{}", String::from_utf8_lossy(&preview.stdout));
+    let preview: serde_json::Value = serde_json::from_slice(&preview.stdout)?;
+    let preview_text = preview.to_string();
+    assert!(preview_text.contains("Synthetic owned Codex instructions"));
+    assert!(preview_text.contains("--depth 3"));
+    assert!(!preview_text.contains("--depth 1-3"));
+    assert_eq!(std::fs::read_to_string(&codex)?, owned);
+
     let again = run(dir.path(), port, &["--runtime-internal", "--status"])?;
     let text = String::from_utf8(again.stdout)?;
     if !text.contains("runtime=up") {
@@ -809,7 +828,9 @@ fn doctor_reports_the_real_wait_before_completion_and_json_stays_quiet() -> Resu
     let addr = format!("http://{}", server.server_addr());
     let worker = std::thread::spawn(move || -> Result<(), String> {
         for _ in 0..2 {
-            let request = server.recv_timeout(Duration::from_secs(30)).map_err(|error| error.to_string())?.ok_or("doctor never probed the server")?;
+            // The json run waits for the runtime the human run autostarted; a
+            // coverage-instrumented binary can need well over 30s to be ready.
+            let request = server.recv_timeout(Duration::from_secs(120)).map_err(|error| error.to_string())?.ok_or("doctor never probed the server")?;
             if request.url() != "/health" { return Err("unexpected doctor request".into()); }
             std::thread::sleep(Duration::from_millis(1500));
             request.respond(tiny_http::Response::from_string("{}")) .map_err(|error| error.to_string())?;
@@ -841,7 +862,7 @@ fn doctor_reports_the_real_wait_before_completion_and_json_stays_quiet() -> Resu
         });
         let mut saw_wait = false;
         let mut phases = Vec::new();
-        while let Ok(line) = receiver.recv_timeout(Duration::from_secs(20)) {
+        while let Ok(line) = receiver.recv_timeout(Duration::from_secs(60)) {
             let line = line?;
             phases.push(line.clone());
             assert!(!line.contains('\u{1b}'), "redirected progress must be plain text");

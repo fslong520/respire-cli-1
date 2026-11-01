@@ -10,7 +10,15 @@ if [ "$TARGET" = 'aarch64-unknown-linux-musl' ]; then
   # Keep vendored C atomics inline; Rust's static musl link omits GCC helpers.
   export CFLAGS_aarch64_unknown_linux_musl="${CFLAGS_aarch64_unknown_linux_musl:-} -mno-outline-atomics"
 fi
-node scripts/fetch-core-sdk.mjs "$TARGET"
-cargo build --release --locked -p respire --bin rsrs --target "$TARGET" --target-dir target/ci
-
-node scripts/stage-core-runtime.mjs "target/ci/$TARGET/release"
+case "${RELEASE_CACHE_ACTION:-build}" in
+  key|pack)
+    node scripts/rust-ci-cache.mjs "$RELEASE_CACHE_ACTION" release "$TARGET"
+    ;;
+  build)
+    node scripts/fetch-core-sdk.mjs "$TARGET"
+    if [ "${RELEASE_DEPENDENCY_CACHE:-}" = 1 ]; then node scripts/rust-ci-cache.mjs restore release "$TARGET"; fi
+    cargo build --release --locked -p respire --bin rsrs --target "$TARGET" --target-dir target/ci
+    node scripts/stage-core-runtime.mjs "target/ci/$TARGET/release"
+    ;;
+  *) echo 'Invalid release cache action' >&2; exit 1 ;;
+esac

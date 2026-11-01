@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "authority": "CLI baseline cloud API contract reviewed against server 686f1d1 on 2026-10-13; this is not complete browser/Passkey API coverage.",
+  "authority": "CLI baseline route inventory reviewed against server fb370b2 on 2026-10-31; this is not complete browser/Passkey API coverage.",
   "expected_route_count": 66,
   "routes": [
     {
@@ -334,13 +334,15 @@
       "group": "admin"
     }
   ],
-  "server_source_sha": "686f1d1e84721675906e792c71b96cde4772429e",
+  "server_source_sha": "fb370b2a49193db64d2530c9af9a2a3895fd231c",
   "review": {
-    "previous_server_source_sha": "7f0b10756011759e2960ffbeae8d61f15d337785",
-    "compare_url": "https://github.com/risense-ai/respire-server/compare/7f0b10756011759e2960ffbeae8d61f15d337785...686f1d1e84721675906e792c71b96cde4772429e",
+    "previous_server_source_sha": "22096e8e237a5b49588678577cbd96af066eabe3",
+    "compare_url": "https://github.com/risense-ai/respire-server/compare/22096e8e237a5b49588678577cbd96af066eabe3...fb370b2a49193db64d2530c9af9a2a3895fd231c",
     "baseline_routes_preserved": 66,
     "canonical_server_operations": 85,
-    "changed_baseline_routes": [],
+    "changed_baseline_routes": [
+      "Sync deletion erases retained payloads and bounds history; reviewed router and HTTP handler inventories are unchanged"
+    ],
     "retained_vault_assertions": [
       "stable account_id",
       "initial key_generation",
@@ -350,7 +352,7 @@
       "rejected operations preserve vault bytes"
     ],
     "changed_baseline_assertions": [],
-    "scope_note": "Only Passkey handlers, their no-store transport header, and additive schema 9 metadata changed. The 66 CLI baseline routes and vault generation semantics are preserved. One new Passkey cancellation operation belongs to separate browser acceptance."
+    "scope_note": "Reviewed all four intervening commits and the complete product-source file inventory. Router and HTTP handlers are unchanged; store changes erase deleted ciphertext, bound retained history and preserve payload-free resolution receipts. The 66 baseline routes and 85 canonical operations remain unchanged. Existing vault assertions and all API checks remain required; this inventory review does not claim live acceptance."
   },
   "separate_coverage": {
     "github_transport": {

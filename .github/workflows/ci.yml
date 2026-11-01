@@ -2,6 +2,14 @@ name: CLI CI
 on:
   workflow_dispatch:
     inputs:
+      source_checks_only:
+        description: Run all source tests, coverage and contracts without the optional manual native compile matrix
+        type: boolean
+        default: false
+      research_feedback_only:
+        description: Token-free seven-platform research snapshot/feedback and real-model validation using prepared exact SDK caches
+        type: boolean
+        default: false
       version_upgrade_only:
         description: Verify only the approved DEV12 to DEV13 version upgrade using existing GNU artifacts
         type: boolean
@@ -24,18 +32,20 @@ on:
         type: string
   push:
     branches: [main, 'fix/prompt-*']
+    tags: ['v*']
   pull_request:
     branches: [main]
+cache-mode: read
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: cli-ci-${{ github.ref }}-${{ inputs.native_published_only || false }}-${{ inputs.artifact_run || 'source' }}
+  group: cli-ci-${{ github.ref }}-${{ inputs.native_published_only || false }}-${{ inputs.artifact_run || 'source' }}-${{ inputs.research_feedback_only || false }}
   cancel-in-progress: true
 jobs:
   platform-build:
-    # Release builds all four targets. Keep the separate compile matrix manual.
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
+    # Release builds all seven targets. Keep the separate compile matrix manual.
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.source_checks_only && !inputs.research_feedback_only && !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
     name: Compile (${{ matrix.target }})
     strategy:
       fail-fast: false
@@ -45,21 +55,61 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
           - os: macos-latest
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            rustflags: -C target-feature=-crt-static
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Require native Windows ARM64 hardware
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_ARCH -ne 'ARM64' -or [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') {
+            throw 'Windows ARM64 acceptance requires native ARM64 hardware'
+          }
+      - name: Require real native Linux ARM64 hardware
+        shell: bash
+        run: bash scripts/require-native-linux-arm64.sh '${{ matrix.target }}'
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: ${{ matrix.target }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Resolve the pinned SDK dependency cache
+        id: sdk-cache-1
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "key=$(node scripts/sdk-ci-cache.mjs key "$target")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: sdk-cache-1-restore
+        if: steps.sdk-cache-1.outputs.key != ''
+        with:
+          path: .sdk/${{ steps.sdk-cache-1.outputs.target }}
+          key: ${{ steps.sdk-cache-1.outputs.key }}
+          enableCrossOsArchive: true
+          fail-on-cache-miss: true
+      - name: Require the exact SDK cache match
+        if: steps.sdk-cache-1.outputs.key != ''
+        shell: bash
+        env:
+          EXPECTED_KEY: ${{ steps.sdk-cache-1.outputs.key }}
+          MATCHED_KEY: ${{ steps.sdk-cache-1-restore.outputs.cache-matched-key }}
+        run: test -n "$EXPECTED_KEY" && test "$MATCHED_KEY" = "$EXPECTED_KEY"
       - name: Prepare pinned binary Core SDK
         if: ${{ !contains(matrix.target, '-musl') }}
         shell: bash
@@ -70,7 +120,7 @@ jobs:
       - name: Build without local vendor SDKs or accelerator hardware
         if: ${{ !contains(matrix.target, '-musl') }}
         run: cargo build --workspace --locked --target ${{ matrix.target }} --target-dir target/ci
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         if: contains(matrix.target, '-musl')
         id: musl-cache
         with:
@@ -79,12 +129,6 @@ jobs:
       - name: Build static Linux binary and verify libc independence
         if: contains(matrix.target, '-musl')
         run: bash scripts/build-linux-musl.sh "${{ matrix.target }}"
-      - name: Preserve native build cache even if Rust linking fails
-        if: always() && contains(matrix.target, '-musl') && steps.musl-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: target/musl-cache
-          key: musl-${{ matrix.target }}-ort-da9b5e3-rust-1.95-v1
       - name: Verify musl CPU inference
         if: contains(matrix.target, '-musl')
         env:
@@ -94,8 +138,10 @@ jobs:
         run: |
           set -euo pipefail
           exe=target/ci/${{ matrix.target }}/release/rsrs
+          bash scripts/verify-linux-arm64-elf.sh '${{ matrix.target }}' "$exe"
           "$exe" --direct model install-m3 --json
           "$exe" --direct model probe --json
+          bash scripts/probe-native-arm64-alpine.sh '${{ matrix.target }}' "$exe" "$RSRS_M3_DIR" "$RUNNER_TEMP/arm-alpine-probe"
       - name: Verify glibc CPU inference
         if: contains(matrix.target, '-gnu')
         env:
@@ -105,10 +151,14 @@ jobs:
         run: |
           set -euo pipefail
           exe=target/ci/${{ matrix.target }}/debug/rsrs
+          bash scripts/verify-linux-arm64-elf.sh '${{ matrix.target }}' "$exe"
           "$exe" --direct model install-m3 --json
           "$exe" --direct model probe --json
-  check:
-    if: ${{ !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
+  workspace-tests:
+    outputs:
+      rust_cache_key: ${{ steps.rust-key.outputs.key }}
+      rust_cache_hit: ${{ steps.rust-build.outputs.cache-hit }}
+    if: ${{ !inputs.research_feedback_only && !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
     runs-on: ubuntu-latest
     env:
       RSRS_ENGINE: cpu
@@ -117,6 +167,108 @@ jobs:
       RSRS_CORE_TEST_MODE: '1'
       RUST_TEST_THREADS: '1'
       RUST_MIN_STACK: '16777216'
+      # Keep backtrace file:line, assertions and overflow checks; omit full
+      # type/variable DWARF only. These source tests remain unoptimized.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      CARGO_PROFILE_DEV_DEBUG_ASSERTIONS: 'true'
+      CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: 'true'
+      CARGO_PROFILE_DEV_OVERFLOW_CHECKS: 'true'
+      CARGO_PROFILE_TEST_OVERFLOW_CHECKS: 'true'
+      CARGO_PROFILE_DEV_OPT_LEVEL: '0'
+      CARGO_PROFILE_TEST_OPT_LEVEL: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Verify actual source profile safety and coverage instrumentation
+        run: python3 scripts/test-ci-source-profile.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve the pinned SDK dependency cache
+        id: sdk-cache-2
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$(rustc -Vv | sed -n 's/^host: //p')"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "key=$(node scripts/sdk-ci-cache.mjs key "$target")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: sdk-cache-2-restore
+        if: steps.sdk-cache-2.outputs.key != ''
+        with:
+          path: .sdk/${{ steps.sdk-cache-2.outputs.target }}
+          key: ${{ steps.sdk-cache-2.outputs.key }}
+          enableCrossOsArchive: true
+          fail-on-cache-miss: true
+      - name: Require the exact SDK cache match
+        if: steps.sdk-cache-2.outputs.key != ''
+        shell: bash
+        env:
+          EXPECTED_KEY: ${{ steps.sdk-cache-2.outputs.key }}
+          MATCHED_KEY: ${{ steps.sdk-cache-2-restore.outputs.cache-matched-key }}
+        run: test -n "$EXPECTED_KEY" && test "$MATCHED_KEY" = "$EXPECTED_KEY"
+      - name: Prepare pinned binary Core SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$(rustc -Vv | sed -n 's/^host: //p')"
+          node scripts/fetch-core-sdk.mjs "$target"
+      - name: Key ordinary Rust dependencies
+        id: rust-key
+        run: node scripts/rust-ci-cache.mjs key workspace
+      - uses: actions/cache/restore@v4
+        id: rust-build
+        with:
+          path: .rust-ci-cache
+          key: ${{ steps.rust-key.outputs.key }}
+      - name: Restore ordinary Rust dependencies
+        run: node scripts/rust-ci-cache.mjs restore workspace
+      - run: cargo test --workspace --exclude respire --locked
+      # This offline ownership fixture requires the dependencies cached above.
+      - run: python3 scripts/test-core-payload-lifetime.py
+      - name: Stage ordinary Rust dependency cache
+        if: steps.rust-build.outputs.cache-hit != 'true'
+        run: node scripts/rust-ci-cache.mjs pack workspace
+      - uses: actions/upload-artifact@v4
+        if: steps.rust-build.outputs.cache-hit != 'true'
+        with:
+          name: rust-build-workspace
+          path: ${{ runner.temp }}/rust-build-workspace.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  coverage-tests:
+    outputs:
+      rust_cache_key: ${{ steps.rust-key.outputs.key }}
+      rust_cache_hit: ${{ steps.rust-build.outputs.cache-hit }}
+    if: ${{ !inputs.research_feedback_only && !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
+    name: Coverage (${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, runtime_smoke, runtime_autostart]
+    runs-on: ubuntu-latest
+    env:
+      RSRS_ENGINE: cpu
+      # Several existing tests change process-global data-dir/language variables.
+      # Their own parallel-request checks still create concurrent client threads.
+      RSRS_CORE_TEST_MODE: '1'
+      RUST_TEST_THREADS: '1'
+      RUST_MIN_STACK: '16777216'
+      # Keep backtrace file:line, assertions and overflow checks; omit full
+      # type/variable DWARF only. These source tests remain unoptimized.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      CARGO_PROFILE_DEV_DEBUG_ASSERTIONS: 'true'
+      CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: 'true'
+      CARGO_PROFILE_DEV_OVERFLOW_CHECKS: 'true'
+      CARGO_PROFILE_TEST_OVERFLOW_CHECKS: 'true'
+      CARGO_PROFILE_DEV_OPT_LEVEL: '0'
+      CARGO_PROFILE_TEST_OPT_LEVEL: '0'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -127,6 +279,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Resolve the pinned SDK dependency cache
+        id: sdk-cache-2
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$(rustc -Vv | sed -n 's/^host: //p')"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "key=$(node scripts/sdk-ci-cache.mjs key "$target")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: sdk-cache-2-restore
+        if: steps.sdk-cache-2.outputs.key != ''
+        with:
+          path: .sdk/${{ steps.sdk-cache-2.outputs.target }}
+          key: ${{ steps.sdk-cache-2.outputs.key }}
+          enableCrossOsArchive: true
+          fail-on-cache-miss: true
+      - name: Require the exact SDK cache match
+        if: steps.sdk-cache-2.outputs.key != ''
+        shell: bash
+        env:
+          EXPECTED_KEY: ${{ steps.sdk-cache-2.outputs.key }}
+          MATCHED_KEY: ${{ steps.sdk-cache-2-restore.outputs.cache-matched-key }}
+        run: test -n "$EXPECTED_KEY" && test "$MATCHED_KEY" = "$EXPECTED_KEY"
       - name: Prepare pinned binary Core SDK
         shell: bash
         run: |
@@ -136,12 +311,176 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      # respire tests run once through llvm-cov below.
-      - run: cargo test --workspace --exclude respire --locked
+      - name: Key instrumented Rust dependencies
+        id: rust-key
+        run: node scripts/rust-ci-cache.mjs key coverage
+      - uses: actions/cache/restore@v4
+        id: rust-build
+        with:
+          path: .rust-ci-cache
+          key: ${{ steps.rust-key.outputs.key }}
+      - name: Restore instrumented Rust dependencies and clear counters
+        run: |
+          node scripts/rust-ci-cache.mjs restore coverage
+          cargo llvm-cov clean --profraw-only
+      - name: Run this group's instrumented tests
+        env:
+          COVERAGE_GROUP: ${{ matrix.group }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {execFileSync, spawnSync} from 'node:child_process';
+          const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--locked', '--no-deps', '--format-version', '1'], {encoding: 'utf8'}));
+          const tests = metadata.packages.find(p => p.name === 'respire').targets.filter(t => t.kind.includes('test')).map(t => t.name);
+          const isolated = ['runtime_smoke', 'runtime_autostart'];
+          if (!isolated.every(name => tests.includes(name))) throw Error('Missing isolated coverage test target');
+          const group = process.env.COVERAGE_GROUP;
+          if (group !== 'core' && !isolated.includes(group)) throw Error('Unknown coverage group');
+          const selected = group === 'core' ? tests.filter(name => !isolated.includes(name)) : [group];
+          const args = ['llvm-cov', '--locked', '-p', 'respire', '--no-report'];
+          if (group === 'core') args.push('--lib', '--bins', '--examples');
+          for (const name of selected) args.push('--test', name);
+          const result = spawnSync('cargo', args, {stdio: 'inherit'});
+          if (result.error) throw result.error;
+          process.exit(result.status ?? 1);
+          NODE
+      - name: Archive current-run coverage counters and executable mappings
+        env:
+          COVERAGE_GROUP: ${{ matrix.group }}
+        run: |
+          set -euo pipefail
+          for profile in target/llvm-cov-target/*.profraw; do
+            test -s "$profile"
+            mv "$profile" "$(dirname "$profile")/$COVERAGE_GROUP-$(basename "$profile")"
+          done
+          find target/llvm-cov-target -maxdepth 1 -name '*.profraw' -type f > "$RUNNER_TEMP/coverage-files"
+          find target/llvm-cov-target/debug/deps -maxdepth 1 -type f -executable >> "$RUNNER_TEMP/coverage-files"
+          test -x target/llvm-cov-target/debug/rsrs
+          echo target/llvm-cov-target/debug/rsrs >> "$RUNNER_TEMP/coverage-files"
+          tar -cf - -T "$RUNNER_TEMP/coverage-files" | gzip -1 > "$RUNNER_TEMP/coverage-$COVERAGE_GROUP.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.group }}
+          path: ${{ runner.temp }}/coverage-${{ matrix.group }}.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Stage instrumented Rust dependency cache
+        if: matrix.group == 'core' && steps.rust-build.outputs.cache-hit != 'true'
+        run: node scripts/rust-ci-cache.mjs pack coverage
+      - uses: actions/upload-artifact@v4
+        if: matrix.group == 'core' && steps.rust-build.outputs.cache-hit != 'true'
+        with:
+          name: rust-build-coverage
+          path: ${{ runner.temp }}/rust-build-coverage.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  rust-build-save:
+    # This writer never checks out or executes source, and cannot restore SDK caches.
+    cache-mode: write-only
+    needs: [workspace-tests, coverage-tests]
+    if: ${{ needs.workspace-tests.outputs.rust_cache_hit != 'true' || needs.coverage-tests.outputs.rust_cache_hit != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      matrix:
+        kind: [workspace, coverage]
+    env:
+      BUILD_KEY: ${{ matrix.kind == 'workspace' && needs.workspace-tests.outputs.rust_cache_key || needs.coverage-tests.outputs.rust_cache_key }}
+      CACHE_HIT: ${{ matrix.kind == 'workspace' && needs.workspace-tests.outputs.rust_cache_hit || needs.coverage-tests.outputs.rust_cache_hit }}
+    steps:
+      - name: Validate the compilation-only cache key
+        if: env.CACHE_HIT != 'true'
+        run: '[[ "$BUILD_KEY" =~ ^rust-ci-v1-${{ matrix.kind }}-[a-f0-9]{64}$ ]]'
+      - uses: actions/download-artifact@v4
+        if: env.CACHE_HIT != 'true'
+        with:
+          name: rust-build-${{ matrix.kind }}
+          path: incoming
+      - name: Extract dependency data without executing it
+        if: env.CACHE_HIT != 'true'
+        env:
+          CACHE_KIND: ${{ matrix.kind }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, tarfile
+          with tarfile.open('incoming/rust-build-'+os.environ['CACHE_KIND']+'.tar.gz') as archive:
+              for member in archive.getmembers():
+                  path=pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or path.parts[0] not in ['target','cargo']:
+                      raise ValueError('Unexpected Rust dependency cache path')
+              archive.extractall('.rust-ci-cache', filter='data')
+          PY
+      - uses: actions/cache/save@v4
+        if: env.CACHE_HIT != 'true'
+        with:
+          path: .rust-ci-cache
+          key: ${{ env.BUILD_KEY }}
+
+  check-complete:
+    if: ${{ always() && !inputs.research_feedback_only && !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
+    needs: [coverage-tests, workspace-tests, contract-checks]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: coverage
+          merge-multiple: true
+      - name: Merge all three current-run groups
+        run: |
+          set -euo pipefail
+          for group in core runtime_smoke runtime_autostart; do
+            tar -xzf "coverage/coverage-$group.tar.gz"
+          done
       - name: CLI line coverage ≥ 90% (exclude entry points, UI and network adapters)
         run: |
-          cargo llvm-cov --locked -p respire --fail-under-lines 90 \
-            --ignore-filename-regex '(main\.rs|web\.rs|rpc\.rs|runtime_(policy|error|http)\.rs|extract_tui\.rs|inject_tui\.rs|shell\.rs|/shell/|/core/|model_(install|progress)\.rs|space\.rs|update_check\.rs|classify(_config)?\.rs|recall_select\.rs)'
+          result=0
+          cargo llvm-cov report -p respire --fail-under-lines 90 \
+            --ignore-filename-regex '(main\.rs|web\.rs|rpc\.rs|runtime_(policy|error|http)\.rs|extract_tui\.rs|inject_tui\.rs|shell\.rs|/shell/|/core/|model_(install|progress)\.rs|space\.rs|update_check\.rs|classify(_config)?\.rs|recall_select\.rs)' || result=$?
+          if [ "$result" -ne 0 ]; then
+            cargo llvm-cov report -p respire --show-missing-lines \
+              --ignore-filename-regex '(main\.rs|web\.rs|rpc\.rs|runtime_(policy|error|http)\.rs|extract_tui\.rs|inject_tui\.rs|shell\.rs|/shell/|/core/|model_(install|progress)\.rs|space\.rs|update_check\.rs|classify(_config)?\.rs|recall_select\.rs)' || printf "%s\n" "Coverage diagnostic unavailable; original failure retained"
+          fi
+          exit "$result"
+      - name: Require source coverage and all independent contracts
+        if: ${{ always() }}
+        env:
+          SOURCE_RESULT: ${{ needs.coverage-tests.result }}
+          WORKSPACE_RESULT: ${{ needs.workspace-tests.result }}
+          CONTRACT_RESULT: ${{ needs.contract-checks.result }}
+        run: test "$SOURCE_RESULT" = success && test "$WORKSPACE_RESULT" = success && test "$CONTRACT_RESULT" = success
+
+  contract-checks:
+    # Packaging/workflow/fixture checks have no dependency on Rust coverage or SDK
+    # execution. Keep their own runner and fail the same whole CI workflow.
+    if: ${{ !inputs.research_feedback_only && !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -149,16 +488,24 @@ jobs:
       - run: node --check npm/scripts/release-notes.mjs
       - run: node npm/scripts/check-manifest.mjs
       - run: node npm/scripts/test-wrapper.mjs
-      - run: node --test npm/scripts/test-registry-publication.mjs npm/scripts/test-release-publication.mjs npm/scripts/test-dev6-publication-recovery.mjs npm/scripts/test-parallel-publication.mjs
+      - run: python3 scripts/test_published_upgrade_policy.py
+      - run: node --test npm/scripts/test-prepared-import.mjs npm/scripts/test-verified-receipt.mjs npm/scripts/test-next-dev-version.mjs npm/scripts/test-release-preparation.mjs npm/scripts/test-release-regression-contract.mjs npm/scripts/test-parallel-ci-contracts.mjs npm/scripts/test-publication-fence.mjs npm/scripts/test-publication-acceptance.mjs npm/scripts/test-cleanup-release-artifacts.mjs npm/scripts/test-registry-publication.mjs npm/scripts/test-release-publication.mjs npm/scripts/test-dev6-publication-recovery.mjs npm/scripts/test-parallel-publication.mjs scripts/test-private-sdk-download.mjs scripts/test-sdk-ci-cache.mjs
       - run: node --test scripts/test-stage-core-runtime.mjs
       - run: python3 scripts/test-dev-smoke-gate.py
       - run: python3 scripts/test-dev-api-contract.py
       - run: python3 scripts/test-dev-model-fixture.py
       - run: python3 scripts/test-dev-fixture-tty.py
-      - run: python3 scripts/test-core-payload-lifetime.py
+      - run: python3 scripts/test-dev-witness-fixture.py
+      - name: Validate release sweep PowerShell syntax
+        shell: pwsh
+        run: |
+          $parseTokens = $null; $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/dev-release-sweep.ps1'), [ref]$parseTokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -ne 0) { throw ($parseErrors | Out-String) }
+          & ./scripts/test-reembed-progress-contract.ps1
 
   native-published-m3:
-    if: ${{ inputs.native_published_only && !inputs.version_upgrade_only }}
+    if: ${{ !inputs.research_feedback_only && inputs.native_published_only && !inputs.version_upgrade_only }}
     name: Published M3 (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
@@ -180,7 +527,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install cryptography
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: native-model
           key: pinned-m3-fp16-4de13258303883538bd53b696b452bf8099f0858
@@ -236,7 +583,7 @@ jobs:
           if-no-files-found: warn
 
   gnu-login-recovery:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.artifact_run != '' || inputs.version_upgrade_only) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.research_feedback_only && (inputs.artifact_run != '' || inputs.version_upgrade_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -271,7 +618,7 @@ jobs:
           github-token: ${{ github.token }}
       - name: Extract the checksum-verified binary
         run: node npm/scripts/extract-artifact.mjs validated-cli candidate
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/release-probe/models/bge-m3
           key: release-m3-quantized-0826f8c1-gnu-recovery
@@ -355,3 +702,61 @@ jobs:
             ${{ runner.temp }}/gnu-login-interruption/
             ${{ runner.temp }}/gnu-legacy-vault/legacy-vault-coverage.json
           if-no-files-found: ignore
+
+  research-feedback-plan:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.research_feedback_only }}
+    cache-mode: none
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - id: plan
+        shell: bash
+        env:
+          OTHER_MODE: ${{ inputs.native_published_only || inputs.version_upgrade_only || inputs.artifact_run != '' }}
+        run: |
+          set -euo pipefail
+          test "$OTHER_MODE" = false
+          node scripts/sdk-ci-cache.mjs plan sdk/core-sdk.lock.json crates/core-sdk/core-sdk.lock.json > "$RUNNER_TEMP/research-sdk-plan.json"
+          node --input-type=module - <<'JS'
+          import {readFileSync,appendFileSync} from 'node:fs';
+          const plan=JSON.parse(readFileSync(process.env.RUNNER_TEMP+'/research-sdk-plan.json'));
+          const os={'x86_64-unknown-linux-gnu':'ubuntu-latest','x86_64-unknown-linux-musl':'ubuntu-latest','aarch64-unknown-linux-gnu':'ubuntu-24.04-arm','aarch64-unknown-linux-musl':'ubuntu-24.04-arm','aarch64-apple-darwin':'macos-latest','x86_64-pc-windows-msvc':'windows-latest','aarch64-pc-windows-msvc':'windows-11-arm'};
+          const matrix={include:plan.include.filter(x=>os[x.target]).map(({target,key})=>({target,key,os:os[target]}))};
+          if(matrix.include.length!==7)throw Error('Expected all seven native consumers');
+          appendFileSync(process.env.GITHUB_OUTPUT,`matrix=${JSON.stringify(matrix)}\n`);
+          JS
+  research-feedback-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.research_feedback_only }}
+    cache-mode: read
+    needs: research-feedback-plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.research-feedback-plan.outputs.matrix) }}
+    uses: ./.github/workflows/token-free-sdk-check.yml
+    with:
+      source_sha: ${{ github.sha }}
+      target: ${{ matrix.target }}
+      cache_key: ${{ matrix.key }}
+      runner_os: ${{ matrix.os }}
+      feedback_probe: true
+
+  research-feedback-complete:
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.research_feedback_only }}
+    cache-mode: none
+    needs: [research-feedback-plan, research-feedback-native]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all source coverage and native model jobs
+        env:
+          PLAN_RESULT: ${{ needs.research-feedback-plan.result }}
+          VALIDATION_RESULT: ${{ needs.research-feedback-native.result }}
+        run: test "$PLAN_RESULT" = success && test "$VALIDATION_RESULT" = success

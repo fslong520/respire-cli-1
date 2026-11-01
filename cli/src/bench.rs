@@ -296,9 +296,25 @@ pub struct BenchReport {
 
 /// Env vars that affect retrieval (recorded in the report).
 pub const PARAM_KEYS: &[&str] = &[
+    "RSRS_FEEDBACK",
+    "RSRS_MARK_SIM",
+    "RSRS_BAD_PENALTY",
     "RSRS_ABLATE",
     "RSRS_ROUTE",
     "RSRS_RECALL_MIN_SCORE",
+    "RSRS_RECALL_PROFILE",
+    "RSRS_RECALL_COS_MIN",
+    "RSRS_RECALL_SIM_MIN",
+    "RSRS_RECALL_COS_RELATIVE_RATIO",
+    "RSRS_RECALL_COS_MARGIN",
+    "RSRS_RECALL_LEXICAL_WEIGHT",
+    "RSRS_RECALL_SEMANTIC_POWER",
+    "RSRS_RECALL_BM25",
+    "RSRS_RECALL_MAX_FUSION",
+    "RSRS_RECALL_NORMALIZE_ABLATION",
+    "RSRS_RECALL_AUX_CAP_RATIO",
+    "RSRS_RECALL_RRF_CAP",
+    "RSRS_RECALL_HEAT_CAP",
     "RSRS_MMR_LAMBDA",
     "RSRS_ANCESTOR_BUDGET",
     "RSRS_ANCESTOR_ROOT_FLOOR",
@@ -316,6 +332,17 @@ pub fn snapshot_params() -> BTreeMap<String, String> {
             }
         }
     }
+    for (name,default) in [("RSRS_FEEDBACK","0"),("RSRS_MARK_SIM","0.5"),("RSRS_BAD_PENALTY","1")] {
+        m.entry(name.into()).or_insert_with(||default.into());
+    }
+    m.entry("RSRS_RECALL_PROFILE".into()).or_insert_with(||"calibrated".into());
+    m.insert("recall_calibration_contract".into(),"1".into());
+    m.insert("feedback_contract".into(),respire::core_sdk::FEEDBACK_CONTRACT.to_string());
+    {
+        use sha2::{Digest,Sha256};
+        m.insert("sdk_lock_sha256".into(),format!("{:x}",Sha256::digest(include_bytes!("../../sdk/core-sdk.lock.json"))));
+    }
+    m.insert("cli_version".into(),env!("CARGO_PKG_VERSION").into());
     m
 }
 
@@ -456,6 +483,7 @@ mod tests {
     fn mine_filters_inactive_and_merges() {
         use respire::transport::local::QueryLogRow;
         let row = |id: i64, q: &str, good: &[&str], adopted: &[&str]| QueryLogRow {
+            request_id:None,
             id,
             ts: "2026-09-19".to_owned(),
             query: q.to_owned(),

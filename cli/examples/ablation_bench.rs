@@ -30,6 +30,7 @@ fn main() -> Result<()> {
         .context("set RSRS_DATA_DIR to an initialized isolated library copy")?;
     anyhow::ensure!(!root.trim().is_empty(), "RSRS_DATA_DIR is empty");
     let root = std::fs::canonicalize(root.trim())?;
+    respire::core_sdk::set_index_root(&root)?;
     let store = respire::transport::local::LocalStore::open_read_only(
         &respire::service::database_path(&root)?,
     )?;
@@ -40,7 +41,7 @@ fn main() -> Result<()> {
         "library index is not ready; prepare the isolated copy before benchmarking"
     );
     let model = store.retrieval_model()?;
-    let snapshots = respire::memory::engine::snapshots(&keys, &candidates);
+    let snapshots = respire::memory::engine::snapshots(&keys, &candidates)?;
     let cases = bench::parse_evalset(&std::fs::read_to_string(&args.evalset)?)?;
     let mut results = Vec::with_capacity(cases.len());
     for case in cases {
@@ -55,6 +56,7 @@ fn main() -> Result<()> {
             json!({
                 "model":model, "mode":"fast", "provider":null,
                 "query":query, "snapshots":snapshots,
+                "query_settings":respire::feedback::query_settings(&store,&query,&candidates)?,
             }),
         )?;
         let ranked: Vec<RecalledWithContext> = serde_json::from_value(output["items"].clone())?;
@@ -74,7 +76,7 @@ fn main() -> Result<()> {
         if args.per_case {
             println!(
                 "{}",
-                serde_json::to_string(&json!({"case":result,"routing":output["routing"]}))?
+                serde_json::to_string(&json!({"case":result,"routing":output["routing"],"retrieval":output["retrieval"]}))?
             );
         }
         results.push(result);

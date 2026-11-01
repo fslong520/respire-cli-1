@@ -33,6 +33,8 @@ static RUNNING_STATUS: AtomicUsize = AtomicUsize::new(0);
 static LIGHT_RUNNING: AtomicUsize = AtomicUsize::new(0);
 static WORKERS: AtomicUsize = AtomicUsize::new(1);
 static STOPPING: AtomicBool = AtomicBool::new(false);
+static STORE_READY: AtomicBool = AtomicBool::new(false);
+static SNAPSHOT_BOOT_ID: Mutex<Option<String>> = Mutex::new(None);
 static JOB_TX: OnceLock<Mutex<Sender<Job>>> = OnceLock::new();
 static DISPATCH_THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 const QUEUE_EXPIRED: &str = "request queue deadline exceeded; command was not started";
@@ -156,6 +158,7 @@ enum WriteJob {
 }
 
 pub(crate) struct RecallStats {
+    pub request_id:String,
     pub query: String,
     pub project: String,
     pub candidates: Vec<String>,
@@ -166,7 +169,7 @@ impl RecallStats {
     pub(crate) fn persist(&self, store: &respire::transport::local::LocalStore) -> Result<()> {
         if respire::service::workspace_mode() != "normal" { return Ok(()); }
         store.write_transaction(|| {
-            store.log_query(&self.query, &self.project, "", &self.candidates, &self.scores)?;
+            store.log_query_request(&self.request_id,&self.query, &self.project, "", &self.candidates, &self.scores)?;
             store.bump_recall(&self.candidates)?;
             store.bump_recall_pairs(&self.candidates)
         })
@@ -274,6 +277,7 @@ pub(crate) fn invalidate_sync_boundary(generation: usize) -> Result<()> {
 }
 
 pub(crate) fn check_sync_context(generation: usize) -> Result<()> {
+    anyhow::ensure!(!crate::autostart::background_paused(), "runtime maintenance pauses background work");
     respire::service::ensure_runtime_profile()?;
     if STOPPING.load(Ordering::Acquire) {
         bail!("runtime is stopping");
@@ -352,6 +356,19 @@ fn index_yield_to_foreground(generation: usize) -> Result<()> {
     respire::model_progress::check()
 }
 
+fn diary_commit(generation: usize, action: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+    let gate = shared_exclusive();
+    let _write = gate.acquire(false);
+    // Account/mode transitions use the write gate; lifecycle transitions use
+    // takeover. Never block on takeover while its owner waits for INDEX_RUNNING.
+    let _lifecycle = crate::runtime_policy::try_takeover_lock()?;
+    respire::model_progress::commit(|| {
+        check_sync_context(generation)?;
+        anyhow::ensure!(!respire::service::service_paused(), "background index paused by service mode");
+        action()
+    })
+}
+
 /// The database's source-checked missing artifacts are the resumable work queue.
 /// Model preparation runs on this thread without taking the foreground write gate.
 fn index_loop() {
@@ -371,8 +388,12 @@ fn index_has_work() -> bool {
 fn index_loop_inner() -> Result<()> {
     let mut model_wait_started: Option<Instant> = None;
     loop {
-        if respire::service::service_paused() {
-            if STOPPING.load(Ordering::Acquire) { return Ok(()); }
+        if respire::service::service_paused() || crate::autostart::background_paused() {
+            if STOPPING.load(Ordering::Acquire) {
+                let mut work=INDEX_WORK.lock().map_err(|_|anyhow::anyhow!("index work lock poisoned"))?;
+                work.requested=false;work.state="stopped";
+                return Ok(());
+            }
             let mut work = INDEX_WORK.lock().map_err(|_| anyhow::anyhow!("index work lock poisoned"))?;
             work.state = "paused";
             let _paused = INDEX_CV.wait_timeout(work, Duration::from_secs(1)).map_err(|_| anyhow::anyhow!("index work lock poisoned"))?;
@@ -399,18 +420,23 @@ fn index_loop_inner() -> Result<()> {
             let model = store.retrieval_model()?;
             let prepare_requested = INDEX_WORK.lock().map_err(|_| anyhow::anyhow!("index work lock poisoned"))?.prepare_mirror.is_some();
             let pending = store.index_missing(&model)?;
+            let diary_pending = respire::diary::needs_rebuild(&store)?;
             // An indexed library still needs the CPU container for its next query.
             // Empty libraries wait for a write or explicit preparation instead of
             // starting an unsolicited model download during status/restart.
             let cpu_upgrade = model == "m3" && respire::MemoryTransport::count(&store)? > 0
                 && respire::model_install::cpu_model_preparation_needed()?;
-            if !pending && !prepare_requested && !cpu_upgrade {
+            if !pending && !diary_pending && !prepare_requested && !cpu_upgrade {
                 return Ok(true);
             }
             let Some(_operation) = respire::model_progress::Operation::try_begin_background_index()? else {
                 return Ok(false);
             };
             index_yield_to_foreground(generation)?;
+            if diary_pending && !pending && !prepare_requested && !cpu_upgrade
+                && respire::diary::clear_if_empty(&store, |action| diary_commit(generation,action))? {
+                return Ok(true);
+            }
             let mirror = INDEX_WORK.lock().map_err(|_| anyhow::anyhow!("index work lock poisoned"))?.prepare_mirror.take();
             if let Some(mirror) = mirror {
                 respire::model_install::prepare_m3_from_mirror(&mirror)?;
@@ -419,10 +445,10 @@ fn index_loop_inner() -> Result<()> {
                 respire::model_install::prepare_m3_for_index()?;
                 check_sync_context(generation)?;
             }
-            if !pending { return Ok(true); }
+            if !pending && !diary_pending { return Ok(true); }
             let keys = crate::build_session()?;
             let embedder = respire::memory::bge::BgeEmbedder::load_model(&model)?;
-            loop {
+            while pending {
                 let rebuilt = store.rebuild_index_with_progress(&keys, &embedder, &model, |done, total| {
                     index_yield_to_foreground(generation)?;
                     respire::model_progress::update("index", &model, done as u64, Some(total as u64))
@@ -445,6 +471,12 @@ fn index_loop_inner() -> Result<()> {
                     Err(error) => return Err(error),
                 }
             }
+            respire::diary::rebuild_with_progress(&store, &keys, &embedder, || {
+                index_yield_to_foreground(generation)?;
+                respire::model_progress::check()
+            }, |action| diary_commit(generation, action), |done| {
+                respire::model_progress::update("index", "diary-fragments", done as u64, None)
+            })?;
             check_sync_context(generation)?;
             Ok(true)
         })();
@@ -579,6 +611,10 @@ fn flight_loop() {
                     FLIGHT_ON.store(false, Ordering::Release);
                     return;
                 }
+                if crate::autostart::background_paused() {
+                    state = SYNC_CV.wait_timeout(state, Duration::from_millis(250)).unwrap_or_else(|e| e.into_inner()).0;
+                    continue;
+                }
                 if let Some(job) = state.manual.pop_front() {
                     break Some(job);
                 }
@@ -711,6 +747,8 @@ struct RpcRequest {
     args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     queue_wait_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -860,7 +898,8 @@ fn query_json_with_start(args: Vec<String>, auto_start: bool) -> Result<serde_js
         return execute_json(full).map_err(|err| anyhow::anyhow!("{err}"));
     }
     let response = call_method("cli.exec", full, auto_start)?;
-    if let Some(envelope) = response.envelope {
+    if let Some(mut envelope) = response.envelope {
+        envelope.ensure_failure_diagnostics();
         return Ok(serde_json::to_value(envelope).context("runtime envelope could not be encoded")?);
     }
     let err = response
@@ -881,6 +920,7 @@ pub fn runtime_brief() -> Option<(u32, String, String)> {
 
 pub fn stop_if_running() -> Result<()> {
     let _takeover = crate::runtime_policy::takeover_lock()?;
+    if crate::autostart::stop_managed_locked()? { return Ok(()); }
     if let Some(health) = probe_runtime()? {
         stop_occupant(health.pid)?;
     }
@@ -891,13 +931,31 @@ pub fn stop_if_running() -> Result<()> {
 pub(crate) fn restart_runtime(timeout: Duration) -> Result<Value> {
     crate::runtime_policy::require_host("runtime restart")?;
     let _takeover = crate::runtime_policy::takeover_lock()?;
+    let mut maintenance = crate::autostart::restart_maintenance_locked()?;
     crate::progress::phase("检查 runtime 进程", "Checking runtime process");
+    crate::autostart::restart_stage("restart_probe");
     let health = match probe_runtime() {
         Ok(health) => health,
         Err(error) if matches!(error.downcast_ref::<crate::runtime_error::RuntimeError>(),
             Some(crate::runtime_error::RuntimeError::Transport(_))) => None,
         Err(error) => return Err(error),
     };
+    if crate::autostart::managed_enabled()?
+        && health.as_ref().is_some_and(|value| !value.inference_stalled()) {
+        // The active maintenance guard forces the managed coordinator to drain
+        // the authenticated, exact registered executable/profile and stop its
+        // service owner before replacement. Do not route this healthy owner
+        // through legacy unresponsive-process discovery (including WMI).
+        crate::autostart::restart_stage("restart_managed");
+        let stopped_pid = health.as_ref().map(|value| value.pid);
+        ensure_daemon_locked()?;
+        let ready = crate::net_rpc::health()?;
+        if !respire::service::off_mode() { verify_open_store(&respire::service::data_dir())?; }
+        maintenance.finish()?;
+        crate::autostart::restart_stage("restart_ready");
+        return Ok(json!({"state":"ready", "stopped_pid":stopped_pid, "pid":ready.pid,
+            "forced":false, "data_dir":ready.data_dir, "version":ready.bin}));
+    }
     let listener = crate::net_rpc::pid_listening_on(crate::net_rpc::rpc_port());
     let pid = health.as_ref().map(|health| health.pid).or(listener)
         .or_else(|| endpoint_pid().filter(|pid| crate::net_rpc::pid_is_respire(*pid)));
@@ -906,11 +964,13 @@ pub(crate) fn restart_runtime(timeout: Duration) -> Result<Value> {
         anyhow::ensure!(pid != std::process::id() && crate::net_rpc::pid_is_respire(pid),
             "cannot verify runtime process {pid}; restart refused");
         anyhow::ensure!(listener.is_none() || listener == Some(pid), "runtime port owner changed");
+        crate::autostart::restart_stage("restart_identity");
         let identity = crate::net_rpc::runtime_process_identity(pid)?;
         if health.is_none() {
             anyhow::ensure!(endpoint_pid() == Some(pid), "unresponsive process does not match this runtime endpoint");
         }
         crate::progress::phase("请求优雅退出；等待进程释放", "Requesting graceful shutdown; waiting for process exit");
+        crate::autostart::restart_stage("restart_stop");
         let deadline = Instant::now() + timeout;
         if crate::net_rpc::port_is_open() {
             match crate::net_rpc::request_stop_with_timeout(timeout.min(Duration::from_secs(2))) {
@@ -944,8 +1004,12 @@ pub(crate) fn restart_runtime(timeout: Duration) -> Result<Value> {
         anyhow::ensure!(!crate::net_rpc::port_is_open(), "cannot identify the process occupying the runtime port");
     }
     crate::progress::phase("启动 runtime；等待就绪", "Starting runtime; waiting for readiness");
+    crate::autostart::restart_stage("restart_start");
     ensure_daemon_locked()?;
     let ready = crate::net_rpc::health()?;
+    if !respire::service::off_mode() { verify_open_store(&respire::service::data_dir())?; }
+    maintenance.finish()?;
+    crate::autostart::restart_stage("restart_ready");
     Ok(json!({"state":"ready", "stopped_pid":pid, "pid":ready.pid,
         "forced":forced, "data_dir":ready.data_dir, "version":ready.bin}))
 }
@@ -954,10 +1018,32 @@ pub(crate) fn restart_runtime(timeout: Duration) -> Result<Value> {
 pub fn recover_interrupted_login() -> Result<()> {
     let _takeover = crate::runtime_policy::takeover_lock()?;
     if !respire_app::login_transaction::recovery_pending() { return Ok(()); }
+    let managed = crate::autostart::managed_enabled()?;
+    let mut maintenance = crate::autostart::with_explicit_recovery(crate::autostart::begin_maintenance_locked)?;
     if let Some(health) = probe_runtime()? { stop_occupant(health.pid)?; }
     respire_app::login_transaction::recover_interrupted()?;
+    if managed { ensure_daemon_locked()?; }
+    maintenance.finish()?;
     eprintln!("Recovered an interrupted login; the original account and configuration were restored.");
     Ok(())
+}
+
+/// Listener readiness alone is insufficient for a snapshot commit: the actor
+/// must have opened, checked and bound the actual restored database first.
+pub fn verify_snapshot_store(root:&std::path::Path,id:&str)->Result<()> {
+    verify_runtime_store(root,Some(id))
+}
+pub fn verify_open_store(root:&std::path::Path)->Result<()> {
+    verify_runtime_store(root,None)
+}
+fn verify_runtime_store(root:&std::path::Path,id:Option<&str>)->Result<()> {
+    for _ in 0..START_POLLS {
+        let health=crate::net_rpc::health()?;
+        anyhow::ensure!(!health.data_dir.is_empty() && crate::mcp::same_path(std::path::Path::new(&health.data_dir),root),"snapshot runtime profile changed during verification");
+        if health.store_ready && id.is_none_or(|id|health.snapshot_restore_id.as_deref()==Some(id)){return Ok(());}
+        std::thread::sleep(START_WAIT);
+    }
+    bail!("restored runtime did not confirm an opened and verified snapshot store")
 }
 
 pub fn change_profile(change: impl FnOnce() -> Result<()>) -> Result<()> {
@@ -971,6 +1057,7 @@ pub fn change_profile_with_rollback(change: impl FnOnce() -> Result<()>, rollbac
 pub fn change_profile_with_verification(change: impl FnOnce() -> Result<()>, rollback: impl FnOnce() -> Result<()>, verify: impl FnOnce() -> Result<()>) -> Result<()> {
     crate::progress::phase("协调账户操作；等待当前 runtime 释放", "Coordinating account operation; waiting for current runtime to release");
     let _takeover = crate::runtime_policy::takeover_lock()?;
+    let mut maintenance = crate::autostart::begin_maintenance_locked()?;
     let config_path = respire::service::client_config_path();
     let original = match std::fs::read(&config_path) {
         Ok(bytes) => Some(bytes),
@@ -1036,11 +1123,13 @@ pub fn change_profile_with_verification(change: impl FnOnce() -> Result<()>, rol
         if let Some(path) = backup {
             if let Err(cleanup) = std::fs::remove_file(&path) { return Err(error.context(format!("configuration restored; backup retained at {}: {cleanup}", path.display()))); }
         }
+        maintenance.finish()?;
         return Err(error);
     }
     if let Some(path) = backup {
         if let Err(error) = std::fs::remove_file(&path) { eprintln!("profile verified; configuration backup retained at {}: {error}", path.display()); }
     }
+    maintenance.finish()?;
     Ok(())
 }
 
@@ -1100,7 +1189,8 @@ pub fn runtime_entry(flags: RuntimeFlags) -> Result<()> {
 }
 
 fn render_response(response: RpcResponse, json: bool) -> Result<()> {
-    if let Some(envelope) = response.envelope {
+    if let Some(mut envelope) = response.envelope {
+        envelope.ensure_failure_diagnostics();
         crate::progress::finish();
         if json || envelope.summary["skipped"] != true || envelope.summary["mode"] != "off" {
             println!("{}", envelope.render(json)?);
@@ -1237,6 +1327,7 @@ fn serve(flags: RuntimeFlags) -> Result<()> {
     let library = respire::lock::LibraryLock::acquire(
         &respire::service::data_dir(), Duration::from_secs(120),
     ).context("runtime failed to lock the library")?;
+    crate::autostart::verify_managed_boot()?;
     // Probe and bind only the existing loopback HTTP/TCP transport; no legacy
     // pipe/socket fallback is necessary.
     let bound = crate::runtime_http::bind_runtime(flags.port, &flags.host)?;
@@ -1254,8 +1345,8 @@ fn serve(flags: RuntimeFlags) -> Result<()> {
     RUNNING.store(0, Ordering::Release);
     std::thread::Builder::new()
         .name("respire-dispatch".into())
-        // Deep native call chains (DML EP initialization, ORT graph
-        // optimization) overflow the 1 MB default on Windows debug builds.
+        // Services do not inherit a terminal's RUST_MIN_STACK. Context-query
+        // parsing needs the same explicit stack as the command workers.
         .stack_size(16 * 1024 * 1024)
         .spawn(move || dispatch_loop(rx, limit, idle, library))
         .context("failed to start the runtime dispatcher")?;
@@ -1274,6 +1365,9 @@ fn dispatch(request: RpcRequest, tx: &Sender<Job>) -> RpcResponse {
     }
     if request.method != "runtime.result" {
         if let Some(hit) = cached(&request.id) { return hit; }
+    }
+    if matches!(request.method.as_str(), "model.prepare" | "index.prepare") && crate::autostart::background_paused() {
+        return error_response(&request,"runtime_maintenance","runtime maintenance pauses model/index preparation");
     }
     let response = match request.method.as_str() {
         #[cfg(feature = "native-fault-tests")]
@@ -1371,6 +1465,9 @@ fn dispatch(request: RpcRequest, tx: &Sender<Job>) -> RpcResponse {
             response
         }
         "runtime.stop" => {
+            if crate::autostart::managed_id().is_some() && request.lifecycle.as_deref() != Some("coordinator-v1") {
+                return error_response(&request, "managed_lifecycle_required", "use the current host runtime lifecycle coordinator");
+            }
             request_drain_exit();
             status_response(&request)
         }
@@ -1550,23 +1647,28 @@ fn execute_json(args: Vec<String>) -> std::result::Result<Value, String> {
     serde_json::to_value(&captured.envelope).map_err(|err| err.to_string())
 }
 
+fn wait_for_drain(supervised: bool, mut busy: impl FnMut() -> bool) {
+    let mut polls=0;
+    while busy() {
+        // Preserve legacy explicit-shutdown timing, but never silently turn a
+        // supervised upgrade/profile transition into a four-second forced exit.
+        if !supervised && polls >= 80 { break; }
+        std::thread::sleep(Duration::from_millis(50));
+        polls+=1;
+    }
+}
+
 pub(crate) fn request_drain_exit() {
     STOPPING.store(true, Ordering::Release);
     wake_dispatcher();
     SYNC_CV.notify_all();
     INDEX_CV.notify_all();
-    std::thread::spawn(|| {
-        for _ in 0..80 {
-            if RUNNING.load(Ordering::Acquire) == 0
-                && !WRITE_RUNNING.load(Ordering::Acquire)
-                && !CLASSIFY_RUNNING.load(Ordering::Acquire)
-                && !sync_running()
-                && !index_has_work()
-            {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+    let supervised=crate::autostart::managed_id().is_some();
+    std::thread::spawn(move || {
+        wait_for_drain(supervised, ||RUNNING.load(Ordering::Acquire) != 0
+            || WRITE_RUNNING.load(Ordering::Acquire)
+            || CLASSIFY_RUNNING.load(Ordering::Acquire)
+            || sync_running() || index_has_work());
         stop_process(0);
     });
 }
@@ -1615,6 +1717,11 @@ pub(crate) fn health_body() -> Value {
         "url": current_url(),
         "exe": exe,
         "data_dir": respire::service::data_dir().display().to_string(),
+        "store_ready": STORE_READY.load(Ordering::Acquire),
+        "installation_root": respire::service::main_data_dir().display().to_string(),
+        "managed_id": crate::autostart::managed_id(),
+        "credential_state": crate::autostart::credential_state(),
+        "snapshot_restore_id": SNAPSHOT_BOOT_ID.lock().ok().and_then(|slot|slot.clone()),
         "recall_statistics": recall_stats_status(),
         "retrieval_index": index_status(),
         "inference": inference,
@@ -1635,6 +1742,7 @@ pub(crate) fn health_body() -> Value {
 }
 
 fn stop_process(code: i32) -> ! {
+    crate::autostart::record_exit(code == 0);
     #[cfg(test)]
     {
         let _ = code;
@@ -1748,6 +1856,7 @@ fn is_exclusive(args: &[String]) -> bool {
                 | "root-create"
                 | "share-import"
                 | "backup"
+                | "snapshot"
         )
     )
 }
@@ -1802,14 +1911,22 @@ fn dispatch_loop(rx: Receiver<Job>, limit: usize, idle: Option<Duration>, _lock:
     respire_app::core_sdk::worker::enable();
     // Keep WAL open across requests: closing the last connection can briefly lock
     // a concurrent opener during checkpoint/cleanup, even for read-only status.
-    let mut _store = if respire::service::off_mode() { None } else { Some(match respire::service::open_store() {
-        Ok(store) => store,
+    let mut _store = if respire::service::off_mode() { None } else { Some(match respire::service::open_runtime_store(&_lock) {
+        Ok((store,snapshot_id)) => {
+            if let Ok(mut slot)=SNAPSHOT_BOOT_ID.lock(){*slot=snapshot_id;}
+            STORE_READY.store(true,Ordering::Release);
+            store
+        },
         Err(error) => {
             eprintln!("runtime failed to initialize the library: {error:#}");
             stop_process(1);
         }
     }) };
     respire::service::install_runtime_profile(respire::service::data_dir());
+    if let Err(error) = respire_app::read_heat::reload() {
+        eprintln!("runtime failed to load read_heat configuration: {error:#}");
+        stop_process(1);
+    }
     let (classify_tx, classify_rx) = mpsc::sync_channel::<Job>(16);
     let classifier = std::thread::Builder::new()
         .name("respire-classify".into())
@@ -2143,20 +2260,41 @@ fn is_context_query(args: &[String]) -> bool {
     }
 }
 
-fn command_name(args: &[String]) -> Option<&str> {
+const GLOBAL_VALUE_FLAGS: [&str; 2] = ["--progress-id", "--model-task-id"];
+
+// Keep client timeout classification and server routing on the same argv rules.
+// A tracked request ID is a value even when it spells a command such as sync.
+pub(crate) fn command_words(args: &[String]) -> impl Iterator<Item = &str> + '_ {
     let mut values = args.iter();
-    while let Some(arg) = values.next() {
-        if matches!(arg.as_str(), "--progress-id" | "--model-task-id") {
-            let _ = values.next();
-        } else if !arg.starts_with('-') {
-            return Some(arg);
+    std::iter::from_fn(move || {
+        while let Some(arg) = values.next() {
+            if GLOBAL_VALUE_FLAGS.contains(&arg.as_str()) {
+                let _ = values.next();
+            } else if !arg.starts_with('-') {
+                return Some(arg.as_str());
+            }
         }
-    }
-    None
+        None
+    })
+}
+
+fn command_name(args: &[String]) -> Option<&str> {
+    command_words(args).next()
+}
+
+fn diary_lexical_mode(args: &[String]) -> bool {
+    // Values after -- are literal queries, never runtime routing flags.
+    let options=&args[..args.iter().position(|arg|arg=="--").unwrap_or(args.len())];
+    let modes:Vec<&str>=options.iter().enumerate().filter_map(|(index,arg)| {
+        if arg=="--mode" {Some(options.get(index+1).map(String::as_str).unwrap_or(""))}
+        else {arg.strip_prefix("--mode=")}
+    }).collect();
+    modes==["lexical"]
 }
 
 fn needs_inference(args: &[String]) -> bool {
     matches!(command_name(args), Some("remember" | "recall" | "related" | "reembed" | "classify" | "update"))
+        || (command_name(args) == Some("diary-search") && !diary_lexical_mode(args))
         || (command_name(args) == Some("model") && args.iter().any(|arg| arg == "probe"))
 }
 
@@ -2257,7 +2395,7 @@ pub(crate) fn force_stop_for_reset() -> Result<Option<u32>> {
 
 /// Only a refused connection permits startup; authentication and access failures
 /// leave the existing service untouched.
-fn probe_runtime() -> Result<Option<crate::net_rpc::Health>> {
+pub(crate) fn probe_runtime() -> Result<Option<crate::net_rpc::Health>> {
     match crate::net_rpc::health() {
         Ok(health) => Ok(Some(health)),
         Err(error)
@@ -2286,17 +2424,20 @@ pub(crate) fn ensure_daemon() -> Result<()> {
     ensure_daemon_locked()
 }
 
-fn runtime_matches_current(health: &crate::net_rpc::Health) -> Result<bool> {
+pub(crate) fn runtime_matches_current(health: &crate::net_rpc::Health) -> Result<bool> {
     let dest = crate::mcp::stable_bin_path();
     let src = std::env::current_exe().context("failed to locate the rsrs binary")?;
-    Ok(health.data_dir == respire::service::data_dir().display().to_string()
+    Ok(!health.data_dir.is_empty() && crate::mcp::same_path(std::path::Path::new(&health.data_dir), &respire::service::data_dir())
+        && crate::autostart::may_reuse_runtime(health)?
         && health.bin == env!("CARGO_PKG_VERSION")
         && crate::mcp::exe_matches_dest(&health.exe, &dest)
         && !health.inference_stalled()
         && !crate::mcp::bin_needs_refresh(&src, &dest).map_err(anyhow::Error::msg)?)
 }
 
-fn ensure_daemon_locked() -> Result<()> {
+pub(crate) fn ensure_daemon_locked() -> Result<()> {
+    if crate::autostart::ensure_managed_locked()? { return Ok(()); }
+    crate::autostart::check_direct_access()?;
     if let Some(health) = probe_runtime()? {
         if runtime_matches_current(&health)? {
             return Ok(());
@@ -2308,8 +2449,9 @@ fn ensure_daemon_locked() -> Result<()> {
         stop_occupant(health.pid)?;
     }
     let executable = crate::mcp::materialize_bin().map_err(anyhow::Error::msg)?;
+    crate::autostart::authorize_detached_boot_locked()?;
     let mut child =
-        respire_spawn::spawn_runtime(&executable).context("failed to start host runtime")?;
+        respire_spawn::spawn_runtime_with_boot_token(&executable, crate::autostart::lifecycle_boot_token().as_deref()).context("failed to start host runtime")?;
     let result = wait_daemon_ready(&mut child, &executable);
     if result.is_err() && child.try_wait()?.is_none() {
         // Do not leave a delayed startup racing the next lock holder.
@@ -2323,10 +2465,36 @@ fn ensure_daemon_locked() -> Result<()> {
     result
 }
 
-fn stop_occupant(pid: u32) -> Result<()> {
+// A shutdown can finish before its HTTP acknowledgement is flushed. Never
+// replay the request: accept only an independently confirmed stopped owner.
+fn confirm_stop_outcome(request: Result<()>, confirm: impl FnOnce() -> Result<()>) -> Result<()> {
+    match request {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if matches!(error.downcast_ref::<crate::runtime_error::RuntimeError>(),
+                Some(crate::runtime_error::RuntimeError::Transport(_))) && confirm().is_ok() {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+pub(crate) fn stop_occupant(pid: u32) -> Result<()> {
     let health = crate::net_rpc::health()?;
     anyhow::ensure!(health.pid == pid, "runtime owner changed before shutdown");
-    crate::net_rpc::request_stop()?;
+    confirm_stop_outcome(crate::net_rpc::request_stop(), || {
+        crate::net_rpc::wait_until_exited(pid)?;
+        crate::net_rpc::wait_until_down()
+    })?;
+    if crate::autostart::lifecycle_boot_token().is_some() {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while Instant::now() < deadline && crate::net_rpc::process_is_running(pid)? {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        anyhow::ensure!(!crate::net_rpc::process_is_running(pid)?, "managed runtime did not drain; maintenance remains paused without forcing database shutdown");
+    }
     if crate::net_rpc::wait_until_down().is_err() {
         // Reauthenticate before escalation; a different owner may have bound.
         if let Some(health) = probe_runtime()? {
@@ -2356,7 +2524,7 @@ fn wait_daemon_ready(child: &mut std::process::Child, executable: &std::path::Pa
                 health.pid == child.id()
                     && crate::mcp::exe_matches_dest(&health.exe, executable)
                     && health.bin == env!("CARGO_PKG_VERSION")
-                    && health.data_dir == respire::service::data_dir().display().to_string(),
+                    && !health.data_dir.is_empty() && crate::mcp::same_path(std::path::Path::new(&health.data_dir), &respire::service::data_dir()),
                 "runtime owner changed during startup"
             );
             return Ok(());
@@ -2375,6 +2543,46 @@ mod tests {
     use std::io::Read;
     use std::sync::atomic::Ordering;
 
+    #[test]
+    fn diary_inference_routing_honours_modes_and_literal_query_arguments() {
+        use clap::Parser;
+        for (args,inference) in [
+            (vec!["diary-search","q"],true),
+            (vec!["diary-search","q","--mode","lexical"],false),
+            (vec!["diary-search","--mode=lexical","q"],false),
+            (vec!["diary-search","--mode","hybrid","--","--mode=lexical"],true),
+            (vec!["diary-search","--","--mode=lexical"],true),
+            (vec!["diary-search","--mode","lexical","--","--mode=hybrid"],false),
+            (vec!["diary-fragment","--neighbors","1","--","s","f"],false),
+        ] {
+            let arguments:Vec<String>=args.iter().map(|s|(*s).to_owned()).collect();
+            assert_eq!(needs_inference(&arguments),inference,"{arguments:?}");
+            let parsed=crate::Cli::try_parse_from(std::iter::once("rsrs").chain(args)).unwrap();
+            if let Some(crate::Command::DiarySearch{query,mode,..})=parsed.command {
+                if query=="--mode=lexical" {assert_eq!(mode,"hybrid");}
+                if query=="--mode=hybrid" {assert_eq!(mode,"lexical");}
+            }
+        }
+    }
+
+    #[test]
+    fn shutdown_transport_requires_confirmed_exit_without_replay() {
+        use crate::runtime_error::RuntimeError;
+        assert!(confirm_stop_outcome(Err(RuntimeError::Transport("lost ack".into()).into()), || Ok(())).is_ok());
+        let rejected = confirm_stop_outcome(Err(RuntimeError::Transport("original lost ack".into()).into()), || anyhow::bail!("still alive"));
+        assert!(rejected.is_err_and(|error| error.to_string().contains("original lost ack")));
+        for error in [RuntimeError::Unauthorized, RuntimeError::Unavailable,
+            RuntimeError::TokenUnreadable("synthetic".into()),
+            RuntimeError::OutcomeUnknown { request_id: "synthetic".into(), detail: "unknown".into() }] {
+            let mut called = false;
+            assert!(confirm_stop_outcome(Err(error.into()), || { called = true; Ok(()) }).is_err());
+            assert!(!called, "non-transport failures must never become a successful stop");
+        }
+        let mut called = false;
+        assert!(confirm_stop_outcome(Ok(()), || { called = true; Ok(()) }).is_ok());
+        assert!(!called);
+    }
+
     fn req(method: &str, id: &str) -> RpcRequest {
         RpcRequest {
             v: PROTOCOL_V,
@@ -2382,7 +2590,28 @@ mod tests {
             method: method.to_owned(),
             args: Vec::new(),
             queue_wait_ms: None,
+            lifecycle: None,
         }
+    }
+
+    #[test]
+    fn supervised_drain_waits_past_legacy_deadline_until_work_finishes() -> Result<()> {
+        let busy=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (managed_tx,managed_rx)=mpsc::channel();
+        let work=busy.clone();
+        let managed=std::thread::spawn(move || {wait_for_drain(true,||work.load(Ordering::Acquire));let _=managed_tx.send(());});
+        let (legacy_tx,legacy_rx)=mpsc::channel();
+        let work=busy.clone();
+        let legacy=std::thread::spawn(move || {wait_for_drain(false,||work.load(Ordering::Acquire));let _=legacy_tx.send(());});
+        let legacy_result=legacy_rx.recv_timeout(Duration::from_secs(6));
+        let still_waiting=managed_rx.try_recv().is_err();
+        busy.store(false,Ordering::Release);
+        managed_rx.recv_timeout(Duration::from_secs(2))?;
+        managed.join().map_err(|_|anyhow::anyhow!("managed drain panicked"))?;
+        legacy.join().map_err(|_|anyhow::anyhow!("legacy drain panicked"))?;
+        anyhow::ensure!(legacy_result.is_ok() && still_waiting,
+            "supervised drain exited while work remained or legacy shutdown timing changed");
+        Ok(())
     }
 
     #[test]
@@ -2437,6 +2666,19 @@ mod tests {
         assert!(!is_exclusive(&["sync-history".into()]));
         assert!(!is_exclusive(&["diary".into()]));
         assert!(worker_limit() <= cpu_count());
+    }
+
+    #[test]
+    fn routing_value_flags_match_the_actual_cli_contract() {
+        use clap::CommandFactory;
+        let mut command = crate::Cli::command();
+        command.build();
+        let actual: std::collections::BTreeSet<_> = command.get_arguments()
+            .filter(|arg| arg.is_global_set() && arg.get_action().takes_values())
+            .filter_map(|arg| arg.get_long().map(|name| format!("--{name}")))
+            .collect();
+        let expected = GLOBAL_VALUE_FLAGS.iter().map(|flag| (*flag).to_owned()).collect();
+        assert_eq!(actual, expected, "new valued globals must update the shared argv classifier");
     }
 
     #[test]
@@ -2851,4 +3093,41 @@ mod tests {
         }
         Ok(())
     }
+    #[test]
+    fn diary_commit_rechecks_mode_generation_shutdown_and_lifecycle_ownership() -> Result<()> {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let root = tempfile::tempdir()?;
+        let previous = std::env::var_os("RSRS_DATA_DIR");
+        std::env::set_var("RSRS_DATA_DIR", root.path());
+        let generation = GENERATION.load(Ordering::Acquire);
+        let previous_stopping = STOPPING.swap(false, Ordering::AcqRel);
+        let result = (|| -> Result<()> {
+            let _operation = respire::model_progress::Operation::begin("index")?;
+            let mut writes = 0;
+            respire::service::set_workspace_mode("normal")?;
+            diary_commit(generation, &mut || { writes += 1; Ok(()) })?;
+            assert_eq!(writes, 1);
+            for mode in ["readonly", "off"] {
+                respire::service::set_workspace_mode(mode)?;
+                assert!(diary_commit(generation, &mut || { writes += 1; Ok(()) }).is_err());
+                assert_eq!(writes, 1);
+            }
+            respire::service::set_workspace_mode("normal")?;
+            assert!(diary_commit(generation.wrapping_add(1), &mut || { writes += 1; Ok(()) }).is_err());
+            STOPPING.store(true, Ordering::Release);
+            assert!(diary_commit(generation, &mut || { writes += 1; Ok(()) }).is_err());
+            STOPPING.store(false, Ordering::Release);
+            let lifecycle = crate::runtime_policy::takeover_lock()?;
+            assert!(diary_commit(generation, &mut || { writes += 1; Ok(()) }).is_err());
+            assert_eq!(writes, 1);
+            drop(lifecycle);
+            diary_commit(generation, &mut || { writes += 1; Ok(()) })?;
+            assert_eq!(writes, 2);
+            Ok(())
+        })();
+        STOPPING.store(previous_stopping, Ordering::Release);
+        match previous { Some(value) => std::env::set_var("RSRS_DATA_DIR", value), None => std::env::remove_var("RSRS_DATA_DIR") }
+        result
+    }
+
 }
