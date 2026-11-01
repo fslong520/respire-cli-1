@@ -182,6 +182,12 @@ test('source metadata optimization retains debug safety and only the CLI test-st
     writeFileSync(path.join(virtual,'Cargo.toml'),rootManifest.replace('codegen-units=1','codegen-units=2'));
     execFileSync(process.execPath,[script,'key','release',target],{cwd:virtual,env:keyEnv,stdio:'pipe'});
     assert.notEqual(readFileSync(path.join(virtual,'.rust-release-key'),'utf8'),beforeRootProfileChange,'actual virtual-root release profile changes must invalidate the collected key');
+    writeFileSync(path.join(directory,'Cargo.toml'),'[package]\nname="cache_fixture"\nversion="0.1.0"\nedition="2021"\n');
+    writeFileSync(path.join(directory,'Cargo.lock'),'version = 4\n[[package]]\nname = "cache_fixture"\nversion = "0.1.0"\n');
+    mkdirSync(path.join(directory,'src'));writeFileSync(path.join(directory,'src/main.rs'),'fn main() {}\n');
+    // Let Cargo establish target ownership before restoring cached dependencies.
+    execFileSync('cargo',['build','--release','--locked','--target',target,'--target-dir','target/ci'],{cwd:directory,stdio:'pipe'});
+    assert(readFileSync(path.join(directory,'target/ci/CACHEDIR.TAG'),'utf8').startsWith('Signature: 8a477f597d28d172789f06886806bc55'));
     const key=releaseKey(target,releaseIdentity);
     writeFileSync(path.join(directory,'.rust-release-key'),key+'\n');
     mkdirSync(path.join(directory,'.rust-release-cache/target/release/deps'),{recursive:true});
@@ -194,10 +200,6 @@ test('source metadata optimization retains debug safety and only the CLI test-st
     assert(Math.abs(statSync(releaseRestored).mtimeMs-stamp.getTime())<1);
     writeFileSync(path.join(directory,'.rust-release-cache/key'),'wrong');
     assert.throws(()=>execFileSync(process.execPath,[script,'restore','release',target],{cwd:directory,stdio:'pipe'}));
-    writeFileSync(path.join(directory,'Cargo.toml'),'[package]\nname="cache_fixture"\nversion="0.1.0"\nedition="2021"\n');
-    writeFileSync(path.join(directory,'Cargo.lock'),'version = 4\n[[package]]\nname = "cache_fixture"\nversion = "0.1.0"\n');
-    mkdirSync(path.join(directory,'src'));writeFileSync(path.join(directory,'src/main.rs'),'fn main() {}\n');
-    execFileSync('cargo',['build','--release','--locked','--target',target,'--target-dir','target/ci'],{cwd:directory,stdio:'pipe'});
     const cargoHome=path.join(directory,'cargo-home');
     mkdirSync(path.join(cargoHome,'registry/cache'),{recursive:true});
     writeFileSync(path.join(cargoHome,'credentials.toml'),'never-cache-this');

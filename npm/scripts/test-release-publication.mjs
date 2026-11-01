@@ -209,7 +209,8 @@ test('all Actions uploads, including both handshake receipts, retain evidence fo
       uploads++;
     }
   }
-  assert.equal(uploads, 48, 'preserve active evidence, registered consumer, verified platform copies and import proof');
+  // The release dependency cache adds one upload declaration to the existing evidence inventory.
+  assert.equal(uploads, 49, 'preserve active evidence, registered consumer, verified platform copies, import proof and release dependency cache');
   const crates = readFileSync(new URL('publish-crates.yml', root), 'utf8');
   assert.match(crates, /name: protocol-package-verification/);
   assert.doesNotMatch(crates, /name: sdk-package-verification/);

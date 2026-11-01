@@ -246,9 +246,9 @@ successful while its later scheduled full result remains pending or fails;
 report those states separately and never label critical success as full
 validation. Independent public installation verification also remains separate.
 
-When a DEV must pass full acceptance before publication, merge with
-`[manual-release]` to suppress automatic Release allocation while keeping push
-CLI CI enabled. Then dispatch Release for the exact merged source with
+When a DEV must pass full acceptance before publication, first merge the
+reviewed source while keeping push CLI CI enabled. Then manually dispatch
+Release for the exact merged source with
 `publish=true`, `full_regression_before_publish=true` and the requested unused
 `dev_version`. All required full gates must succeed before npm writes; no
 historical or pressure case is dropped. Normal critical stable and DEV releases

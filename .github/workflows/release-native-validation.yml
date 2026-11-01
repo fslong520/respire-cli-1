@@ -94,13 +94,25 @@ jobs:
             const deadline=Date.now()+45*60*1000;
             while(Date.now()<deadline){
               const current=read('');
-              if(current.id!==Number(run)||current.run_attempt!==attempt||current.head_sha!==process.env.GITHUB_SHA||current.status!=='in_progress')throw Error('Native producer run/source/attempt changed');
+              if(current.id!==Number(run))throw Error('Native producer run ID mismatch: expected '+run+', got '+current.id);
+              if(current.run_attempt!==attempt)throw Error('Native producer run attempt mismatch: expected '+attempt+', got '+current.run_attempt);
+              if(current.head_sha!==process.env.GITHUB_SHA)throw Error('Native producer workflow SHA mismatch: expected '+process.env.GITHUB_SHA+', got '+current.head_sha);
+              if(current.status==='queued'){
+                console.log('Native producer run is queued; waiting before reading producer jobs or artifacts');
+                await new Promise(resolve=>setTimeout(resolve,10000));continue;
+              }
+              if(current.status!=='in_progress')throw Error('Native producer run status refused: '+current.status);
               const page=read('/attempts/'+attempt+'/jobs?per_page=100');
               if(page.total_count!==page.jobs.length)throw Error('Incomplete producer job inventory');
               const jobs=page.jobs.filter(j=>j.name===producer);
               if(jobs.length>1)throw Error('Duplicate target producer');
               const job=jobs[0];
-              if(job&&(!Number.isSafeInteger(job.id)||job.id<=0||job.run_id!==Number(run)||job.run_attempt!==attempt||job.head_sha!==current.head_sha))throw Error('Target producer source/attempt identity differs');
+              if(job){
+                if(!Number.isSafeInteger(job.id)||job.id<=0)throw Error('Target producer job ID is invalid');
+                if(job.run_id!==Number(run))throw Error('Target producer run ID mismatch: expected '+run+', got '+job.run_id);
+                if(job.run_attempt!==attempt)throw Error('Target producer attempt mismatch: expected '+attempt+', got '+job.run_attempt);
+                if(job.head_sha!==current.head_sha)throw Error('Target producer workflow SHA mismatch: expected '+current.head_sha+', got '+job.head_sha);
+              }
               if(job?.status==='completed'&&job.conclusion!=='success')throw Error('Target producer concluded '+job.conclusion);
               if(job?.status==='completed'&&job.conclusion==='success'){
                 const inventory=read('/artifacts?per_page=100');
