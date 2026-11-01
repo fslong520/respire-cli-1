@@ -75,6 +75,28 @@ pub fn install_m3(mirror: Option<&str>) -> Result<InstallReport> {
     install_m3_inner(mirror)
 }
 
+/// Cheap runtime inventory for settings UIs. Presence/size is not a checksum or
+/// provider compatibility claim; inference and the installer still verify hashes.
+pub fn variant_inventory() -> Result<serde_json::Value> {
+    let directory = crate::memory::bge::resolve_model_dir().unwrap_or_else(|_| install_target_dir(None));
+    let baseline = model_files_present(&directory);
+    crate::memory::onnx::MODEL_VARIANTS.iter().map(|variant| {
+        let state = if baseline {
+            variant_file_state(&directory.join(crate::memory::onnx::variant_file_name(variant.name)), variant.size)?
+        } else { "baseline_missing" };
+        Ok(serde_json::json!({"name":variant.name,"size":variant.size,"state":state}))
+    }).collect::<Result<Vec<_>>>().map(serde_json::Value::from)
+}
+
+fn variant_file_state(path: &Path, expected_size: u64) -> Result<&'static str> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() && metadata.len() == expected_size => Ok("present"),
+        Ok(_) => Ok("invalid_size"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("missing"),
+        Err(error) => Err(error).context("read installed model state"),
+    }
+}
+
 /// Fetch one extra onnx variant (e.g. fp16 for GPU/NPU) into the model dir.
 /// Skips when the pinned file already verifies. Never removes other variants.
 pub fn install_variant(variant_name: &str, mirror: Option<&str>) -> Result<()> {
@@ -708,6 +730,18 @@ fn read_download(reader: &mut impl Read, buf: &mut [u8], url: &str) -> Result<us
 mod tests {
     use super::*;
     use anyhow::Result;
+
+    #[test]
+    fn picker_inventory_reports_presence_without_claiming_checksum_validation() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("weights");
+        assert_eq!(variant_file_state(&path, 3)?, "missing");
+        std::fs::write(&path, b"abc")?;
+        assert_eq!(variant_file_state(&path, 4)?, "invalid_size");
+        assert_eq!(variant_file_state(&path, 3)?, "present");
+        assert_eq!(variant_file_state(dir.path(), 3)?, "invalid_size");
+        Ok(())
+    }
 
     #[test]
     fn missing_explicit_cpu_variant_does_not_load_the_owned_quantized_container() -> Result<()> {

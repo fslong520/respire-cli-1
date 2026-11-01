@@ -17,6 +17,25 @@ flowchart LR
 | NPU | Windows, Apple Silicon | Explicit selection and compatible provider/hardware/model |
 
 Choose an engine in the TUI or run `rsrs model engine cpu|gpu|npu`.
+On the Models page, open **Choose engine and model weights** to draft an engine
+and one of `quantized`, `fp16`, `int8`, `uint8`, `q4`, or `q4f16`. Changing the
+draft engine retains the selected weights. **Back** or Escape discards the draft;
+**Save** asks for confirmation, resets the previous session and persists both
+settings through the runtime. The saved selection is read back before success is
+shown and survives restarting the CLI.
+
+Missing weights require **Install / verify selected weights** and a separate
+download confirmation showing the size; installing does not save the draft.
+The baseline model, tokenizer and CPU container may also be needed. File presence
+in this picker is a size check, not checksum or inference verification. The
+installer and model loader retain their checksum checks. After saving, use
+**Check inference** on the Models page. Available variant names do not guarantee
+that every provider or device supports every variant; GPU/NPU require compatible
+hardware and providers. Unsupported operating systems cannot save those engines
+from the picker. The equivalent command is
+`rsrs model engine cpu|gpu|npu --model VARIANT`; an engine-only change preserves an
+explicit saved variant.
+
 `RSRS_ENGINE` overrides the saved selection. Automatic selection is unsupported.
 Missing hardware and inference failures are reported without switching engines.
 Provider names do not prove execution of every operation on the requested device.

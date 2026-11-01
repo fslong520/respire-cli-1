@@ -24,6 +24,7 @@ use serde_json::Value;
 use crate::i18n::{self, Lang};
 
 mod model_task;
+mod model_weights;
 mod recall_api;
 mod recall_test;
 mod text_input;
@@ -54,6 +55,8 @@ enum ConfirmKind {
     CancelModel(String),
     RestartM3(String, String),
     Engine(String),
+    Weights(String, String),
+    InstallVariant(String),
     InstallEngines,
     ProbeEngine,
     RecallMode(String),
@@ -66,6 +69,8 @@ enum Overlay {
     None,
     RecallApi(recall_api::Form),
     ModelMirror(text_input::Input),
+    ModelWeights(model_weights::Form),
+    SavingWeights,
     RecallTest(recall_test::Form),
     ModelTask(model_task::Task),
     Confirm {
@@ -98,6 +103,7 @@ struct Live {
     index: Value,
     model_progress: Value,
     engine: String,
+    model_settings: Value,
     connected: bool,
     error: String,
     notice: String,
@@ -138,9 +144,12 @@ struct App {
     manager_pick: usize,
     shared: Arc<Mutex<Live>>,
     outcome: Arc<Mutex<Option<String>>>,
+    model_outcome: Arc<Mutex<Option<String>>>,
 }
 
 // Odd revisions mean a write is in flight; changed revisions invalidate old reads.
+static MODEL_REVISION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 static INJECT_REVISION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 pub fn run() -> Result<()> {
@@ -182,6 +191,15 @@ pub fn run() -> Result<()> {
             ));
         }
         if let Ok(mut slot) = app.outcome.lock() {
+            if let Some(message) = slot.take() {
+                // An older background action must not dismiss an in-flight save.
+                if !matches!(app.overlay, Overlay::SavingWeights) {
+                    app.overlay = Overlay::None;
+                    app.set_notice(message);
+                }
+            }
+        }
+        if let Ok(mut slot) = app.model_outcome.lock() {
             if let Some(message) = slot.take() {
                 app.overlay = Overlay::None;
                 app.set_notice(message);
@@ -294,6 +312,7 @@ impl Live {
             index: Value::Null,
             model_progress: Value::Null,
             engine: String::new(),
+            model_settings: Value::Null,
             connected: false,
             error: String::new(),
             notice: String::new(),
@@ -329,6 +348,7 @@ impl Live {
             index: self.index.clone(),
             model_progress: self.model_progress.clone(),
             engine: self.engine.clone(),
+            model_settings: self.model_settings.clone(),
             connected: self.connected,
             error: self.error.clone(),
             notice: self.notice.clone(),
@@ -395,6 +415,7 @@ impl App {
             manager_pick: 0,
             shared,
             outcome: Arc::new(Mutex::new(None)),
+            model_outcome: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -535,6 +556,7 @@ fn refresh_loop(stop: Arc<AtomicBool>, shared: Arc<Mutex<Live>>) {
             next.accounts = guard.accounts.iter().map(AccountRow::clone_row).collect();
             next.doctor = guard.doctor.clone();
             next.engine = guard.engine.clone();
+            next.model_settings = guard.model_settings.clone();
             next.fresh = guard.fresh;
             next.stale = guard.stale;
             next.missing = guard.missing;
@@ -598,11 +620,17 @@ fn refresh_details_loop(stop: Arc<AtomicBool>, shared: Arc<Mutex<Live>>) {
                 )).collect();
             }
         }
-        if let Ok(envelope) = retrieval_action(&["model", "engine"]) {
+        let model_revision = MODEL_REVISION.load(Ordering::Acquire);
+        let model_read = retrieval_action(&["model", "engine"]).and_then(checked_result);
+        if let Ok(envelope) = &model_read {
             next.engine = envelope["summary"]["engine"].as_str().unwrap_or("").to_owned();
+            next.model_settings = envelope["summary"].clone();
         }
         if let Ok(mut guard) = shared.lock() {
-            guard.engine = next.engine;
+            if model_read.is_ok() && model_revision % 2 == 0 && MODEL_REVISION.load(Ordering::Acquire) == model_revision {
+                guard.engine = next.engine;
+                guard.model_settings = next.model_settings;
+            }
             guard.accounts = next.accounts;
             guard.doctor = next.doctor;
         }
@@ -610,6 +638,12 @@ fn refresh_details_loop(stop: Arc<AtomicBool>, shared: Arc<Mutex<Live>>) {
 }
 
 fn handle(app: &mut App, code: KeyCode) -> bool {
+    if matches!(app.overlay, Overlay::SavingWeights) { return false; }
+    if matches!(app.overlay, Overlay::ModelWeights(_)) {
+        if code == KeyCode::Char('7') { toggle_lang(app); return false; }
+        model_weights_key(app, code);
+        return false;
+    }
     if let Overlay::ModelTask(task) = &app.overlay {
         if matches!(code, KeyCode::Esc | KeyCode::Char('c' | 'C')) {
             task.cancel.store(true, Ordering::Release);
@@ -650,7 +684,7 @@ fn handle(app: &mut App, code: KeyCode) -> bool {
         Page::Model => list_key(
             app,
             code,
-            12 + model_engines().len() + usize::from(cfg!(windows)),
+            13 + model_engines().len() + usize::from(cfg!(windows)),
             |app, code| model_key(app, code),
         ),
         Page::Workspace => workspace_key(app, code),
@@ -1064,12 +1098,73 @@ fn model_key(app: &mut App, code: KeyCode) {
                         ask(app, t("取消当前任务并从所选下载源重新下载未完成文件？", "Cancel the current task and redownload unfinished files from the selected source?"), ConfirmKind::RestartM3(id, selected_model_mirror()));
                     }
                     Some(7) => app.overlay = Overlay::RecallTest(recall_test::Form::new("benchmark")),
-                    Some(8) => app.page = Page::Home,
+                    Some(8) => app.overlay = Overlay::ModelWeights(model_weights::Form::new(&app.live.model_settings)),
+                    Some(9) => app.page = Page::Home,
                     _ => {}
                 }
             }
         }
     }
+}
+
+fn model_weights_key(app: &mut App, code: KeyCode) {
+    let Overlay::ModelWeights(form) = &mut app.overlay else { return; };
+    let action = form.key(code);
+    let (engine, variant) = form.selection();
+    match action {
+        Some(model_weights::Action::Back) => app.overlay = Overlay::None,
+        Some(model_weights::Action::Save) => {
+            if !model_engines().contains(&engine) {
+                app.set_notice(t("此系统不支持该引擎；请选择 CPU", "This OS does not support that engine; choose CPU"));
+            } else if !model_weights::Form::present(&app.live.model_settings, variant) {
+                app.set_notice(t("请先安装 / 校验所选权重；不会自动下载或保存", "Install / verify the selected weights first; nothing was downloaded or saved"));
+            } else {
+                ask(app, t(&format!("保存 {engine} / {variant}？不会下载；此操作不代表推理验证通过。"),
+                    &format!("Save {engine} / {variant}? No download; this does not establish successful inference.")),
+                    ConfirmKind::Weights(engine.to_owned(), variant.to_owned()));
+            }
+        }
+        Some(model_weights::Action::Install) => {
+            if let Ok(selected) = respire::memory::onnx::parse_variant(variant) {
+                let mib = selected.size as f64 / 1048576.0;
+                ask(app, t(&format!("安装 / 校验 {variant}（{mib:.0} MiB）？基础模型及 CPU 容器可能另需各 543 MiB，tokenizer 约 17 MiB；已验证文件跳过。只下载，不保存选择。"),
+                    &format!("Install / verify {variant} ({mib:.0} MiB)? Baseline and CPU container may each need another 543 MiB plus a 17 MiB tokenizer; verified files are skipped. Downloads only; selection is not saved.")),
+                    ConfirmKind::InstallVariant(variant.to_owned()));
+            }
+        }
+        None => {}
+    }
+}
+
+fn save_model_settings_with(engine: &str, variant: Option<&str>,
+    mut action: impl FnMut(&[&str]) -> Result<Value, String>) -> Result<Value, String> {
+    let mut args = vec!["model", "engine", engine];
+    if let Some(variant) = variant { args.extend(["--model", variant]); }
+    checked_result(action(&args)?)?;
+    let read_back = checked_result(action(&["model", "engine"])?)?;
+    let summary = &read_back["summary"];
+    if summary["engine"] != engine || variant.is_some_and(|wanted| summary["model"] != wanted) {
+        return Err(t("runtime 回读与选择不一致；请检查环境变量覆盖并刷新", "Runtime read-back differs from selection; check environment overrides and refresh"));
+    }
+    Ok(summary.clone())
+}
+
+fn save_model_settings(shared: &Arc<Mutex<Live>>, engine: &str, variant: Option<&str>) -> Result<String, String> {
+    let settings = save_model_settings_with(engine, variant, retrieval_action)?;
+    if let Ok(mut live) = shared.lock() {
+        live.engine = settings["engine"].as_str().unwrap_or("").to_owned();
+        live.model_settings = settings;
+    }
+    Ok(t("设置已保存并回读；下次加载生效，请运行推理验证", "Settings saved and read back; applied on next model load. Run Check inference."))
+}
+
+fn probe_notice(value: Value) -> Result<String, String> {
+    let result = &value["summary"];
+    if result["ready"] != true || !result["cosine"].as_f64().is_some_and(|v| v >= 0.99) {
+        return Err(t("推理验证回执不完整，未报告验证成功", "Incomplete inference receipt; validation was not accepted"));
+    }
+    Ok(format!("{}: {}  cosine {}  {} ms", t("数值验证通过（不代表实测算子硬件分配）", "Numerical check passed (node placement not measured)"),
+        result["selected"].as_str().unwrap_or("unknown"), result["cosine"], result["elapsed_ms"]))
 }
 
 fn workspace_key(app: &mut App, code: KeyCode) -> bool {
@@ -1196,7 +1291,7 @@ fn confirm_key(app: &mut App, code: KeyCode) -> bool {
 fn run_confirm(app: &mut App, kind: ConfirmKind) {
     let task = matches!(
         &kind,
-        ConfirmKind::InstallM3
+        ConfirmKind::InstallM3 | ConfirmKind::InstallVariant(_)
     )
     .then(model_task::Task::start);
     let cancel = task.as_ref().map(|task| Arc::clone(&task.cancel));
@@ -1218,6 +1313,8 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
         ConfirmKind::UninstallM3 => t("正在卸载 BGE-M3", "Uninstalling BGE-M3"),
         ConfirmKind::CancelModel(_) => t("正在取消模型任务，等待当前网络读取结束", "Cancelling model task; waiting for the current network read"),
         ConfirmKind::RestartM3(_, _) => t("正在取消旧任务并重新安排下载", "Cancelling the old task and scheduling a new download"),
+        ConfirmKind::Weights(_, _) => t("正在保存并回读模型选择", "Saving and reading back model selection"),
+        ConfirmKind::InstallVariant(_) => t("正在安装或校验所选权重", "Installing or verifying selected weights"),
         ConfirmKind::Engine(_) => t("正在保存推理引擎", "Saving inference engine"),
         ConfirmKind::InstallEngines => t("正在下载 NPU 推理引擎", "Downloading NPU providers"),
         ConfirmKind::ProbeEngine => t("正在验证推理引擎", "Checking inference engine"),
@@ -1229,8 +1326,14 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
             &format!("Updating {spec} with {tool}"),
         ),
     };
+    let changing_model = matches!(&kind, ConfirmKind::Engine(_) | ConfirmKind::Weights(_, _));
+    if changing_model {
+        app.overlay = Overlay::SavingWeights;
+        MODEL_REVISION.fetch_add(1, Ordering::AcqRel);
+    }
     app.set_notice(label);
-    let slot = Arc::clone(&app.outcome);
+    let shared = Arc::clone(&app.shared);
+    let slot = Arc::clone(if changing_model { &app.model_outcome } else { &app.outcome });
     std::thread::spawn(move || {
         let model_action = |action: &[&str]| {
             if cancel
@@ -1263,12 +1366,11 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
             ConfirmKind::UninstallM3 => {
                 rpc(&["model", "uninstall-m3"]).map(|_| t("BGE-M3 已卸载", "BGE-M3 uninstalled"))
             }
-            ConfirmKind::Engine(engine) => rpc(&["model", "engine", &engine]).map(|_| {
-                t(
-                    "推理引擎已保存，下次加载模型生效",
-                    "Engine saved; applies on next model load",
-                )
-            }),
+            ConfirmKind::Engine(engine) => save_model_settings(&shared, &engine, None),
+            ConfirmKind::Weights(engine, variant) => save_model_settings(&shared, &engine, Some(&variant)),
+            ConfirmKind::InstallVariant(variant) => model_action(&["model", "install-m3", "--model", &variant,
+                "--mirror", &selected_model_mirror()]).map(|_| t(
+                    "权重文件处理完成；请重新打开选择页保存选择", "Weight files ready; reopen the picker to save your selection")),
             ConfirmKind::RecallMode(mode) => {
                 retrieval_action(&["agent-config", "--set", &format!("recall_mode={mode}")]).map(
                     |_| {
@@ -1288,15 +1390,7 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
                         .unwrap_or_default()
                 )
             }),
-            ConfirmKind::ProbeEngine => rpc(&["model", "probe"]).map(|v| {
-                let result = &v["summary"];
-                format!(
-                    "{}: {}  {} ms",
-                    t("验证通过", "Verified"),
-                    result["selected"].as_str().unwrap_or("unknown"),
-                    result["elapsed_ms"]
-                )
-            }),
+            ConfirmKind::ProbeEngine => retrieval_action(&["model", "probe"]).and_then(probe_notice),
             ConfirmKind::Workspace(mode) => set_workspace(&mode),
             ConfirmKind::Autosync(on) => {
                 let flag = if on { "true" } else { "false" };
@@ -1304,6 +1398,7 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
             }
             ConfirmKind::Update(tool, spec) => run_package_update(&tool, &spec),
         };
+        if changing_model { MODEL_REVISION.fetch_add(1, Ordering::AcqRel); }
         let message = match result {
             Ok(text) => text,
             Err(error) => error,
@@ -1595,30 +1690,12 @@ fn draw(frame: &mut Frame, app: &App) {
             Page::Web => web_body(app),
         }
     };
-    // Account for wrapped diagnostics when keeping a menu selection visible.
     if matches!(app.overlay, Overlay::None) {
-        let height = chunks[0].height.saturating_sub(3) as usize;
-        let width = usize::from(chunks[0].width.saturating_sub(2)).max(1);
-        let rows = |line: &Line<'_>| line.width().max(1).div_ceil(width);
-        let selected = body.iter().position(|line| {
-            line.spans
-                .iter()
-                .any(|span| span.style.add_modifier.contains(Modifier::REVERSED))
-        });
-        if let Some(selected) = selected {
-            if body[..selected].iter().map(rows).sum::<usize>() >= height.saturating_sub(2) {
-                let mut start = selected;
-                let mut visible = rows(&body[selected]);
-                while start > 0 && visible + rows(&body[start - 1]) <= height / 2 {
-                    start -= 1;
-                    visible += rows(&body[start]);
-                }
-                body.drain(..start);
-            }
-        }
+        keep_selection_visible(&mut body, chunks[0]);
     }
     let mut lines = vec![banner()];
-    if let Some(extra) = overlay_lines(app) {
+    if let Some(mut extra) = overlay_lines(app) {
+        if matches!(app.overlay, Overlay::ModelWeights(_)) { keep_selection_visible(&mut extra, chunks[0]); }
         // Confirmation and edit controls must not be clipped below a long page body.
         lines.extend(extra);
     } else {
@@ -1681,6 +1758,29 @@ fn draw(frame: &mut Frame, app: &App) {
         ),
         chunks[1],
     );
+}
+
+fn keep_selection_visible(body: &mut Vec<Line<'static>>, area: Rect) {
+    let height = area.height.saturating_sub(3) as usize;
+    let width = usize::from(area.width.saturating_sub(2)).max(1);
+    let rows = |line: &Line<'_>| line.width().max(1).div_ceil(width);
+    let selected = body.iter().position(|line| {
+        line.spans
+            .iter()
+            .any(|span| span.style.add_modifier.contains(Modifier::REVERSED))
+    });
+    if let Some(selected) = selected {
+        if body[..selected].iter().map(rows).sum::<usize>() >= height.saturating_sub(2) {
+            let mut start = selected;
+            let mut visible = rows(&body[selected]);
+            while start > 0 && visible + rows(&body[start - 1]) <= height / 2 {
+                start -= 1;
+                visible += rows(&body[start]);
+            }
+            body.drain(..start);
+        }
+    }
+
 }
 
 fn home_body(app: &App, inner: usize) -> Vec<Line<'static>> {
@@ -2150,8 +2250,8 @@ fn model_body(app: &App) -> Vec<Line<'static>> {
         ),
         choice(app.cursor == 2, format!("{}: {}", t("下载源（回车选择）", "Download source (Enter to choose)"), selected_model_mirror())),
         line(format!(
-            "{}: {engine}",
-            t("当前推理设置", "Inference setting")
+            "{}: {engine} / {}",
+            t("当前推理设置", "Inference setting"), app.live.model_settings["model"].as_str().unwrap_or("unknown")
         )),
     ];
     for (index, engine) in model_engines().iter().enumerate() {
@@ -2230,7 +2330,8 @@ fn model_body(app: &App) -> Vec<Line<'static>> {
     lines.push(choice(app.cursor == index + 6, t("取消当前模型任务", "Cancel current model task")));
     lines.push(choice(app.cursor == index + 7, t("从所选下载源重新下载", "Restart download from selected source")));
     lines.push(choice(app.cursor == index + 8, t("推理 / Recall Benchmark", "Inference / Recall Benchmark")));
-    lines.push(choice(app.cursor == index + 9, t("0  返回", "0  Back")));
+    lines.push(choice(app.cursor == index + 9, t("选择引擎与模型权重…", "Choose engine and model weights…")));
+    lines.push(choice(app.cursor == index + 10, t("0  返回", "0  Back")));
     lines
 }
 
@@ -2332,6 +2433,80 @@ mod model_menu_tests {
     use super::*;
 
     #[test]
+    fn small_terminal_keeps_weight_actions_visible() -> Result<()> {
+        let shared = Arc::new(Mutex::new(Live::empty()));
+        let mut app = App::new(shared);
+        app.live.connected = true;
+        app.page = Page::Model;
+        let mut form = model_weights::Form::new(&serde_json::json!({"engine":"cpu","model":"quantized"}));
+        form.cursor = respire::memory::onnx::MODEL_VARIANTS.len() + 1;
+        app.overlay = Overlay::ModelWeights(form);
+        let backend = ratatui::backend::TestBackend::new(70, 20);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.draw(|frame| draw(frame, &app))?;
+        let screen = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect::<String>();
+        assert!(screen.contains("Save engine") || screen.contains("保存引擎"), "{screen}");
+        Ok(())
+    }
+
+    #[test]
+    fn selection_commands_check_errors_read_back_and_always_retire_the_session() -> Result<()> {
+        let mut calls = Vec::new();
+        let settings = serde_json::json!({"engine":"cpu","model":"fp16","variants":[]});
+        let actual = save_model_settings_with("cpu", Some("fp16"), |args| {
+            calls.push(args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+            Ok(serde_json::json!({"status":"ok","summary":settings}))
+        }).map_err(anyhow::Error::msg)?;
+        assert_eq!(actual, settings);
+        assert_eq!(calls, vec![vec!["model","engine","cpu","--model","fp16"], vec!["model","engine"]]);
+        let mut failures = 0;
+        assert!(save_model_settings_with("cpu", Some("fp16"), |_| {
+            failures += 1;
+            Ok(serde_json::json!({"status":"fail","errors":["reset failed"]}))
+        }).is_err());
+        assert_eq!(failures, 1);
+        assert!(save_model_settings_with("gpu", Some("fp16"), |_| Ok(
+            serde_json::json!({"status":"ok","summary":{"engine":"cpu","model":"quantized"}}))).is_err());
+        assert!(probe_notice(serde_json::json!({"summary":{"ready":false}})).is_err());
+        assert!(probe_notice(serde_json::json!({"summary":{"ready":true}})).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn picker_cancel_missing_weights_and_download_confirmation_do_not_write() -> Result<()> {
+        let shared = Arc::new(Mutex::new(Live::empty()));
+        let mut app = App::new(shared);
+        app.live.connected = true;
+        app.live.model_settings = serde_json::json!({"engine":"cpu","model":"fp16", "variants":[]});
+        app.overlay = Overlay::ModelWeights(model_weights::Form::new(&app.live.model_settings));
+        assert!(!handle(&mut app, KeyCode::Esc));
+        assert!(matches!(app.overlay, Overlay::None));
+        let mut form = model_weights::Form::new(&app.live.model_settings);
+        form.cursor = respire::memory::onnx::MODEL_VARIANTS.len() + 1;
+        app.overlay = Overlay::ModelWeights(form);
+        model_weights_key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.overlay, Overlay::ModelWeights(_)), "missing weights must not be saved");
+        app.live.model_settings["variants"] = serde_json::json!([{"name":"fp16","state":"present"}]);
+        model_weights_key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.overlay, Overlay::Confirm { cursor:1, kind:ConfirmKind::Weights(_, _), .. }));
+        confirm_key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.overlay, Overlay::None));
+        let mut form = model_weights::Form::new(&app.live.model_settings);
+        form.cursor = respire::memory::onnx::MODEL_VARIANTS.len() + 2;
+        app.overlay = Overlay::ModelWeights(form);
+        model_weights_key(&mut app, KeyCode::Enter);
+        let Overlay::Confirm { text, cursor:1, kind:ConfirmKind::InstallVariant(name) } = &app.overlay else {
+            anyhow::bail!("download must require confirmation defaulting to cancel");
+        };
+        assert_eq!(name, "fp16");
+        assert!(text.contains("543 MiB"));
+        confirm_key(&mut app, KeyCode::Enter);
+        assert!(app.outcome.lock().map_err(|e| anyhow::anyhow!("{e}"))?.is_none());
+        assert_eq!(app.live.model_settings["model"], "fp16");
+        Ok(())
+    }
+
+    #[test]
     fn mirror_cancel_restart_keys_and_live_progress_match_the_menu() -> anyhow::Result<()> {
         let _lock = crate::TEST_ENV_LOCK.lock().map_err(|error| anyhow::anyhow!("{error}"))?;
         let dir = tempfile::tempdir()?;
@@ -2386,6 +2561,10 @@ mod model_menu_tests {
             app.overlay = Overlay::None;
             app.cursor += 1;
             model_key(&mut app, KeyCode::Enter);
+            assert!(matches!(app.overlay, Overlay::ModelWeights(_)));
+            app.overlay = Overlay::None;
+            app.cursor += 1;
+            model_key(&mut app, KeyCode::Enter);
             assert!(matches!(app.page, Page::Home));
             Ok(())
         })();
@@ -2405,6 +2584,8 @@ fn workspace_label(mode: &str) -> String {
 fn overlay_lines(app: &App) -> Option<Vec<Line<'static>>> {
     match &app.overlay {
         Overlay::None => None,
+        Overlay::ModelWeights(form) => Some(form.lines(&app.live.model_settings)),
+        Overlay::SavingWeights => Some(vec![line(t("正在保存并回读设置；提交期间请等待", "Saving and reading back settings; please wait for the commit"))]),
         Overlay::ModelMirror(input) => {
             let mut lines = vec![line(t("BGE-M3 下载源", "BGE-M3 download source"))];
             lines.extend(respire::model_install::MIRRORS.iter().map(|mirror| choice(input.text == *mirror, (*mirror).to_owned())));

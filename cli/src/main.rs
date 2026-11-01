@@ -7366,22 +7366,22 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 }
                 ModelAction::Engine { engine, model } => {
                     use respire::memory::onnx;
-                    if let Some(model) = model.as_deref() {
-                        onnx::parse_variant(model)?;
-                        onnx::save_model_variant(model)?;
-                    }
                     if let Some(engine) = engine {
-                        onnx::save_engine(onnx::Engine::parse(engine)?)?;
+                        onnx::save_engine_with_variant(onnx::Engine::parse(engine)?, model.as_deref())?;
                         *EMBEDDER_SLOT
                             .lock()
                             .map_err(|_| anyhow!("embedder cache poisoned"))? = None;
+                    } else if let Some(model) = model.as_deref() {
+                        onnx::save_model_variant(model)?;
+                        *EMBEDDER_SLOT.lock().map_err(|_| anyhow!("embedder cache poisoned"))? = None;
                     }
                     let engine = onnx::configured_engine()?;
                     emit_result(ResultEnvelope::new(
                         "model",
                         OutputStatus::Ok,
                         serde_json::json!({"engine":engine,
-                            "model":onnx::configured_variant(engine)?.name}),
+                            "model":onnx::configured_variant(engine)?.name,
+                            "variants":respire::model_install::variant_inventory()?}),
                         vec![],
                     ))?;
                     Ok(())
