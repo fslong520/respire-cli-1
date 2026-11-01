@@ -16,24 +16,45 @@ New releases target Windows x64 and ARM64, Linux x64 and ARM64 (GNU and musl), a
 Windows ARM64 builds and migration checks require native ARM64 runners. Historical
 published assets remain available; Intel macOS was already unsupported.
 The paired Core SDK still validates its own seven-target compatibility contract.
+All seven CLI SDK pins bind SDK `1.0.2-dev.14` and its per-target digests in
+`sdk/core-sdk.lock.json`.
 
-DEV gates: exact-source workspace unit tests and existing coverage checks, one Release build for each of six targets, native executable startup, real quantized CPU inference on macOS, pinned SDK digests, and consistent artifacts for all seven scoped npm packages.
+Normal DEV and stable publication use the `critical` validation profile. It
+requires exact-source workspace tests, CLI 90% coverage and packaging/workflow/
+fixture contracts across all three source CI lanes, seven Release builds, and
+seven native startup/real CPU inference/latest applicable formal-stable upgrade
+checks. API regression, pinned SDK digests, and consistent artifacts for all
+eight scoped npm packages remain required. The public alias makes nine npm
+packages in total. Byte, source, dependency, receipt and immutable-version fence
+checks still apply before submission.
+
+The `full` profile additionally requires all historical upgrades, long resident
+stress, six cloud sweeps, three native migration fixtures and three migration
+join gates. It retains the API gate and all critical build/source protections.
+Full regression runs on the scheduled/manual path; an ordinary critical release
+does not claim those checks ran. `full_regression_before_publish=true` explicitly
+forces the full profile for compatibility with older callers.
+Manual Release exposes `validation_profile=critical|full`, defaulting to
+`critical`; the legacy full flag overrides that selection. The daily
+`release-full-regression.yml` entry dispatches Release with `publish=false`,
+`validation_profile=full` and the legacy full flag. Its dispatch success is not
+regression success; use the dispatched run's actual full results and receipts.
 
 `rsrs-cli` is the primary public npm install entry. Protocol 2 separates two
 states; neither state can substitute for the other:
 
-- **accepted**: all six platform packages, the scoped umbrella and `rsrs-cli`
+- **accepted**: all seven platform packages, the scoped umbrella and `rsrs-cli`
   have explicit successful npm submission acknowledgements, or their existing
   exact public bytes have been confirmed. Local pack SHA-512/SHA-1, package
   versions and exact dependencies remain mandatory. The umbrella follows all
   platform acknowledgements; alias follows the scoped receipt. The Release
   becomes public only after the exact alias publisher job succeeds, all required
-  acknowledgements exist, and the source attempt, tag and twelve assets match.
+  acknowledgements exist, and the source attempt, tag and twenty-one assets match.
 - **verified**: the separate `Verify public npm publication` workflow confirms
   public metadata, install-index resolution and tarball digests, then performs
-  an isolated Linux x64 GNU public install. It checks alias/scoped/native
+  isolated Linux x64 GNU and native Linux ARM64 GNU/musl public installs. They check alias/scoped/native
   versions, the native binary hash, `--version` and `--help`. This proves the
-  GNU install only; it does not claim native installation on other systems.
+  three Linux routes only; it does not claim public installation on other systems.
 
 `scoped-accepted-RUN-ATTEMPT` and `alias-accepted-RUN-ATTEMPT-CHILD-ATTEMPT`
 receipts bind the repository, workflow, selected source SHA (which may differ
@@ -66,16 +87,33 @@ changes. DEV uses `dev`, stable uses `latest`, and tag rollback remains forbidde
 A failed required package prevents overall publication success; partial accepted
 versions remain immutable and the Release remains draft.
 
-The publication target is ten minutes from the publication trigger to a public
-Release and all required npm acknowledgements. Registry/CDN propagation and
-public installation are measured separately and do not block that state. The
-accepted report records the actual Release run creation and acceptance times;
-this is not a claim that validation, runner queues or external npm latency fit
-ten minutes. Also report source-to-complete-validation time and, if validation
-is prepared ahead, the separate ready-artifact-to-publication interval. Only
-exact merged source/version/platform/toolchain/SDK-lock/content-bound validation
-may be reused; different or untrusted PR artifacts cannot authorize publication.
-No measured ten-minute result is claimed by this protocol change alone.
+The user-confirmed target is **five minutes from commit/CI trigger or an explicit
+release trigger to successful npm submission of every required package**. Count
+the applicable source CI, runner queues, build, validation, packaging and npm
+submission work. Do not start the clock at publication-ready or hide preparation
+and validation before it. Report those earlier stages separately when they ran
+before a manual release trigger; a promotion-only result does not prove this
+end-to-end target.
+
+Normal success requires all nine exact-package npm acknowledgements: exit code
+zero, no spawn error and no signal. It does not wait for the npm web page, search,
+registry/install-index propagation or public installation. GitHub Release
+finalization and the independent public verifier retain their own results and
+timings; they do not extend the npm-ACK SLA. A failed or unknown submission remains
+an exception, not a successful ACK. Source, local bytes, dependencies, active
+attempts, journals, immutable-version ownership and fences remain mandatory.
+
+Use checkable service events for timing bounds and retain each raw ACK timestamp.
+If clocks disagree, report the affected duration as unavailable rather than
+compensating timestamps or claiming a five-minute result. Only exact merged
+source/version/platform/toolchain/SDK-lock/content-bound validation may be reused;
+different or untrusted PR artifacts cannot authorize publication.
+
+Baseline `41292330463/1` took **2060.115 seconds** from trigger to nine ACKs and
+**248.115 seconds** from validation-ready to nine ACKs. Its later public install
+verification is outside the success boundary. Five-minute end-to-end performance
+is a target, **not an achieved result**; code changes and simulated concurrency
+tests alone do not establish it.
 
 To resume that same version, rerun the failed publication job only while its
 original plan, build artifacts and required receipts remain available within the
@@ -161,17 +199,70 @@ cleanup is not permission to delete Release assets or npm versions.
 
 Only version allocation and publication share a serial lock. Allocation reserves the DEV number in an unpublished draft. The existing version script counts drafts to prevent collisions. Failed drafts remain available for diagnosis. Full regression does not hold this lock. Workflow or documentation changes alone do not publish a DEV.
 
-Four-target builds run in Release. The separate compile matrix is manual. CLI tests run once through the existing coverage command; other workspace tests run separately. musl builds reuse the existing cache. macOS reuses the model cache while still checking model files and performing real inference.
+Seven-target Release builds produce a native binary, runtime bundle and build
+metadata per target: twenty-one assets. The separate optional source compile
+matrix remains manual. CLI coverage checks and other workspace tests retain
+their existing cases. musl builds reuse the existing cache; model caches still
+require file validation and actual inference. No profile permits replacing the
+candidate's real tests with cached success from another source or binary.
+Release compilation caches contain dependency outputs only. Keys are collected
+before ephemeral version rewriting and bind the workspace profiles, dependency
+lock, target, actual toolchain/container, SDK and compiler flags. Cache misses
+still build and validate the candidate. Hot hits skip cache archive preparation;
+cold archive preparation and the independent post-run writer are best effort.
+Their failure cannot substitute for or invalidate a product check. Cold-cache
+preparation can still add time before the producer job ends; its cost and actual
+cross-platform hits remain part of hosted performance measurement.
 
-Historical upgrades on six targets, full CLI regression on three systems, and DEV API regression run independently. They verify source, version, and digests of the original build artifacts without compiling again. They do not block DEV publication. Report failures; do not declare a DEV fully validated until these checks succeed.
+`scripts/test-published-upgrades.py --profile critical` selects the latest
+applicable formal stable by numeric version for the current target. Only the
+explicit historical platform gaps permit selecting an older version; a missing
+or partial asset set outside that policy fails closed. No applicable formal
+stable also fails. The selected case still exercises real model inference,
+owned-runtime/worker isolation, hash checks, old HTTP RPC compatibility and the
+complete main -> alternate -> main sequence. It never reuses cached profiles,
+sessions, tokens or keyring material.
 
-Stable publication waits for successful historical upgrades on all six targets, all five system regressions, and API regression. Failed, cancelled, skipped, or missing results block publication. The upgrade script discovers every stable release from 1.0.6 onward. There is no stable 1.0.6 artifact, so the actual historical DEV baseline is also retained. Each new stable release automatically joins future upgrade validation.
+`--profile full` is the upgrade script's backward-compatible default. It
+discovers every stable release from 1.0.6 onward and verifies the npm/GitHub
+inventory. There is no formal stable 1.0.6 artifact, so its actual historical DEV
+baseline remains required, as does the explicit 1.0.10 draft baseline. The
+recorded baseline had 77 platform/version inventory rows: 71 applicable real
+upgrade cases and six documented platform gaps. These are observed counts,
+not a fixed future cap. Newly published stable sources automatically join the
+full inventory; missing artifacts are not a general skip rule.
 
-Manual Release validation runs all native upgrade checks by default. After DEV publication, verify the public install, exact platform package versions, runtime status, and actual regressions for the related issues. Never count unexecuted checks as passed.
+Upgrade reports explicitly record `profile`, `selected_sources`, `full_coverage`
+and `all_published_sources_covered`. A successful critical report leaves both
+coverage flags false. Full coverage requires all applicable sources and valid
+not-applicable reasons to pass. A failed, cancelled, skipped, missing or duplicate
+required result cannot authorize the selected profile's publication gate.
 
-When a DEV must pass full acceptance before publication, merge with `[manual-release]` in the commit message to suppress automatic Release allocation while keeping push CLI CI enabled. Then dispatch Release for the exact merged source with `publish=true`, `full_regression_before_publish=true` and the requested unpublished `dev_version`. Publication waits for all six native upgrades, all five system regressions and API checks from that same run; builds and regressions are not repeated. The default fast DEV order is unchanged.
+Scheduled/manual full runs retain historical upgrades on all seven native
+targets, resident pressure, all six cloud sweeps, all three native migration
+fixtures, their three joins and API regression. Reports bind the source, version
+and hashes of the verified original artifacts. A critical publication can be
+successful while its later scheduled full result remains pending or fails;
+report those states separately and never label critical success as full
+validation. Independent public installation verification also remains separate.
 
-For an explicitly requested DEV number, manual Release accepts `dev_version` in `X.Y.Z-dev.N` format. Its base can differ from the source manifest, so a published `1.0.12` baseline can produce the requested `1.0.13-dev.N` artifacts. It must have no Git tag or published package on any of the five scoped npm packages. Only an empty, unpublished DEV draft can be resumed after its previous release run finishes; preserve the failed run and reports. Draft notes record their owner run, and an active owner blocks resumption. Legacy drafts without an owner marker require all other Release runs to finish first. The corrected source still passes the normal builds and regression gates. Omit the input for automatic allocation. Stable releases reject this input.
+When a DEV must pass full acceptance before publication, merge with
+`[manual-release]` to suppress automatic Release allocation while keeping push
+CLI CI enabled. Then dispatch Release for the exact merged source with
+`publish=true`, `full_regression_before_publish=true` and the requested unused
+`dev_version`. All required full gates must succeed before npm writes; no
+historical or pressure case is dropped. Normal critical stable and DEV releases
+still wait for their complete critical gates before publishing.
+
+For an explicitly requested DEV number, manual Release accepts `dev_version`
+in `X.Y.Z-dev.N` format. Its base can differ from the source manifest. The
+version must have no Git tag or published version on any of the eight scoped
+packages or the alias. Only an empty unpublished DEV draft can be resumed after
+its previous owner run finishes; preserve the failed run and reports. Draft
+notes record the owner, and an active owner blocks resumption. Legacy drafts
+without an owner marker require all other Release runs to finish first. The
+corrected source still passes the selected profile's complete gates. Omit the
+input for automatic allocation. Stable releases reject this input.
 
 ## Independent source and migration checks
 
@@ -189,23 +280,30 @@ verified build metadata's exact SHA/version/target/binary digest. Fixture succes
 alone cannot replace the base report, and base success cannot replace migration.
 Linux supplements and their model/outbox dependencies keep their ordering.
 
-New accepted receipts declare the full regression inventory: six native
-upgrade lanes, five system sweeps, two native migration fixtures, two native
-join gates and the API check. Publication and cleanup validate every declared
-lane; failure, cancellation, skip, missing or duplicate targets cannot authorize
-success. Older receipts retain their original strict inventory rather than
-retroactively requiring jobs that did not exist. This changes overlap, not test
-coverage or the ten-minute performance claim; timings require an actual run.
+New accepted/prepared receipts bind the selected validation profile and its
+exact required inventory. Critical requires seven native startup/CPU/latest
+upgrade lanes and API; full requires seven historical/resident lanes, six cloud
+sweeps, three native migration fixtures, three joins and API. Both retain all
+seven builds and exact-source CI. Publication and cleanup validate every
+declared lane; failure, cancellation, skip, missing or duplicate targets cannot
+authorize success. A legacy proof without a profile is interpreted only as its
+original full contract, never as a critical shortcut. Older platform inventories
+retain their committed requirements rather than inventing jobs that did not
+exist. No critical receipt or imported proof can authorize a requested full
+gate. The receipt contract uses `validation_profile`; an absent legacy field
+means full, while an unknown value fails closed. The five-minute end-to-end ACK
+target still needs an actual measurement.
 
 
 The read-only `publication-ready` job waits for exact-source push CI and the
-selected full regression contract without holding the publication transaction
+selected critical/full contract without holding the publication transaction
 lock. The writer requires that job's success. Accepted reports distinguish
-source commit to full validation, workflow creation to acceptance, and the ready
+source commit to selected-profile validation, workflow creation to acceptance, and the ready
 job's completion to acceptance (including publication-runner queue time).
 These are actual timestamps; the ready-to-acceptance interval is not relabelled
-as the complete source workflow duration. Expensive acceptance is still required
-before the write transaction; no test is shortened or omitted.
+as the complete source workflow duration. Every gate in the selected profile
+must complete before the write transaction. Full-only work runs on its explicit
+scheduled/manual path and cannot be reported as executed by critical.
 
 
 For a dependency PR whose base is not `main`, normal PR branch filters do not
@@ -271,13 +369,13 @@ A local instrumented three-case probe confirmed normal results, retained debug
 assertion panics and retained overflow panics under these settings; project
 coverage and any timing effect still require the hosted run.
 
-Complete-validation timing uses the latest valid completion time among every
-required regression and `publication-ready`. In fast manual mode a required
-regression can finish after readiness but before finalization; the earlier ready
-clock cannot stand in for its completion. Missing, malformed, impossible or
-reversed required clocks leave full-validation duration unavailable, even when
-all success conclusions are present. Source/publication bounds are checked so
-clock inconsistencies cannot become negative or shortened performance claims.
+Selected-profile validation timing uses the latest valid completion time among
+every required regression and `publication-ready`. A readiness clock cannot
+stand in for a later required completion. Missing, malformed, impossible or
+reversed required clocks leave that duration unavailable, even when all success
+conclusions are present. Critical timing is not full-validation timing.
+Source/publication bounds are checked so clock inconsistencies cannot become
+negative or shortened performance claims.
 
 ## Unpublished preparation evidence
 
@@ -287,10 +385,13 @@ Its read-only producer waits for all existing build/package, native, sweep,
 migration, join and API jobs, then checks the latest exact-source main push CI.
 Other refs, forks, stale attempts and failed or incomplete gates cannot attest.
 
-The proof binds the source and version, committed Cargo/toolchain/SDK/workflow
+The proof binds the source and version, validation profile, committed Cargo/toolchain/SDK/workflow
 inputs, every platform SDK pin, original Actions artifact IDs/digests, actual
 binary/runtime/metadata hashes, and the exact local validated npm tarballs.
-It records full validation completion independently of publication. Required
+For this explicitly full preparation it records full validation completion
+independently of publication. A critical proof cannot be relabelled or imported
+as full, and a legacy proof without a profile retains only its original full
+meaning. Required
 jobs and timestamps are rechecked when validating the proof; missing or changed
 evidence fails closed. The artifact retains the existing one-day lifetime.
 
@@ -324,7 +425,8 @@ the current publication's copies after all parent, alias, background public
 verification and potential manual artifact readers are terminal, installation
 is verified, and an hour has passed since the last consumer/report. It never
 deletes the original preparation's archives as current-run artifacts.
-The ten-minute publication target still requires a real measured publication.
+The five-minute end-to-end ACK target still requires a real measured publication;
+prepared promotion alone cannot establish it.
 
 DEV allocation reads every scoped package and `rsrs-cli`, including a version
 visible only on the short entry. Registry metadata is an observation, not proof
@@ -336,18 +438,18 @@ An accepted version is immutable, and unknown submissions are never replayed.
 ## Native Linux ARM64 delivery
 
 Both Linux ARM64 targets build and run on `ubuntu-24.04-arm`. Their exact SDK
-cache entries stay pinned to the existing dev.12 SDK; source consumers have
+cache entries stay pinned to SDK `1.0.2-dev.14` in `sdk/core-sdk.lock.json`; source consumers have
 read-only exact-hit caches and no private SDK token. Both targets participate
-in model/runtime/diary feedback, native upgrades and cloud sweeps. Full gates
-require six native jobs, five cloud jobs, two native migration jobs, two joins
+in model/runtime/diary feedback, native upgrades and full-profile cloud sweeps. Full gates
+require seven native jobs, six cloud jobs, three native migration jobs, three joins
 and the API job. An ARM failure or missing result prevents full validation.
 
-Six platforms produce 18 Release assets and eight npm packages including the
-umbrella and alias. The npm launcher defaults ARM64 Linux to static musl;
+Seven targets produce 21 Release assets and nine npm packages: seven platform
+packages, the scoped umbrella and alias. The npm launcher defaults ARM64 Linux to static musl;
 `RSRS_LIBC=glibc` explicitly selects GNU. Independent background verification
 runs native ARM public installations for both routes, checks their exact binary
 hashes, version and executable startup, and records a separate ARM proof.
-Cleanup requires this proof for six-platform sources as well as the existing
+Cleanup requires this proof for current seven-target sources as well as the existing
 GNU x64 proof; neither npm acceptance nor another architecture's installation
 substitutes for it. Historical sources retain their own committed platform
 inventory.

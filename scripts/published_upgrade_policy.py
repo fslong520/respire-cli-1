@@ -4,6 +4,18 @@ ABSENT_ARM_RELEASES = frozenset({"v1.0.15", "v1.0.16", "v1.0.17-dev.12"})
 ABSENT_WINDOWS_ARM_RELEASES = frozenset({"v1.0.15", "v1.0.16"})
 
 
+def select_upgrade_sources(sources, target, profile):
+    if profile == "full":
+        return sources
+    if profile != "critical":
+        raise ValueError(f"unknown upgrade profile: {profile}")
+    for tag in sorted(sources, key=lambda tag: tuple(map(int, tag[1:].split("."))), reverse=True):
+        assets = [asset["name"] for asset in sources[tag]["assets"]]
+        if platform_applicability(tag, target, assets) is None:
+            return {tag: sources[tag]}
+    raise ValueError(f"no applicable formal stable upgrade source: {target}")
+
+
 def platform_applicability(tag, target, asset_names):
     extension = ".exe" if "windows" in target else ""
     required = {f"rsrs-{target}{extension}", f"rsrs-{target}-runtime.tar.gz", f"cli-build-{target}.json"}

@@ -5,7 +5,7 @@ import {lstatSync,readFileSync,readdirSync,writeFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-import {regressionContract,regressionStatus,regressionCompletedAt,parseTimestamp} from './release-regression-contract.mjs';
+import {regressionContract,validateRegressionContract,validationProfile,regressionStatus,regressionCompletedAt,parseTimestamp} from './release-regression-contract.mjs';
 import {api,pages,output as setOutput} from './release-publication.mjs';
 import {readVerifiedReceipt} from './verified-receipt.mjs';
 
@@ -57,7 +57,7 @@ function completed(job,label){
   requireValue(end!==null&&start!==null&&start<=end,`Invalid preparation clock: ${label}`);
   return end;
 }
-export function preparationValidation(jobs,ci,source,manifest){
+export function preparationValidation(jobs,ci,source,manifest,profile='full'){
   validatePreparationSource(source);
   requireValue(manifest.cliVersion===source.version,'Prepared manifest version differs');
   requireValue(ci?.path==='.github/workflows/ci.yml'&&ci.head_sha===source.sha&&ci.head_branch==='main'&&
@@ -69,7 +69,7 @@ export function preparationValidation(jobs,ci,source,manifest){
     requireValue(matching.length===1,`Missing or duplicate preparation job: ${name}`);
     at=Math.max(at,completed(matching[0],name));
   }
-  const inventory=regressionContract(manifest);
+  const inventory=regressionContract(manifest,profile);
   requireValue(regressionStatus(jobs,inventory)==='success','Prepared regressions are incomplete');
   const regressionAt=regressionCompletedAt(jobs,inventory,new Date(at).toISOString());
   requireValue(regressionAt!==null,'Prepared regression completion time is missing');
@@ -132,14 +132,15 @@ export function preparationReceiptJob(jobs,{producing=false}={}){
   return job;
 }
 
-export function createPreparation({source,identity,manifest,run,jobs,ci,artifacts,assets,packs,now=new Date().toISOString()}){
+export function createPreparation({source,identity,manifest,run,jobs,ci,artifacts,assets,packs,profile='full',now=new Date().toISOString()}){
   validatePreparationRun(run,source,{producing:true});
-  const validation=preparationValidation(jobs,ci,source,manifest),time=parseTimestamp(now);
+  profile=validationProfile(profile);
+  const validation=preparationValidation(jobs,ci,source,manifest,profile),time=parseTimestamp(now);
   preparationReceiptJob(jobs,{producing:true});
   // Completed API gates are read before writing; runner time is audit data only.
   requireValue(time!==null,'Preparation receipt clock is invalid');
   validatePreparedBytes(assets,packs,source,manifest);
-  return structuredClone({schema:1,kind:'release-prepared',state:'validated-unpublished',source,identity,validation,
+  return structuredClone({schema:1,kind:'release-prepared',state:'validated-unpublished',validation_profile:profile,source,identity,validation,
     origin_artifacts:preparationArtifacts(artifacts,source,manifest),assets,packs,prepared_at:now});
 }
 export function validatePreparedBytes(assets,packs,source,manifest){
@@ -156,7 +157,10 @@ export function validatePreparationHistory(receipt,context){
   validatePreparationRun(run,source);
   requireValue(receipt?.schema===1&&receipt.kind==='release-prepared'&&receipt.state==='validated-unpublished'&&
     same(receipt.source,source)&&same(receipt.identity,identity),'Prepared receipt source, SDK, toolchain or layout differs');
-  requireValue(same(receipt.validation,preparationValidation(jobs,ci,source,manifest)), 'Prepared CI/regression proof changed or is stale');
+  const profile=validationProfile(receipt.validation_profile);
+  validateRegressionContract(receipt.validation?.inventory,manifest,profile);
+  if(context.validation_profile!==undefined)requireValue(profile===validationProfile(context.validation_profile),'Prepared validation profile differs');
+  requireValue(same(receipt.validation,preparationValidation(jobs,ci,source,manifest,profile)), 'Prepared CI/regression proof changed or is stale');
   const prepared=parseTimestamp(preparationReceiptJob(jobs).completed_at),finished=parseTimestamp(run.updated_at);
   requireValue(parseTimestamp(receipt.prepared_at)!==null&&finished!==null&&prepared>=parseTimestamp(receipt.validation.completed_at)&&prepared<=finished,'Prepared receipt clock is invalid');
   validatePreparedBytes(receipt.assets,receipt.packs,source,manifest);
@@ -190,10 +194,10 @@ export function attestPreparation(assetsFolder,packsFolder,output){
     'Only the exact main workflow checkout can attest unpublished preparation');
   const context=preparationContext(source);
   validatePreparationRun(context.run,source,{producing:true});
-  const receipt=createPreparation({...context,assets:preparedAssets(assetsFolder,source,context.manifest),
+  const receipt=createPreparation({...context,profile:validationProfile(process.env.VALIDATION_PROFILE),assets:preparedAssets(assetsFolder,source,context.manifest),
     packs:preparedPacks(packsFolder,source,context.manifest)});
   writeFileSync(output,JSON.stringify(receipt,null,2)+'\n');
-  console.log(`Recorded complete unpublished validation for ${source.sha}@${source.version}; no publication acknowledgement`);
+  console.log(`Recorded ${receipt.validation_profile} unpublished validation for ${source.sha}@${source.version}; no publication acknowledgement`);
   return receipt;
 }
 
@@ -213,7 +217,7 @@ export function validatePreparationLink(link,source){
     'Prepared validation origin differs from this publication');
   return link;
 }
-export function readPreparedRun(runId,sha,version){
+export function readPreparedRun(runId,sha,version,profile=process.env.VALIDATION_PROFILE){
   requireValue(positive(runId)&&SHA.test(sha||''),'Invalid preparation lookup');
   const initial=api(`repos/${REPO}/actions/runs/${runId}`);
   requireValue(String(initial.id)===String(runId)&&positive(initial.run_attempt)&&initial.path===WORKFLOW&&
@@ -223,6 +227,7 @@ export function readPreparedRun(runId,sha,version){
   const initialArtifacts=pages(`repos/${REPO}/actions/runs/${runId}/artifacts?per_page=100`).flatMap(p=>p.artifacts).filter(a=>a.name===name);
   requireValue(initialArtifacts.length===1,'Preparation proof is missing or duplicated');
   const receipt=readVerifiedReceipt(initialArtifacts[0],'release-prepared.json',{runId,headSha:initial.head_sha});
+  if(profile!==undefined)requireValue(validationProfile(receipt.validation_profile)===validationProfile(profile),'Selected preparation validation profile differs');
   const source=validatePreparationSource({repository:REPO,workflow:WORKFLOW,run_id:String(runId),run_attempt:Number(initial.run_attempt),
     sha,version:version||receipt.source?.version});
   const context=preparationContext(source);

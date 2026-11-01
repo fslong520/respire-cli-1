@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {validateSource,validateScoped,validateAlias,RELEASE_ARTIFACT_CLEANUP_POLICY} from './release-publication.mjs';
 import {validateAcceptedScoped,validateAcceptedAlias,validateVerified,validateArmVerified} from './publication-acceptance.mjs';
-import {regressionStatus} from './release-regression-contract.mjs';
+import {regressionStatus,validationProfile,validateRegressionContract} from './release-regression-contract.mjs';
 import {validatePreparationHistory,validatePreparationSource,preparationInputs} from './release-preparation.mjs';
 import {validateImportedShape,validateImportedEvidence,importedAnchor,validateConsumerIntent,importName,consumerName} from './prepared-import.mjs';
 
@@ -52,6 +52,7 @@ async function preparedCleanupEvidence(io,scoped,manifest,run,jobs,artifacts){
   for(const a of [...imports,...intents])boundArtifact(a,run);
   const receipt=await io.receipt(imports[0],'prepared-import.json');
   validateImportedShape(receipt,source,manifest);
+  if(validationProfile(receipt.validation_profile)!==validationProfile(scoped.validation_profile))throw Error('Cleanup preparation profile differs from acceptance');
   const history=await io.preparedHistory(receipt.preparation.source);
   validateImportedEvidence(receipt,source,manifest,{ownerRun:run,ownerJobs:jobs,history,metadata:imports[0]});
   const actual=scoped.assets.map(a=>({file:a.name,size:a.size,sha256:a.sha256})).sort((a,b)=>a.file.localeCompare(b.file));
@@ -81,6 +82,10 @@ export async function planCleanup(io,runId,manifest,now=io.now()){
   if(source.recovery||String(source.run_id)!==String(run.id)||Number(source.run_attempt)!==run.run_attempt)return {skip:'unsupported-or-stale-attempt'};
   if(io.manifestForSource)manifest=await io.manifestForSource(source);
   (accepted?validateAcceptedScoped:validateScoped)(scoped,manifest);
+  if(!accepted){
+    if(validationProfile(scoped.validation_profile)!=='full')throw Error('Legacy cleanup receipts are full-only');
+    if(scoped.validation_inventory)validateRegressionContract(scoped.validation_inventory,manifest,'full');
+  }
   const jobs=await io.jobs(run.id,run.run_attempt);
   const prepared=scoped.validation_origin?await preparedCleanupEvidence(io,scoped,manifest,run,jobs,artifacts):null;
   if(!prepared)requireRegressions(jobs,manifest.targets.map(t=>t.triple),scoped.validation_inventory);

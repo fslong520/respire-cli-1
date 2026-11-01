@@ -7,7 +7,7 @@ import {RELEASE_ARTIFACT_CLEANUP_POLICY, validateSource, validateScopedPayload,
   verifyPackages, publicInstall} from './release-publication.mjs';
 import {readdirSync, statSync} from 'node:fs';
 import path from 'node:path';
-import {regressionContract,validateRegressionContract,regressionStatus,regressionCompletedAt,parseTimestamp} from './release-regression-contract.mjs';
+import {regressionContract,validateRegressionContract,validationProfile,regressionStatus,regressionCompletedAt,parseTimestamp} from './release-regression-contract.mjs';
 import {validateImportAnchor,assertImportedContents,importPinFromEnv,readImportedPreparation,assertImportSelection,assertImportPin} from './prepared-import.mjs';
 import {preparationPinFromEnv,preparationReceiptJob} from './release-preparation.mjs';
 
@@ -35,7 +35,9 @@ export function validateAcceptance(proof, expected) {
 export function validateAcceptedScoped(receipt, m) {
   if (receipt?.schema !== 2 || receipt.kind !== 'scoped-accepted' || receipt.state !== 'accepted') throw Error('Invalid accepted scoped receipt');
   validateScopedPayload(receipt, m);
-  if(receipt.validation_inventory)validateRegressionContract(receipt.validation_inventory,m);
+  const profile=validationProfile(receipt.validation_profile);
+  if(receipt.validation_inventory)validateRegressionContract(receipt.validation_inventory,m,profile);
+  else if(profile!=='full')throw Error('Critical acceptance requires an explicit regression inventory');
   if(receipt.validation_origin!==undefined)validateImportAnchor(receipt.validation_origin,receipt.source);
   if(receipt.source.recovery)throw Error('Historical recovery remains on protocol 1');
   if (!Array.isArray(receipt.acceptances) || receipt.acceptances.length !== receipt.packages.length ||
@@ -46,6 +48,7 @@ export function validateAcceptedScoped(receipt, m) {
 }
 export function validateAcceptedAlias(receipt, scoped, run, jobs) {
   if (receipt?.schema !== 2 || receipt.kind !== 'alias-accepted' || receipt.state !== 'accepted' ||
+      validationProfile(receipt.validation_profile)!==validationProfile(scoped.validation_profile) ||
       !same(receipt.source, scoped.source) || !same(receipt.scoped_packages, scoped.packages) ||
       receipt.alias?.name !== 'rsrs-cli' || receipt.alias?.version !== scoped.source.version ||
       !/^sha512-[A-Za-z0-9+/]{86}==$/.test(receipt.alias?.integrity || '') || !/^[a-f0-9]{40}$/.test(receipt.alias?.shasum || '') ||
@@ -69,6 +72,7 @@ export function assertCompletedSource(run, source) {
 }
 export function validateVerified(receipt, scoped, alias) {
   if (receipt?.schema !== 2 || receipt.kind !== 'publication-verified' || receipt.state !== 'verified' ||
+      validationProfile(receipt.validation_profile)!==validationProfile(scoped.validation_profile) ||
       !same(receipt.source, scoped.source) || !same(receipt.packages, [...scoped.packages, alias.alias]) ||
       !same(receipt.alias_publisher, alias.publisher) || !instant(receipt.verified_at) ||
       receipt.install?.platform !== 'linux-x64-gnu' || receipt.install?.version !== scoped.source.version ||
@@ -79,6 +83,7 @@ export function validateVerified(receipt, scoped, alias) {
 }
 export function validateArmVerified(receipt,scoped,alias){
   if(receipt?.schema!==2||receipt.kind!=='publication-arm64-verified'||receipt.state!=='verified'||
+    validationProfile(receipt.validation_profile)!==validationProfile(scoped.validation_profile)||
     !same(receipt.source,scoped.source)||!same(receipt.packages,[...scoped.packages,alias.alias])||
     !same(receipt.alias_publisher,alias.publisher)||!instant(receipt.verified_at)||
     !Array.isArray(receipt.installs)||receipt.installs.length!==2)throw Error('Missing native ARM64 public installation proof');
@@ -158,7 +163,7 @@ async function scopedAccepted() {
   });
   const validationOrigin=process.env.PREPARED_RUN?assertImportedContents(source,m,'release-assets','npm/release-packages',importPinFromEnv()).anchor:undefined;
   const receipt = validateAcceptedScoped({schema:2,kind:'scoped-accepted',state:'accepted',source,packages,assets,binaries,
-    cleanup_policy:RELEASE_ARTIFACT_CLEANUP_POLICY,validation_inventory:regressionContract(m),validation_origin:validationOrigin,acceptances:submissions.packages.map(p=>p.acceptance)},m);
+    cleanup_policy:RELEASE_ARTIFACT_CLEANUP_POLICY,validation_profile:validationProfile(process.env.VALIDATION_PROFILE),validation_inventory:regressionContract(m,validationProfile(process.env.VALIDATION_PROFILE)),validation_origin:validationOrigin,acceptances:submissions.packages.map(p=>p.acceptance)},m);
   assertActive(source); assertDraft(api(`repos/${source.repository}/releases/${source.release_id}`),receipt); assertTag(source);
   write('scoped-accepted.json',receipt);
 }
@@ -218,7 +223,7 @@ async function publishAliasAccepted() {
     {knownAcceptances,onSubmission:()=>{assertActive(source);journal({state:'unknown',package:expected});}});
   journal({state:'accepted',package:result.acceptance});
   validateAcceptance(result.acceptance,expected);
-  write('alias-accepted.json',{schema:2,kind:'alias-accepted',state:'accepted',source,scoped_packages:scoped.packages,
+  write('alias-accepted.json',{schema:2,kind:'alias-accepted',state:'accepted',validation_profile:validationProfile(scoped.validation_profile),source,scoped_packages:scoped.packages,
     alias:expected,dependencies:pkg.dependencies,acceptance:result.acceptance,
     publisher:{workflow:ALIAS,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT}});
 }
@@ -268,22 +273,25 @@ function finalizeAccepted() {
   if(ready.length!==1 || ready[0].conclusion!=='success' || !instant(ready[0].completed_at))throw Error('Exact publication readiness time missing');
   const readyAt=parseTimestamp(ready[0].completed_at);
   if(readyAt===null)throw Error('Invalid publication readiness clock');
+  const profile=validationProfile(scoped.validation_profile);
+  if(process.env.VALIDATION_PROFILE!==undefined&&profile!==validationProfile(process.env.VALIDATION_PROFILE))throw Error('Accepted validation profile differs from the requested profile');
+  if(process.env.FULL_REGRESSION_REQUIRED==='true'&&profile!=='full')throw Error('Full regression requires a full validation profile');
   let fullyValidated=false,validationError='required regressions still pending',fullAt=null,preparedImport=null;
   if(scoped.validation_origin!==undefined){
     if(!process.env.PREPARED_RUN)throw Error('Prepared validation origin is missing its selected source mode');
     preparedImport=readImportedPreparation(s,manifest());
     assertImportSelection(preparedImport,process.env.PREPARED_RUN,preparationPinFromEnv());
     assertImportPin(preparedImport,importPinFromEnv());
-    if(!same(preparedImport.anchor,scoped.validation_origin))throw Error('Prepared validation origin changed after scoped acceptance');
+    if(!same(preparedImport.anchor,scoped.validation_origin)||validationProfile(preparedImport.receipt.validation_profile)!==profile)throw Error('Prepared validation origin/profile changed after scoped acceptance');
     fullyValidated=true;
     fullAt=parseTimestamp(preparedImport.receipt.preparation.validation.completed_at);
     if(fullAt===null)throw Error('Original complete preparation clock is missing');
   }else{
-    try {fullyValidated=regressionStatus(readinessJobs,regressionContract(manifest()))==='success';}
+    try {fullyValidated=regressionStatus(readinessJobs,regressionContract(manifest(),profile))==='success';}
     catch(error){validationError=error.message;}
-    fullAt=fullyValidated?regressionCompletedAt(readinessJobs,regressionContract(manifest()),ready[0].completed_at):null;
+    fullAt=fullyValidated?regressionCompletedAt(readinessJobs,regressionContract(manifest(),profile),ready[0].completed_at):null;
   }
-  if(process.env.FULL_REGRESSION_REQUIRED==='true'&&!fullyValidated)throw Error(`Full regression proof missing before publication: ${validationError}`);
+  if(!fullyValidated)throw Error(`Required ${profile} regression proof missing before publication: ${validationError}`);
   const commit=api(`repos/${s.repository}/commits/${s.sha}`);
   if(commit.sha!==s.sha || !instant(commit.commit?.committer?.date))throw Error('Exact source commit timestamp missing');
   const sourceAt=parseTimestamp(commit.commit.committer.date);
@@ -304,17 +312,23 @@ function finalizeAccepted() {
   const preparationCreatedAt=preparedImport?parseTimestamp(preparedImport.history.run.created_at):null;
   const preparationCompletedAt=preparedImport?parseTimestamp(preparationReceiptJob(preparedImport.history.jobs).completed_at):null;
   const preparationDuration=preparationCompletedAt!==null&&preparationCreatedAt!==null&&preparationCompletedAt>=preparationCreatedAt?(preparationCompletedAt-preparationCreatedAt)/1000:null;
+  const acknowledgements=[...scoped.acceptances,complete.alias_receipt.acceptance].map(p=>({name:p.name,accepted_at:p.accepted_at,evidence:p.evidence}));
+  const ackTimes=acknowledgements.map(p=>parseTimestamp(p.accepted_at));
+  const allNpmAcceptedAt=ackTimes.every(t=>t!==null)?new Date(Math.max(...ackTimes)).toISOString():null;
   write('publication-accepted.json',{...complete,accepted_at:new Date(acceptedAt).toISOString(),
-    release_published_at:published.published_at,accepted_at_source:'github-release-published-at',all_npm_accepted_at:null,
+    release_published_at:published.published_at,accepted_at_source:'github-release-published-at',
+    all_npm_accepted_at:allNpmAcceptedAt,all_npm_accepted_at_source:'max-original-package-acceptance-times',npm_acknowledgements:acknowledgements,
+    trigger_to_all_npm_accepted_seconds:null,
     source_run_created_at:sourceRun.created_at,source_committed_at:commit.commit.committer.date,publication_ready_at:ready[0].completed_at,
-    full_validation_completed_at:measuredFullAt===null?null:new Date(measuredFullAt).toISOString(),
+    validation_profile:profile,profile_validation:'verified',validation_completed_at:measuredFullAt===null?null:new Date(measuredFullAt).toISOString(),
+    full_validation_completed_at:profile==='full'&&measuredFullAt!==null?new Date(measuredFullAt).toISOString():null,
     preparation_run_id:preparedImport?.receipt.preparation.source.run_id??null,
     preparation_run_attempt:preparedImport?.receipt.preparation.source.run_attempt??null,
     preparation_created_at:preparedImport?.history.run.created_at??null,preparation_duration_seconds:preparationDuration,
     import_verified_at:preparedImport?.metadata.created_at??null,
-    source_to_complete_validation_seconds:null,full_validation:fullyValidated?'verified':'pending-or-failed',ready_to_accepted_seconds:readyDuration,trigger_to_accepted_seconds:triggerDuration,
+    source_to_complete_validation_seconds:null,full_validation:profile==='full'?'verified':'not-run',ready_to_accepted_seconds:readyDuration,trigger_to_accepted_seconds:triggerDuration,
     public_verification:'pending'});
-  const summary=`Release v${s.version} public; all ${complete.packages.length} npm submissions accepted. Public propagation/install verification pending. Source to full validation: time unavailable (git commit and service clocks differ); ready to public Release: ${readyDuration===null?'time unavailable':`${readyDuration}s`}; workflow trigger to public Release: ${triggerDuration===null?'time unavailable':`${triggerDuration}s`}.\n`;
+  const summary=`Release v${s.version} public; all ${complete.packages.length} npm submissions accepted. Public propagation/install verification pending. Source to ${profile} validation: time unavailable (git commit and service clocks differ); ready to public Release: ${readyDuration===null?'time unavailable':`${readyDuration}s`}; workflow trigger to public Release: ${triggerDuration===null?'time unavailable':`${triggerDuration}s`}.\n`;
   console.log(summary);
   if(process.env.GITHUB_STEP_SUMMARY)appendFileSync(process.env.GITHUB_STEP_SUMMARY,summary);
 }
@@ -350,13 +364,13 @@ async function verifyAccepted() {
     const installs=[];
     for(const platform of ['linux-arm64-gnu','linux-arm64'])installs.push(await publicInstall(scoped,found.receipt.alias,assertCurrent,platform));
     assertCurrent();
-    const verified=validateArmVerified({schema:2,kind:'publication-arm64-verified',state:'verified',source:s,packages,
+    const verified=validateArmVerified({schema:2,kind:'publication-arm64-verified',state:'verified',validation_profile:validationProfile(scoped.validation_profile),source:s,packages,
       alias_publisher:found.receipt.publisher,verified_at:new Date().toISOString(),installs},scoped,found.receipt);
     write('publication-arm64-verified.json',verified);output({eligible:'true'});return;
   }
   const install = await publicInstall(scoped,found.receipt.alias,assertCurrent);
   assertCurrent();
-  const verified = validateVerified({schema:2,kind:'publication-verified',state:'verified',source:s,packages,
+  const verified = validateVerified({schema:2,kind:'publication-verified',state:'verified',validation_profile:validationProfile(scoped.validation_profile),source:s,packages,
     alias_publisher:found.receipt.publisher,verified_at:new Date().toISOString(),install},scoped,found.receipt);
   write('publication-verified.json',verified); output({eligible:'true'});
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
+import {regressionContract} from './release-regression-contract.mjs';
 import {CLEANUP_POLICY,REPOSITORY,planCleanup,executeCleanup,allowedSourceArtifact,requireRegressions,githubAdapter} from './cleanup-release-artifacts.mjs';
 
 const manifest=JSON.parse(readFileSync(new URL('../artifact-manifest.json',import.meta.url)));
@@ -171,4 +172,22 @@ test('cleanup uses the publication source manifest rather than a later main plat
   const f=fixture();let lookups=0;f.io.manifestForSource=async source=>{assert.equal(source.sha,f.scoped.source.sha);lookups++;return clone(manifest);};
   const different={...manifest,targets:[...manifest.targets,{triple:'aarch64-unknown-linux-gnu',pkg:'@rsrsai/linux-arm64-gnu'}]};
   const p=await planCleanup(f.io,100,different,now);assert.equal(p.skip,undefined);assert.equal(lookups,1);
+});
+
+test('critical cleanup requires all declared target jobs and cannot use a legacy protocol-1 receipt',async()=>{
+  const critical=regressionContract(manifest,'critical'),job=name=>({name,status:'completed',conclusion:'success'});
+  const jobs=[...manifest.targets.map(t=>job('native-regression / Native ('+t.triple+')')),job('api-smoke'),job('publish')];
+  requireRegressions(jobs,manifest.targets.map(t=>t.triple),critical);
+  for(const conclusion of ['failure','cancelled','skipped']){const bad=clone(jobs);bad[0].conclusion=conclusion;assert.throws(()=>requireRegressions(bad,manifest.targets.map(t=>t.triple),critical))}
+  const f=fixture();f.scoped.validation_profile='critical';f.scoped.validation_inventory=critical;
+  await assert.rejects(planCleanup(f.io,100,manifest,now),/Legacy cleanup receipts are full-only/);assert.deepEqual(f.deleted,[]);
+});
+
+test('legacy cleanup cannot smuggle critical inventory under a missing or full top-level profile',async()=>{
+  for(const profile of [undefined,'full']){
+    const f=fixture();if(profile!==undefined)f.scoped.validation_profile=profile;
+    f.scoped.validation_inventory=regressionContract(manifest,'critical');
+    f.jobs=f.jobs.filter(j=>!j.name.startsWith('cloud-sweep ('));
+    await assert.rejects(planCleanup(f.io,100,manifest,now),/profile differs|inventory differs/);assert.deepEqual(f.deleted,[]);
+  }
 });

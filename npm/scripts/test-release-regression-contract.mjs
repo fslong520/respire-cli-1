@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {runInNewContext} from 'node:vm';
 import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,existsSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {regressionContract,validateRegressionContract,regressionStatus,regressionCompletedAt} from './release-regression-contract.mjs';
+import {regressionContract,validateRegressionContract,validationProfile,regressionStatus,regressionCompletedAt} from './release-regression-contract.mjs';
 import {requireRegressions} from './cleanup-release-artifacts.mjs';
 const manifest=JSON.parse(readFileSync(new URL('../artifact-manifest.json',import.meta.url)));
 const contract=regressionContract(manifest),copy=structuredClone;
@@ -14,7 +15,7 @@ const inventory=()=>[...contract.native.map(t=>job(`native-regression / Native (
 test('both Linux ARM targets require native runners, every source feedback phase and background install proof',()=>{
   const text=file=>readFileSync(new URL('../../.github/workflows/'+file,import.meta.url),'utf8');
   for(const file of ['ci.yml','release-validation.yml','release-native-validation.yml','release.yml']){
-    const workflow=text(file);
+    const workflow=text(file).replace(/\r\n/g,'\n');
     for(const triple of ['aarch64-unknown-linux-gnu','aarch64-unknown-linux-musl'])assert(workflow.includes('os: ubuntu-24.04-arm\n            target: '+triple),file+' missing native ARM target '+triple);
     assert(workflow.includes('scripts/require-native-linux-arm64.sh'),file+' lacks hardware check');
   }
@@ -50,7 +51,7 @@ test('duplicates, unknown targets and changed declared inventory cannot silently
   for(const key of ['native','cloud','migration','migration_gate']){const c=copy(contract);c[key].pop();assert.throws(()=>validateRegressionContract(c,manifest));}
 });
 test('workflow runs independent fixture work before the join, and keeps Linux supplement model dependencies serial',()=>{
-  const workflow=readFileSync(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8');
+  const workflow=readFileSync(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
   const part=name=>workflow.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][\w-]*:\n/)[0];
   const migration=part('native-migration'),join=part('migration-gate'),base=part('cloud-sweep'),publish=part('publish'),ready=part('publication-ready');
   assert.match(migration,/needs: plan/);assert.doesNotMatch(migration,/needs:.*cloud-sweep|dev-smoke-gate.py|continue-on-error/);
@@ -105,4 +106,78 @@ test('Alpine preflight mounts the selected CPU cache read-only and refuses missi
     // Explicit missing override must not silently fall back to another model.
     writeFileSync(local,'fixture');assert.notEqual(run({RSRS_CPU_OWNED_ORT_FILE:path.join(root,'missing.ort')}).status,0);assert(!existsSync(capture));
   }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('critical and legacy full inventories cannot be interchanged or weakened by skipped native jobs',()=>{
+  const critical=regressionContract(manifest,'critical');
+  assert.equal(validationProfile(), 'full');assert.throws(()=>validationProfile('unknown'));
+  assert.equal(critical.native.length,7);assert.equal(critical.cloud.length,0);assert.equal(critical.migration.length,0);assert.equal(critical.migration_gate.length,0);assert.equal(critical.api,true);
+  validateRegressionContract(critical,manifest,'critical');validateRegressionContract(contract,manifest,'full');
+  assert.throws(()=>validateRegressionContract(critical,manifest,'full'));assert.throws(()=>validateRegressionContract(contract,manifest,'critical'));
+  const unlabelled=copy(critical);delete unlabelled.validation_profile;assert.throws(()=>validateRegressionContract(unlabelled,manifest));
+  const jobs=[...critical.native.map(t=>job('native-regression / Native ('+t+')')),job('api-smoke')];
+  assert.equal(regressionStatus(jobs,critical),'success');assert.equal(regressionStatus(jobs,contract),'pending');
+  for(const conclusion of ['failure','cancelled','skipped']){const changed=copy(jobs);changed[0].conclusion=conclusion;assert.throws(()=>regressionStatus(changed,critical))}
+  const absent=copy(jobs);absent.shift();assert.equal(regressionStatus(absent,critical),'pending');
+  assert.throws(()=>regressionStatus([...jobs,jobs[0]],critical));
+  const foreign=copy(jobs);foreign[0].name='native-regression / Native (foreign-target)';assert.throws(()=>regressionStatus(foreign,critical));
+});
+
+test('only explicit inactive full matrices are ignored by critical and never enter its completion clock',()=>{
+  const critical=regressionContract(manifest,'critical');
+  const jobs=[...critical.native.map(t=>({...job('native-regression / Native ('+t+')'),started_at:'2026-11-01T00:00:00Z',completed_at:'2026-11-01T00:01:00Z'})),{...job('api-smoke'),started_at:'2026-11-01T00:00:00Z',completed_at:'2026-11-01T00:01:00Z'}];
+  const skipped=name=>({name,status:'completed',conclusion:'skipped'});
+  const inactive=[skipped('Native migration (${{ matrix.target }})'),skipped('Migration gate (${{ matrix.target }})')];
+  // Exact names from GitHub API run 41291097685 attempt1, read during this change.
+  const caller=skipped('native-regression'),cloud=skipped('cloud-sweep');
+  const all=[...jobs,...inactive,caller,cloud];
+  assert.throws(()=>regressionStatus([...jobs,skipped('native-regression / Native (${{ matrix.target }})')],critical));
+  assert.equal(regressionStatus(all,critical),'success');assert.equal(regressionCompletedAt(all,critical,'2026-11-01T00:00:30Z'),Date.parse('2026-11-01T00:01:00Z'));
+  assert.throws(()=>regressionStatus([...all,inactive[0]],critical));
+  for(const state of [{status:'completed',conclusion:'failure'},{status:'in_progress',conclusion:null},{status:'completed',conclusion:null}])assert.throws(()=>regressionStatus([...jobs,{...inactive[0],...state}],critical));
+  assert.throws(()=>regressionStatus([...jobs,skipped('Native migration (foreign-target)')],critical));
+  const individual=skipped('Native migration (aarch64-apple-darwin)');assert.equal(regressionStatus([...jobs,individual],critical),'success');
+  assert.throws(()=>regressionStatus([...jobs,individual,individual],critical));
+  assert.throws(()=>regressionStatus([...jobs,{...individual,conclusion:'failure'}],critical));
+  assert.throws(()=>regressionStatus([...inventory(),...inactive],contract));
+});
+
+test('workflow defaults critical, retains mandatory profile gates and dispatches nonpublishing daily full',()=>{
+  const release=readFileSync(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
+  const native=readFileSync(new URL('../../.github/workflows/release-native-validation.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
+  const daily=readFileSync(new URL('../../.github/workflows/release-full-regression.yml',import.meta.url),'utf8');
+  assert.match(release,/validation_profile:[\s\S]*?default: critical/);assert.match(release,/REQUIRE_FULL:.*inputs.full_regression_before_publish/);
+  assert.match(release,/process.env.REQUIRE_FULL==='true'\?'full':requested/);
+  const part=name=>release.split('\n  '+name+':\n')[1]?.split(/\n  [a-z][\w-]*:\n/)[0];
+  for(const name of ['validate','native-regression','native-regression-critical'])assert.match(part(name),/permissions:[\s\S]*?actions: read/);
+  const standalone=readFileSync(new URL('../../.github/workflows/release-validation.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
+  assert.match(standalone,/permissions:\n  contents: read\n  actions: read/);
+  assert.match(standalone.split('\n  native-regression:\n')[1].split('\n  npm-dry-run:')[0],/permissions:[\s\S]*?actions: read/);
+  assert.match(part('native-regression'),/needs: \[plan, validate\]/);assert.match(part('native-regression'),/validation_profile: full/);
+  assert.match(part('native-regression-critical'),/name: native-regression/);assert.match(part('native-regression-critical'),/needs: plan/);assert.match(part('native-regression-critical'),/validation_profile: critical/);
+  for(const name of ['cloud-sweep','native-migration','migration-gate'])assert.match(part(name),/validation_profile == 'full'/);
+  assert.doesNotMatch(part('api-smoke'),/validation_profile == 'full'/);
+  assert.match(part('publication-ready'),/regressionContract\(require\('.\/npm\/artifact-manifest.json'\),process.env.VALIDATION_PROFILE\)/);
+  assert.doesNotMatch(part('publication-ready'),/channel == 'latest' \|\| github.event_name/);
+  assert.match(native,/default: full/);assert(native.includes("--profile '${{ inputs.validation_profile }}'"));
+  assert(native.indexOf('Target producer concluded')<native.indexOf('const artifacts=inventory.artifacts.filter'));
+  assert.match(native,/artifacts.length>1/);assert.match(native,/current.run_attempt!==attempt/);assert.match(native,/job.conclusion==='success'/);
+  assert.match(native,/if: inputs.validation_profile == 'full'[\s\S]*?resident-stress/);
+  assert.match(daily,/schedule:/);assert.match(daily,/-f publish=false -f validation_profile=full/);assert.doesNotMatch(daily,/-f publish=true(?:\s|$)|npm publish/);
+});
+
+test('the actual critical target waiter binds unique successful producer, source, attempt and artifact before consumption',async()=>{
+  const native=readFileSync(new URL('../../.github/workflows/release-native-validation.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
+  const program=native.split("          node - <<'NODE'\n")[1].split('\n          NODE')[0];
+  async function run(mutate=()=>{}){
+    const sha='a'.repeat(40),target='aarch64-apple-darwin';
+    const state={run:{id:700,run_attempt:1,head_sha:sha,status:'in_progress'},jobs:{total_count:2,jobs:[{id:11,run_id:700,run_attempt:1,head_sha:sha,name:'validate / Release ('+target+')',status:'completed',conclusion:'success'},{name:'validate / Release (another-target)',status:'queued',conclusion:null}]},artifacts:{total_count:1,artifacts:[{id:9,name:'cli-release-'+target,expired:false,size_in_bytes:10,digest:'sha256:'+'b'.repeat(64),workflow_run:{id:700,head_sha:sha}}]}};
+    mutate(state);const outputs=[],exits=[];let artifactReads=0;
+    await runInNewContext(program,{require:name=>name==='child_process'?{execFileSync:(_cmd,args)=>{const url=args[1];if(url.endsWith('/artifacts?per_page=100')){artifactReads++;return JSON.stringify(state.artifacts)}if(url.endsWith('/jobs?per_page=100'))return JSON.stringify(state.jobs);return JSON.stringify(state.run)}}:{appendFileSync:(_path,value)=>outputs.push(value)},process:{env:{GITHUB_REPOSITORY:'risense-ai/respire-cli',GITHUB_RUN_ID:'700',GITHUB_RUN_ATTEMPT:'1',GITHUB_SHA:sha,CLI_TARGET:target,PRODUCER_PREFIX:'validate / ',GITHUB_OUTPUT:'fixture-output'},exit:value=>exits.push(value)},console:{log:()=>{},error:()=>{}},setTimeout:()=>{throw Error('still waiting; no target consumption')},Date});
+    return {outputs,exits,artifactReads};
+  }
+  const good=await run();assert.deepEqual(good.outputs,['artifact_id=9\n']);assert.deepEqual(good.exits,[]);
+  const mutations=[s=>s.jobs.jobs[0].id=0,s=>s.jobs.jobs[0].run_id=701,s=>s.jobs.jobs[0].run_attempt=2,s=>s.jobs.jobs[0].head_sha='c'.repeat(40),s=>s.run.run_attempt=2,s=>s.run.head_sha='c'.repeat(40),s=>s.run.status='completed',s=>s.jobs.total_count=3,s=>{s.jobs.jobs.push(s.jobs.jobs[0]);s.jobs.total_count++},s=>s.jobs.jobs[0].conclusion='failure',s=>s.jobs.jobs[0].conclusion='cancelled',s=>s.jobs.jobs[0].conclusion='skipped',s=>s.jobs.jobs[0].status='queued',s=>{s.artifacts.artifacts.push(s.artifacts.artifacts[0]);s.artifacts.total_count++},s=>s.artifacts.artifacts[0].expired=true,s=>s.artifacts.artifacts[0].workflow_run.id=701,s=>s.artifacts.artifacts[0].workflow_run.head_sha='c'.repeat(40),s=>s.artifacts.artifacts[0].digest='wrong',s=>s.artifacts.artifacts[0].id=0];
+  for(const mutate of mutations){const bad=await run(mutate);assert.deepEqual(bad.outputs,[]);assert.deepEqual(bad.exits,[1])}
+  const failed=await run(s=>s.jobs.jobs[0].conclusion='failure');assert.equal(failed.artifactReads,0,'an uploaded artifact never bypasses a failed producer');
 });

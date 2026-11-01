@@ -421,10 +421,13 @@ jobs:
           path: .rust-ci-cache
           key: ${{ env.BUILD_KEY }}
 
-  check:
-    if: ${{ !inputs.research_feedback_only && !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
-    needs: coverage-tests
+  check-complete:
+    if: ${{ always() && !inputs.research_feedback_only && !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
+    needs: [coverage-tests, workspace-tests, contract-checks]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -456,6 +459,13 @@ jobs:
               --ignore-filename-regex '(main\.rs|web\.rs|rpc\.rs|runtime_(policy|error|http)\.rs|extract_tui\.rs|inject_tui\.rs|shell\.rs|/shell/|/core/|model_(install|progress)\.rs|space\.rs|update_check\.rs|classify(_config)?\.rs|recall_select\.rs)' || printf "%s\n" "Coverage diagnostic unavailable; original failure retained"
           fi
           exit "$result"
+      - name: Require source coverage and all independent contracts
+        if: ${{ always() }}
+        env:
+          SOURCE_RESULT: ${{ needs.coverage-tests.result }}
+          WORKSPACE_RESULT: ${{ needs.workspace-tests.result }}
+          CONTRACT_RESULT: ${{ needs.contract-checks.result }}
+        run: test "$SOURCE_RESULT" = success && test "$WORKSPACE_RESULT" = success && test "$CONTRACT_RESULT" = success
 
   contract-checks:
     # Packaging/workflow/fixture checks have no dependency on Rust coverage or SDK
@@ -493,19 +503,6 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/dev-release-sweep.ps1'), [ref]$parseTokens, [ref]$parseErrors) | Out-Null
           if ($parseErrors.Count -ne 0) { throw ($parseErrors | Out-String) }
           & ./scripts/test-reembed-progress-contract.ps1
-
-  check-complete:
-    if: ${{ always() && !inputs.research_feedback_only && !inputs.native_published_only && !inputs.artifact_run && !inputs.version_upgrade_only }}
-    needs: [check, workspace-tests, contract-checks]
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
-      - name: Require source coverage and all independent contracts
-        env:
-          SOURCE_RESULT: ${{ needs.check.result }}
-          WORKSPACE_RESULT: ${{ needs.workspace-tests.result }}
-          CONTRACT_RESULT: ${{ needs.contract-checks.result }}
-        run: test "$SOURCE_RESULT" = success && test "$WORKSPACE_RESULT" = success && test "$CONTRACT_RESULT" = success
 
   native-published-m3:
     if: ${{ !inputs.research_feedback_only && inputs.native_published_only && !inputs.version_upgrade_only }}

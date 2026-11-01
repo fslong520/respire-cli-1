@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {mkdirSync, mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 
 export const REGISTRY = 'https://registry.npmjs.org';
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -301,6 +301,15 @@ export async function publishAcceptedPackage(dir, expected, tag, options = {}) {
   return submitPackage(dir, expected, tag, {...options, requireInstallIndex: false}, true);
 }
 
+function publishNpm(command, args, options) {
+  return new Promise(resolve => {
+    let error;
+    const child = spawn(command, args, options);
+    child.once('error', failure => { error = failure; });
+    child.once('close', (status, signal) => resolve({status, signal, error}));
+  });
+}
+
 async function submitPackage(dir, expected, tag, options, acceptedOnly) {
   identity(expected);
   if (!/^[a-z][a-z0-9._-]*$/i.test(tag || '')) throw new Error('Invalid npm distribution tag');
@@ -347,7 +356,7 @@ async function submitPackage(dir, expected, tag, options, acceptedOnly) {
     // reconcile an interrupted submission rather than treating 404 as consent.
     options.onSubmission?.({state: 'unknown', package: expected});
     try {
-      result = (options.spawnImpl || spawnSync)(npm,
+      result = await (options.spawnImpl || publishNpm)(npm,
         ['publish', packed.tarballPath, '--access', 'public', '--tag', tag, '--ignore-scripts', '--registry', REGISTRY],
         {stdio: 'inherit', shell: process.platform === 'win32'});
     } catch (error) { result = {status: null, error}; }

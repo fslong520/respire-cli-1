@@ -10,11 +10,22 @@ esac
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$root/target/musl-cache/$target"
+action="${2:-build}"
+case "$action" in build|key|pack) ;; *) echo 'invalid release cache action' >&2; exit 1 ;; esac
+image=rust:1.95.0-alpine3.23
+if ! docker image inspect "$image" >/dev/null 2>&1; then docker pull "$image"; fi
+image="$(docker image inspect "$image" --format '{{.Id}}')"
 docker run --rm \
   -v "$root:/workspace" -w /workspace \
-  -e TARGET="$target" \
-  rust:1.95.0-alpine3.23 \
-  sh scripts/build-linux-musl-container.sh
+  -e TARGET="$target" -e RELEASE_CACHE_ACTION="$action" \
+  -e RELEASE_DEPENDENCY_CACHE="${RELEASE_DEPENDENCY_CACHE:-}" \
+  -e GITHUB_SHA -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT \
+  -e RELEASE_CONTAINER_IMAGE="$image" -e GITHUB_OUTPUT=/workspace/.rust-release-output \
+  "$image" sh scripts/build-linux-musl-container.sh
+if [ "$action" = key ]; then
+  cat "$root/.rust-release-output" >> "${GITHUB_OUTPUT:?release key requires GITHUB_OUTPUT}"
+fi
+if [ "$action" != build ]; then exit 0; fi
 
 binary="$root/target/ci/$target/release/rsrs"
 # A static ELF must have neither a dynamic loader nor shared-library imports.

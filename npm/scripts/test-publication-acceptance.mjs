@@ -329,3 +329,14 @@ test('post-publication workflow failure does not suppress read-only verification
   assert.equal((await planCleanup(c.io,100,m,Date.parse('2026-10-27T02:00:00Z'))).skip,'source-not-successfully-complete');
   assert.deepEqual(c.deleted,[]);
 });
+
+test('critical acceptance, alias and install proof cannot be relabelled as legacy full',()=>{
+  const f=fixture();f.scoped.validation_profile='critical';f.scoped.validation_inventory=regressionContract(m,'critical');f.alias.validation_profile='critical';f.verified.validation_profile='critical';
+  validateAcceptedScoped(f.scoped,m);validateAcceptedAlias(f.alias,f.scoped,f.child,f.jobs);validateVerified(f.verified,f.scoped,f.alias);
+  for(const profile of [undefined,'full','other']){
+    const scoped=copy(f.scoped);if(profile===undefined)delete scoped.validation_profile;else scoped.validation_profile=profile;assert.throws(()=>validateAcceptedScoped(scoped,m));
+    const alias=copy(f.alias);if(profile===undefined)delete alias.validation_profile;else alias.validation_profile=profile;assert.throws(()=>validateAcceptedAlias(alias,f.scoped,f.child,f.jobs));
+    const verified=copy(f.verified);if(profile===undefined)delete verified.validation_profile;else verified.validation_profile=profile;assert.throws(()=>validateVerified(verified,f.scoped,f.alias));
+  }
+  const legacy=fixture();validateAcceptedScoped(legacy.scoped,m);validateAcceptedAlias(legacy.alias,legacy.scoped,legacy.child,legacy.jobs);validateVerified(legacy.verified,legacy.scoped,legacy.alias);
+});

@@ -6,7 +6,7 @@ import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {api,pages,output,assertActive} from './release-publication.mjs';
 import {readVerifiedReceipt} from './verified-receipt.mjs';
-import {parseTimestamp,validateRegressionContract} from './release-regression-contract.mjs';
+import {parseTimestamp,validateRegressionContract,validationProfile} from './release-regression-contract.mjs';
 import {readPreparedRun,assertPreparationPin,preparationPinFromEnv,currentPublicationOwner,requirePreparationBeforeTrigger,
   preparationContext,validatePreparationSource,validatePreparationLink,validatePreparationHistory,
   validatePreparedBytes,preparedAssets,preparedPacks,preparationInputs} from './release-preparation.mjs';
@@ -74,7 +74,9 @@ export function validateImportedShape(receipt,source,manifest){
   validatePreparationLink(receipt.origin,source);
   requireValue(same(receipt.origin.source,proof.source)&&canonical(proof)===receipt.origin.receipt_sha256,
     'Original proof snapshot differs from the selected immutable receipt');
-  validateRegressionContract(proof.validation?.inventory,manifest);
+  const profile=validationProfile(receipt.validation_profile);
+  requireValue(profile===validationProfile(proof.validation_profile),'Import validation profile differs from its preparation');
+  validateRegressionContract(proof.validation?.inventory,manifest,profile);
   validatePreparedBytes(proof.assets,proof.packs,proof.source,manifest);
   requireValue(same(receipt.validated_assets,proof.assets)&&same(receipt.validated_packs,proof.packs),
     'Import lacks matching mandatory asset and tarball verification');
@@ -133,6 +135,7 @@ export function readImportedPreparation(source,manifest){
   return {receipt,anchor,history,run,ownerJobs,consumer,metadata:matches[0]};
 }
 export function assertImportSelection(result,runId,pin){
+  requireValue(validationProfile(result.receipt.validation_profile)===validationProfile(process.env.VALIDATION_PROFILE),'Imported validation profile differs from the requested profile');
   requireValue(positive(runId)&&String(result.receipt.origin.source.run_id)===String(runId),'Import used a different preparation run');
   assertPreparationPin({link:result.receipt.origin},pin);
   return result;
@@ -153,7 +156,7 @@ export function recordPreparedImport(assetsFolder,packsFolder,outputFile){
   validatePreparationLink(result.link,owner);requirePreparationBeforeTrigger(result,run);
   const assets=preparedAssets(assetsFolder,result.receipt.source,result.context.manifest),packs=preparedPacks(packsFolder,result.receipt.source,result.context.manifest);
   requireValue(same(assets,result.receipt.assets)&&same(packs,result.receipt.packs),'Actual imported assets or freshly packed npm bytes differ from complete preparation');
-  const receipt=validateImportedShape({schema:1,kind:'prepared-import',state:'verified-copy',owner:{...owner,import_job_id:String(job.id)},
+  const receipt=validateImportedShape({schema:1,kind:'prepared-import',state:'verified-copy',validation_profile:validationProfile(result.receipt.validation_profile),owner:{...owner,import_job_id:String(job.id)},
     origin:result.link,preparation:result.receipt,validated_assets:assets,validated_packs:packs,imported_at:new Date().toISOString()},owner,result.context.manifest);
   writeFileSync(outputFile,JSON.stringify(receipt,null,2)+'\n');
   console.log('Recorded verified current-run copies; no npm submission or public installation claimed');

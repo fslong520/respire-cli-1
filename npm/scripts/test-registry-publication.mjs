@@ -2,7 +2,7 @@
 // Offline publication tests. All registry reads and every npm publish are mocked.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
@@ -567,10 +567,17 @@ test('explicit npm acceptance does not wait for public propagation or claim veri
 
 test('failed, signalled or spawn-error npm cannot be accepted from exit status alone', async t => {
   const {dir} = fixture(t);
-  for(const outcome of [{status:1},{status:null,signal:'SIGTERM'},{status:0,error:new Error('EPERM')},{status:0,signal:'SIGTERM'}]) {
-    const npm=mockNpm(), spawnImpl=(name,args,opts)=>args[0]==='publish'?(npm.calls.push({args}),outcome):npm.spawnImpl(name,args,opts);
+  for(const asynchronous of [false,true]) for(const outcome of [{status:1},{status:null,signal:'SIGTERM'},{status:0,error:new Error('EPERM')},{status:0,signal:'SIGTERM'},new Error('spawn failed')]) {
+    const npm=mockNpm(), spawnImpl=(name,args,opts)=>{
+      if(args[0]!=='publish')return npm.spawnImpl(name,args,opts);
+      npm.calls.push({args});
+      if(asynchronous)return outcome instanceof Error?Promise.reject(outcome):Promise.resolve(outcome);
+      if(outcome instanceof Error)throw outcome;
+      return outcome;
+    };
     await assert.rejects(publishAcceptedPackage(dir,expected,'dev',{spawnImpl,...registry({absent:Infinity}),...fastClock()}),/failed or was uncertain/);
     assert.equal(npm.calls.filter(c=>c.args[0]==='publish').length,1,'uncertain submission is never repeated');
+    assert(!existsSync(npm.calls.find(c=>c.args[0]==='publish').args[1]),'failed submissions release their temporary tarball');
   }
 });
 

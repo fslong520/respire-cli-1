@@ -6,7 +6,7 @@ import {preparedConsumerFlow} from './fixtures/prepared-consumer-flow.mjs';
 import {readFileSync} from 'node:fs';
 
 test('Release wires registered read-only import and explicit fail-closed publication joins',()=>{
-  const release=readFileSync(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8');
+  const release=readFileSync(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
   const job=name=>release.split(`\n  ${name}:\n`)[1].split(/\n  [a-z][\w-]*:\n/)[0];
   const importer=job('prepared-import'),ready=job('publication-ready'),publish=job('publish'),plan=job('plan');
   assert.match(importer,/contents: read/);assert.match(importer,/actions: read/);
@@ -162,4 +162,16 @@ test('optional historical byte parameters cannot substitute for mandatory write-
   for(const folders of [[undefined,undefined],['assets',undefined],[undefined,'packs'],['','packs']]){
     assert.throws(()=>assertImportedContents(source,manifest,...folders,{}),/Mandatory local asset and tarball folders missing/);
   }
+});
+
+test('prepared import preserves the exact validation profile and old missing fields remain full',()=>{
+  const old=fixture();delete old.receipt.preparation.validation_profile;old.receipt.origin=preparationLink(old.receipt.preparation,{id:90,name:'release-prepared-700-1',size_in_bytes:100,digest:'sha256:'+hash,expired:false,workflow_run:{id:700,head_sha:sha}});validateImportedEvidence(old.receipt,old.source,old.manifest,old.context);
+  const f=fixture(),h=f.context.history;
+  h.jobs=h.jobs.filter(j=>!j.name.startsWith('cloud-sweep (')&&!j.name.startsWith('Native migration (')&&!j.name.startsWith('Migration gate ('));
+  const producing=structuredClone(h.jobs);Object.assign(producing.at(-1),{status:'in_progress',conclusion:undefined,completed_at:undefined});
+  const proof=createPreparation({...h,jobs:producing,run:{...h.run,status:'in_progress'},profile:'critical',now:time(4)});
+  f.receipt.preparation=proof;f.receipt.validation_profile='critical';
+  f.receipt.origin=preparationLink(proof,{id:90,name:'release-prepared-700-1',size_in_bytes:100,digest:'sha256:'+hash,expired:false,workflow_run:{id:700,head_sha:sha}});
+  validateImportedEvidence(f.receipt,f.source,f.manifest,f.context);
+  for(const profile of [undefined,'full','invalid']){const r=structuredClone(f.receipt);if(profile===undefined)delete r.validation_profile;else r.validation_profile=profile;assert.throws(()=>validateImportedEvidence(r,f.source,f.manifest,f.context))}
 });

@@ -183,8 +183,10 @@ else throw Error('Unexpected API scope');process.stdout.write(JSON.stringify(r))
     state.originalJobs[0].conclusion=originalGate;
     success(run('release-publication.mjs',['finalize-accepted']));
     const report=JSON.parse(readFileSync(join(root,'publication-accepted.json')));
+    const lastAck=new Date(Math.max(...[...scoped.acceptances,alias.acceptance].map(p=>Date.parse(p.accepted_at)))).toISOString();
     requireValue(report.full_validation==='verified'&&report.public_verification==='pending'&&report.preparation_run_id==='700'&&
-      report.accepted_at===state.acceptedAt&&report.accepted_at_source==='github-release-published-at'&&report.all_npm_accepted_at===null&&
+      report.accepted_at===state.acceptedAt&&report.accepted_at_source==='github-release-published-at'&&report.all_npm_accepted_at===lastAck&&report.all_npm_accepted_at_source==='max-original-package-acceptance-times'&&
+      report.trigger_to_all_npm_accepted_seconds===null&&
       report.source_to_complete_validation_seconds===null&&
       report.full_validation_completed_at===proof.validation.completed_at&&report.import_verified_at===state.currentArtifacts.find(a=>a.id===92).created_at&&
       report.full_validation_completed_at<report.source_run_created_at&&

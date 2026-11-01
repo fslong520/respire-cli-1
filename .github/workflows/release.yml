@@ -11,19 +11,24 @@ on:
         required: true
         type: string
       publish:
-        description: Publish DEV after build/package/CI gates; stable also requires full regression
+        description: Publish only after every synchronous gate in the selected validation profile
         default: false
         type: boolean
       full_regression_before_publish:
-        description: Wait for native upgrades, system/migration fixtures, joins and API regressions before DEV publication
-        default: true
+        description: Require the full profile including all historical, stress, system and migration regressions
+        default: false
         type: boolean
+      validation_profile:
+        description: Mandatory synchronous validation profile; the legacy full flag forces full
+        default: critical
+        type: choice
+        options: [critical, full]
       dev_version:
         description: Optional exact DEV version; only unpublished versions or empty DEV drafts can be used
         default: ''
         type: string
       prepared_run:
-        description: Completed exact-source main preparation run; DEV publication requires publish and full regression flags
+        description: Completed exact-source main preparation with the same selected validation profile
         default: ''
         type: string
 
@@ -68,6 +73,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     outputs:
+      validation_profile: ${{ steps.validation.outputs.profile }}
       sha: ${{ steps.plan.outputs.sha }}
       version: ${{ steps.plan.outputs.version }}
       tag: ${{ steps.plan.outputs.tag }}
@@ -138,6 +144,20 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Select the mandatory synchronous validation profile
+        id: validation
+        env:
+          REQUESTED_PROFILE: ${{ inputs.validation_profile || 'critical' }}
+          REQUIRE_FULL: ${{ inputs.full_regression_before_publish || inputs.reuse_dev12_validation }}
+        run: |
+          node - <<'NODE'
+          const fs=require('fs');
+          const requested=process.env.REQUESTED_PROFILE;
+          if(!['critical','full'].includes(requested))throw Error('Unknown release validation profile');
+          const profile=process.env.REQUIRE_FULL==='true'?'full':requested;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'profile='+profile+'\n');
+          console.log('Synchronous validation profile: '+profile);
+          NODE
       - name: Select an exact completed preparation before any draft/version mutation
         id: prepared
         if: inputs.prepared_run != ''
@@ -146,11 +166,10 @@ jobs:
           PREPARED_RUN: ${{ inputs.prepared_run }}
           CLI_VERSION: ${{ inputs.dev_version }}
           PREPARED_REQUEST_PUBLISH: ${{ inputs.publish }}
-          PREPARED_REQUEST_FULL: ${{ inputs.full_regression_before_publish }}
+          VALIDATION_PROFILE: ${{ steps.validation.outputs.profile }}
         run: |
           set -euo pipefail
           test "$PREPARED_REQUEST_PUBLISH" = true
-          test "$PREPARED_REQUEST_FULL" = true
           CLI_SHA="$(git rev-parse HEAD)" node npm/scripts/release-preparation.mjs inspect
       - uses: actions/upload-artifact@v4
         if: inputs.prepared_run != ''
@@ -222,6 +241,7 @@ jobs:
     needs: plan
     permissions:
       contents: write
+      actions: read
     uses: ./.github/workflows/release-validation.yml
     with:
       ref: ${{ needs.plan.outputs.sha }}
@@ -229,17 +249,33 @@ jobs:
       full_validation: false
 
   native-regression:
-    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' }}
+    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' && needs.plan.outputs.validation_profile == 'full' }}
     needs: [plan, validate]
     permissions:
       contents: write
+      actions: read
     uses: ./.github/workflows/release-native-validation.yml
     with:
       ref: ${{ needs.plan.outputs.sha }}
       version: ${{ needs.plan.outputs.version }}
+      validation_profile: full
+
+  native-regression-critical:
+    name: native-regression
+    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' && needs.plan.outputs.validation_profile == 'critical' }}
+    needs: plan
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release-native-validation.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      version: ${{ needs.plan.outputs.version }}
+      validation_profile: critical
+      producer_prefix: 'validate / '
 
   cloud-sweep:
-    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' }}
+    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' && needs.plan.outputs.validation_profile == 'full' }}
     needs: plan
     permissions:
       contents: read
@@ -438,7 +474,7 @@ jobs:
 
   native-migration:
     name: Native migration (${{ matrix.target }})
-    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' }}
+    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' && needs.plan.outputs.validation_profile == 'full' }}
     needs: plan
     permissions:
       contents: read
@@ -545,7 +581,7 @@ jobs:
 
   migration-gate:
     name: Migration gate (${{ matrix.target }})
-    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' }}
+    if: ${{ !inputs.reuse_dev12_validation && inputs.prepared_run == '' && needs.plan.outputs.validation_profile == 'full' }}
     needs: [plan, cloud-sweep, native-migration]
     permissions:
       contents: read
@@ -643,11 +679,14 @@ jobs:
     # This read-only proof is deliberately not a publication fast path. A later
     # consumer must independently validate its source/attempt, jobs and bytes.
     if: >-
-      ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+          needs.plan.result == 'success' && needs.validate.result == 'success' &&
+          ((needs.plan.outputs.validation_profile == 'full' && needs.native-regression.result == 'success') ||
+           (needs.plan.outputs.validation_profile == 'critical' && needs.native-regression-critical.result == 'success')) &&
           needs.plan.outputs.sha == github.sha && needs.plan.outputs.publish == 'false' &&
-          inputs.full_regression_before_publish && !inputs.reuse_dev12_validation &&
+          !inputs.reuse_dev12_validation &&
           !inputs.resume_dev6_publication && !inputs.repair_dev12 && !inputs.repair_dev14 }}
-    needs: [plan, validate, native-regression, cloud-sweep, native-migration, migration-gate, api-smoke]
+    needs: [plan, validate, native-regression, native-regression-critical, cloud-sweep, native-migration, migration-gate, api-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -675,6 +714,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CLI_SHA: ${{ needs.plan.outputs.sha }}
           CLI_VERSION: ${{ needs.plan.outputs.version }}
+          VALIDATION_PROFILE: ${{ needs.plan.outputs.validation_profile }}
         run: node npm/scripts/release-preparation.mjs attest prepared-assets prepared-packs release-prepared.json
       - uses: actions/upload-artifact@v4
         with:
@@ -694,6 +734,7 @@ jobs:
     env:
       CLI_SHA: ${{ needs.plan.outputs.sha }}
       CLI_VERSION: ${{ needs.plan.outputs.version }}
+      VALIDATION_PROFILE: ${{ needs.plan.outputs.validation_profile }}
       PREPARED_RUN: ${{ needs.plan.outputs.prepared_run }}
       PREPARED_ATTEMPT: ${{ needs.plan.outputs.prepared_attempt }}
       PREPARED_ARTIFACT_ID: ${{ needs.plan.outputs.prepared_artifact_id }}
@@ -740,7 +781,7 @@ jobs:
           node npm/scripts/assemble-artifacts.mjs imported-assets target/ci
           node npm/scripts/pack.mjs --root target/ci
           node npm/scripts/verify-packages.mjs imported-assets --pack imported-packs
-      - name: Record the verified current-run import and original full validation
+      - name: Record the verified current-run import and original selected-profile validation
         env:
           GH_TOKEN: ${{ github.token }}
         run: node npm/scripts/prepared-import.mjs record imported-assets imported-packs prepared-import.json
@@ -833,6 +874,8 @@ jobs:
     needs: [plan, validate, prepared-import]
     runs-on: ubuntu-latest
     timeout-minutes: 145
+    env:
+      VALIDATION_PROFILE: ${{ needs.plan.outputs.validation_profile }}
     permissions:
       contents: read
       actions: read
@@ -878,8 +921,8 @@ jobs:
           }
           requireCi().catch(error=>{console.error(error.message);process.exit(1)});
           NODE
-      - name: Require all regressions before gated publication
-        if: ${{ inputs.prepared_run == '' && !(inputs.repair_dev12 || inputs.repair_dev14) && (needs.plan.outputs.channel == 'latest' || github.event_name == 'push' || inputs.full_regression_before_publish) }}
+      - name: Require every regression in the selected profile before publication
+        if: ${{ inputs.prepared_run == '' && !(inputs.repair_dev12 || inputs.repair_dev14) }}
         timeout-minutes: 121
         env:
           GH_TOKEN: ${{ github.token }}
@@ -893,24 +936,25 @@ jobs:
                 `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/jobs?per_page=10`
               ],{encoding:'utf8',timeout:30000})).flatMap(page=>page.jobs);
               const {regressionContract,regressionStatus}=await import('./npm/scripts/release-regression-contract.mjs');
-              const contract=regressionContract(require('./npm/artifact-manifest.json'));
+              const contract=regressionContract(require('./npm/artifact-manifest.json'),process.env.VALIDATION_PROFILE);
               if(regressionStatus(jobs,contract)==='success'){
-                console.log('All native, system, independent migration, join and API regressions passed');return;
+                console.log('All required '+process.env.VALIDATION_PROFILE+' regressions passed');return;
               }
-              console.log('Waiting for native upgrades, cloud regressions and API checks');
+              console.log('Waiting for every required '+process.env.VALIDATION_PROFILE+' regression');
               await new Promise(resolve=>setTimeout(resolve,30000));
             }
             throw new Error('Required regression did not complete within 120 minutes');
           }
           requireRegression().catch(error=>{console.error(error.message);process.exit(1)});
           NODE
-      - name: Require the completed trusted import and original complete source validation
+      - name: Require the completed trusted import and original selected-profile validation
         id: imported
         if: inputs.prepared_run != ''
         env:
           GH_TOKEN: ${{ github.token }}
           CLI_SHA: ${{ needs.plan.outputs.sha }}
           CLI_VERSION: ${{ needs.plan.outputs.version }}
+          VALIDATION_PROFILE: ${{ needs.plan.outputs.validation_profile }}
           PREPARED_RUN: ${{ needs.plan.outputs.prepared_run }}
           PREPARED_ATTEMPT: ${{ needs.plan.outputs.prepared_attempt }}
           PREPARED_ARTIFACT_ID: ${{ needs.plan.outputs.prepared_artifact_id }}
@@ -920,7 +964,7 @@ jobs:
 
   publish:
     name: ${{ inputs.resume_dev6_publication && 'unused-standard-publish' || 'publish' }}
-    # DEV regressions reuse the original artifacts independently; stable still waits below.
+    # Every stable/DEV publication waits for the selected profile readiness.
     needs: [plan, validate, prepared-import, publication-ready]
     if: >-
       ${{ always() && !cancelled() && !inputs.resume_dev6_publication &&
@@ -936,6 +980,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     env:
+      VALIDATION_PROFILE: ${{ needs.plan.outputs.validation_profile }}
       PREPARED_RUN: ${{ needs.plan.outputs.prepared_run }}
       PREPARED_ATTEMPT: ${{ needs.plan.outputs.prepared_attempt }}
       PREPARED_ARTIFACT_ID: ${{ needs.plan.outputs.prepared_artifact_id }}
@@ -1158,7 +1203,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CLI_TAG: ${{ needs.plan.outputs.tag }}
-          FULL_REGRESSION_REQUIRED: ${{ needs.plan.outputs.channel == 'latest' || github.event_name == 'push' || inputs.full_regression_before_publish }}
+          FULL_REGRESSION_REQUIRED: ${{ needs.plan.outputs.validation_profile == 'full' }}
         run: node npm/scripts/release-publication.mjs finalize-accepted
       - uses: actions/upload-artifact@v4
         if: ${{ !(inputs.repair_dev12 || inputs.repair_dev14) }}
