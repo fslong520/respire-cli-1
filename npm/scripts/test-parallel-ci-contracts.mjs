@@ -72,7 +72,7 @@ test('explicit manual source checks omit only the optional compile matrix and ca
 });
 
 
-test('source metadata optimization retains unoptimized tests, debug assertions, overflow checks and coverage gate',()=>{
+test('source metadata optimization retains debug safety and only the CLI test-stack exception',()=>{
   for(const name of ['workspace-tests','coverage-tests']){
     const text=section(name);
     for(const profile of ['DEV','TEST']){
@@ -87,7 +87,26 @@ test('source metadata optimization retains unoptimized tests, debug assertions, 
   const manifest=readFileSync(new URL('../../Cargo.toml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
   assert.match(manifest,/\[profile.dev.package.sha2\]\nopt-level = 3/);
   assert.doesNotMatch(manifest,/\[profile\.(?:dev|test)\]\n[^[]*opt-level\s*=\s*[1-3]/);
-  assert.doesNotMatch(manifest,/\[profile\.(?:dev|test)\.package\.(?:"\*"|respire[\w-]*)\]/);
+  // Clap's Windows debug builder exceeds 2 MiB; only this test package uses opt-level=1.
+  // See docs/ci-source-profile.md for measured frames and default-stack validation.
+  const assertProfiles=value=>assert.deepEqual(value.split(/(?=^\[)/m)
+    .filter(block=>block.startsWith('[profile.'))
+    .map(block=>block.split('\n').map(line=>line.trim()).filter(line=>line&&!line.startsWith('#')).join('\n')),[
+      '[profile.dev.package.sha2]\nopt-level = 3',
+      '[profile.release]\nstrip = "debuginfo"\nlto = false\ncodegen-units = 1\npanic = "unwind"',
+      '[profile.test.package.respire]\nopt-level = 1',
+    ]);
+  assertProfiles(manifest);
+  for(const changed of [
+    manifest.replace('[profile.test.package.respire]','[profile.dev.package.respire]'),
+    manifest.replace('[profile.test.package.respire]\nopt-level = 1','[profile.test.package.respire]\nopt-level = 2'),
+    manifest+'\n[profile.test.package.other]\nopt-level = 1\n',
+    manifest+'\n[profile.test]\nopt-level = 1\n',
+    manifest.replace('[profile.test.package.respire]','[profile.test.package.respire]\ndebug-assertions = false'),
+    manifest.replace('panic = "unwind"','panic = "abort"'),
+  ])assert.throws(()=>assertProfiles(changed));
+  assert.deepEqual([...ci.matchAll(/^\s*RUST_MIN_STACK: (.+)$/gm)].map(match=>match[1]),
+    ["'16777216'","'16777216'"],'retain the two existing CI stack settings without adding or raising a global override');
   const archive=section('coverage-tests');
   assert.match(archive,/set -euo pipefail/);
   assert.match(archive,/tar -cf -[^\n]+\| gzip -1/);

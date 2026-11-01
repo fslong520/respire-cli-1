@@ -9816,6 +9816,21 @@ fn run_local_inner(args: Cli) -> Result<()> {
 mod capture_tests {
     use clap::{CommandFactory, Parser};
 
+    fn seed_capture_session() -> anyhow::Result<()> {
+        // Fixed fixture material only; never use this session or key in production.
+        const TEST_SUPER: &str = "A3-000000-000000-000000-000000-000000-000000";
+        std::env::set_var("RSRS_SUPER", TEST_SUPER);
+        let salt = "01".repeat(16);
+        let kek = respire::memory::crypto::derive_rsrs_kek(TEST_SUPER, &salt)?;
+        let (nonce, wrapped) = respire::memory::crypto::wrap_key(&[7; 32], &kek)?;
+        respire::auth::write_session_json(&serde_json::json!({
+            "user":"test", "vault_version":4, "kdf_salt":salt,
+            "wrapped_urk":format!("{}{wrapped}", respire::memory::crypto::RSRS_PREFIX),
+            "urk_nonce":nonce, "pass":"synthetic-capture-unused"
+        }))?;
+        Ok(())
+    }
+
     #[test]
     fn injected_chain_examples_follow_the_parser_contract() -> anyhow::Result<()> {
         for policy in [respire::inject::INSTRUCTIONS_MD, respire::inject::INSTRUCTIONS_LITE_MD] {
@@ -9912,16 +9927,20 @@ mod capture_tests {
 
     struct EnvGuard {
         prev: Option<String>,
+        prev_super: Option<std::ffi::OsString>,
     }
 
     #[test]
     fn residual_input_errors_use_user_envelopes() -> anyhow::Result<()> {
         let _lock = crate::TEST_ENV_LOCK.lock().map_err(|error| anyhow::anyhow!("{error}"))?;
         let dir = tempfile::tempdir()?;
-        let _guard = EnvGuard { prev: respire::env::var("RSRS_DATA_DIR").ok() };
+        let _guard = EnvGuard {
+            prev: respire::env::var("RSRS_DATA_DIR").ok(),
+            prev_super: std::env::var_os("RSRS_SUPER"),
+        };
         std::env::set_var("RSRS_DATA_DIR", dir.path());
         crate::rpc::set_worker_active(true);
-        respire::service::keygen()?;
+        seed_capture_session()?;
         let missing = dir.path().join("missing.json").to_string_lossy().into_owned();
         let missing_output = dir.path().join("absent").join("export.json").to_string_lossy().into_owned();
         for command in [
@@ -9966,10 +9985,13 @@ mod capture_tests {
         use respire::MemoryTransport;
         let _lock = crate::TEST_ENV_LOCK.lock().map_err(|error| anyhow::anyhow!("{error}"))?;
         let dir = tempfile::tempdir()?;
-        let _guard = EnvGuard { prev: respire::env::var("RSRS_DATA_DIR").ok() };
+        let _guard = EnvGuard {
+            prev: respire::env::var("RSRS_DATA_DIR").ok(),
+            prev_super: std::env::var_os("RSRS_SUPER"),
+        };
         std::env::set_var("RSRS_DATA_DIR", dir.path());
         crate::rpc::set_worker_active(true);
-        respire::service::keygen()?;
+        seed_capture_session()?;
         let keys = super::build_session()?;
         let store = super::build_local()?;
         let entry: respire::MemoryEntry = serde_json::from_value(serde_json::json!({
@@ -10008,6 +10030,10 @@ mod capture_tests {
                 Some(value) => std::env::set_var("RSRS_DATA_DIR", value),
                 None => std::env::remove_var("RSRS_DATA_DIR"),
             }
+            match &self.prev_super {
+                Some(value) => std::env::set_var("RSRS_SUPER", value),
+                None => std::env::remove_var("RSRS_SUPER"),
+            }
         }
     }
 
@@ -10019,6 +10045,7 @@ mod capture_tests {
         let dir = tempfile::tempdir()?;
         let _guard = EnvGuard {
             prev: std::env::var("RSRS_DATA_DIR").ok(),
+            prev_super: std::env::var_os("RSRS_SUPER"),
         };
         std::env::set_var("RSRS_DATA_DIR", dir.path());
         let _store = respire::service::open_store()?;
@@ -10046,6 +10073,7 @@ mod capture_tests {
         let dir = tempfile::tempdir().map_err(|err| err.to_string())?;
         let guard = EnvGuard {
             prev: respire::env::var("RSRS_DATA_DIR").ok(),
+            prev_super: std::env::var_os("RSRS_SUPER"),
         };
         std::env::set_var("RSRS_DATA_DIR", dir.path());
         let prev_bin = respire::env::var("RSRS_BIN_DIR").ok();
