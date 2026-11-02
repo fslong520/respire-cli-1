@@ -32,8 +32,8 @@ writeFileSync(path.join(output, 'package.json'), JSON.stringify({
 }, null, 2) + '\n');
 writeFileSync(path.join(output, 'README.md'),
   '# rsrs-cli\n\nInstall Respire with `npm install -g rsrs-cli`.\n\n' +
-  'This entry uses the same version of `@rsrsai/cli` and its native platform packages.\n' +
+  'This entry uses the same version of the Respire launcher and its native platform packages.\n' +
   'Run `rsrs --help` after installation.\n\n' +
-  'If `@rsrsai/cli` is already installed globally, uninstall that package first to avoid a command conflict.\n' +
+  'If another install entry for the Respire CLI is already installed globally, uninstall that package first to avoid a command conflict.\n' +
   'Uninstalling the npm package does not delete your Respire data.\n');
 console.log(`Built rsrs-cli@${version} depending on @rsrsai/cli@${version}`);

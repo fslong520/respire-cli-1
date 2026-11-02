@@ -4,9 +4,9 @@
     "version": "20"
   },
   "init": {
-    "darwin": "npm install -g @rsrsai/cli && rsrs doctor",
-    "linux": "npm install -g @rsrsai/cli && rsrs doctor",
-    "win32": "npm install -g @rsrsai/cli && rsrs doctor"
+    "darwin": "npm install -g rsrs-cli && rsrs doctor",
+    "linux": "npm install -g rsrs-cli && rsrs doctor",
+    "win32": "npm install -g rsrs-cli && rsrs doctor"
   },
   "status": {
     "darwin": "rsrs --json status",
