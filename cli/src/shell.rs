@@ -56,7 +56,7 @@ enum ConfirmKind {
     RestartM3(String, String),
     Engine(String),
     Weights(String, String),
-    InstallVariant(String),
+    InstallVariant(String, String),
     InstallEngines,
     ProbeEngine,
     RecallMode(String),
@@ -1117,19 +1117,19 @@ fn model_weights_key(app: &mut App, code: KeyCode) {
             if !model_engines().contains(&engine) {
                 app.set_notice(t("此系统不支持该引擎；请选择 CPU", "This OS does not support that engine; choose CPU"));
             } else if !model_weights::Form::present(&app.live.model_settings, variant) {
-                app.set_notice(t("请先安装 / 校验所选权重；不会自动下载或保存", "Install / verify the selected weights first; nothing was downloaded or saved"));
+                app.set_notice(t("请先下载所选权重；不会自动下载或保存", "Download the selected weights first; nothing was downloaded or saved"));
             } else {
-                ask(app, t(&format!("保存 {engine} / {variant}？不会下载；此操作不代表推理验证通过。"),
-                    &format!("Save {engine} / {variant}? No download; this does not establish successful inference.")),
+                ask(app, t(&format!("校验并加载 {engine} / {variant}？试推理成功后保存；不会下载。"),
+                    &format!("Validate and load {engine} / {variant}? Save only after trial inference succeeds; no download.")),
                     ConfirmKind::Weights(engine.to_owned(), variant.to_owned()));
             }
         }
         Some(model_weights::Action::Install) => {
             if let Ok(selected) = respire::memory::onnx::parse_variant(variant) {
                 let mib = selected.size as f64 / 1048576.0;
-                ask(app, t(&format!("安装 / 校验 {variant}（{mib:.0} MiB）？基础模型及 CPU 容器可能另需各 543 MiB，tokenizer 约 17 MiB；已验证文件跳过。只下载，不保存选择。"),
-                    &format!("Install / verify {variant} ({mib:.0} MiB)? Baseline and CPU container may each need another 543 MiB plus a 17 MiB tokenizer; verified files are skipped. Downloads only; selection is not saved.")),
-                    ConfirmKind::InstallVariant(variant.to_owned()));
+                ask(app, t(&format!("下载 {variant}（{mib:.0} MiB）？基础模型及 CPU 容器可能另需各 543 MiB，tokenizer 约 17 MiB；已验证文件跳过。只下载，不保存选择。"),
+                    &format!("Download {variant} ({mib:.0} MiB)? Baseline and CPU container may each need another 543 MiB plus a 17 MiB tokenizer; verified files are skipped. Downloads only; selection is not saved.")),
+                    ConfirmKind::InstallVariant(engine.to_owned(), variant.to_owned()));
             }
         }
         None => {}
@@ -1138,12 +1138,20 @@ fn model_weights_key(app: &mut App, code: KeyCode) {
 
 fn save_model_settings_with(engine: &str, variant: Option<&str>,
     mut action: impl FnMut(&[&str]) -> Result<Value, String>) -> Result<Value, String> {
-    let mut args = vec!["model", "engine", engine];
-    if let Some(variant) = variant { args.extend(["--model", variant]); }
-    checked_result(action(&args)?)?;
+    let current;
+    let variant = if let Some(variant) = variant { variant } else {
+        current = checked_result(action(&["model", "engine"])?)?;
+        current["summary"]["model"].as_str().ok_or_else(|| t("无法读取当前权重", "Cannot read current weights"))?
+    };
+    let args = ["model", "load", engine, "--model", variant];
+    let loaded = checked_result(action(&args)?)?;
+    if loaded["summary"]["loaded"] != true || loaded["summary"]["validated"] != true
+        || loaded["summary"]["saved"] != true {
+        return Err(t("加载回执不完整，未确认加载成功", "Incomplete load receipt; loading was not confirmed"));
+    }
     let read_back = checked_result(action(&["model", "engine"])?)?;
     let summary = &read_back["summary"];
-    if summary["engine"] != engine || variant.is_some_and(|wanted| summary["model"] != wanted) {
+    if summary["engine"] != engine || summary["model"] != variant {
         return Err(t("runtime 回读与选择不一致；请检查环境变量覆盖并刷新", "Runtime read-back differs from selection; check environment overrides and refresh"));
     }
     Ok(summary.clone())
@@ -1155,7 +1163,7 @@ fn save_model_settings(shared: &Arc<Mutex<Live>>, engine: &str, variant: Option<
         live.engine = settings["engine"].as_str().unwrap_or("").to_owned();
         live.model_settings = settings;
     }
-    Ok(t("设置已保存并回读；下次加载生效，请运行推理验证", "Settings saved and read back; applied on next model load. Run Check inference."))
+    Ok(t("权重已校验、加载、试推理并保存；已回读设置", "Weights validated, loaded, trial inference passed, saved and read back."))
 }
 
 fn probe_notice(value: Value) -> Result<String, String> {
@@ -1291,7 +1299,7 @@ fn confirm_key(app: &mut App, code: KeyCode) -> bool {
 fn run_confirm(app: &mut App, kind: ConfirmKind) {
     let task = matches!(
         &kind,
-        ConfirmKind::InstallM3 | ConfirmKind::InstallVariant(_)
+        ConfirmKind::InstallM3 | ConfirmKind::InstallVariant(_, _)
     )
     .then(model_task::Task::start);
     let cancel = task.as_ref().map(|task| Arc::clone(&task.cancel));
@@ -1313,9 +1321,9 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
         ConfirmKind::UninstallM3 => t("正在卸载 BGE-M3", "Uninstalling BGE-M3"),
         ConfirmKind::CancelModel(_) => t("正在取消模型任务，等待当前网络读取结束", "Cancelling model task; waiting for the current network read"),
         ConfirmKind::RestartM3(_, _) => t("正在取消旧任务并重新安排下载", "Cancelling the old task and scheduling a new download"),
-        ConfirmKind::Weights(_, _) => t("正在保存并回读模型选择", "Saving and reading back model selection"),
-        ConfirmKind::InstallVariant(_) => t("正在安装或校验所选权重", "Installing or verifying selected weights"),
-        ConfirmKind::Engine(_) => t("正在保存推理引擎", "Saving inference engine"),
+        ConfirmKind::Weights(_, _) => t("正在校验并加载；试推理成功后保存", "Validating and loading; saving after trial inference"),
+        ConfirmKind::InstallVariant(_, _) => t("正在下载所选权重；不切换模型", "Downloading selected weights; current model unchanged"),
+        ConfirmKind::Engine(_) => t("正在校验并加载推理引擎", "Validating and loading inference engine"),
         ConfirmKind::InstallEngines => t("正在下载 NPU 推理引擎", "Downloading NPU providers"),
         ConfirmKind::ProbeEngine => t("正在验证推理引擎", "Checking inference engine"),
         ConfirmKind::RecallMode(_) => t("正在保存召回模式", "Saving recall mode"),
@@ -1368,9 +1376,9 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
             }
             ConfirmKind::Engine(engine) => save_model_settings(&shared, &engine, None),
             ConfirmKind::Weights(engine, variant) => save_model_settings(&shared, &engine, Some(&variant)),
-            ConfirmKind::InstallVariant(variant) => model_action(&["model", "install-m3", "--model", &variant,
+            ConfirmKind::InstallVariant(engine, variant) => model_action(&["model", "install-m3", "--model", &variant, "--for-engine", &engine,
                 "--mirror", &selected_model_mirror()]).map(|_| t(
-                    "权重文件处理完成；请重新打开选择页保存选择", "Weight files ready; reopen the picker to save your selection")),
+                    "预下载完成；当前模型未切换，可继续下载其他权重或选择加载", "Download complete; current model unchanged. Download more weights or select Load.")),
             ConfirmKind::RecallMode(mode) => {
                 retrieval_action(&["agent-config", "--set", &format!("recall_mode={mode}")]).map(
                     |_| {
@@ -2445,7 +2453,7 @@ mod model_menu_tests {
         let mut terminal = Terminal::new(backend)?;
         terminal.draw(|frame| draw(frame, &app))?;
         let screen = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect::<String>();
-        assert!(screen.contains("Save engine") || screen.contains("保存引擎"), "{screen}");
+        assert!(screen.contains("Validate and load") || screen.contains("校验并加载"), "{screen}");
         Ok(())
     }
 
@@ -2455,10 +2463,12 @@ mod model_menu_tests {
         let settings = serde_json::json!({"engine":"cpu","model":"fp16","variants":[]});
         let actual = save_model_settings_with("cpu", Some("fp16"), |args| {
             calls.push(args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
-            Ok(serde_json::json!({"status":"ok","summary":settings}))
+            Ok(serde_json::json!({"status":"ok","summary":if args[1] == "load" {
+                serde_json::json!({"loaded":true,"validated":true,"saved":true})
+            } else { settings.clone() }}))
         }).map_err(anyhow::Error::msg)?;
         assert_eq!(actual, settings);
-        assert_eq!(calls, vec![vec!["model","engine","cpu","--model","fp16"], vec!["model","engine"]]);
+        assert_eq!(calls, vec![vec!["model","load","cpu","--model","fp16"], vec!["model","engine"]]);
         let mut failures = 0;
         assert!(save_model_settings_with("cpu", Some("fp16"), |_| {
             failures += 1;
@@ -2495,9 +2505,10 @@ mod model_menu_tests {
         form.cursor = respire::memory::onnx::MODEL_VARIANTS.len() + 2;
         app.overlay = Overlay::ModelWeights(form);
         model_weights_key(&mut app, KeyCode::Enter);
-        let Overlay::Confirm { text, cursor:1, kind:ConfirmKind::InstallVariant(name) } = &app.overlay else {
+        let Overlay::Confirm { text, cursor:1, kind:ConfirmKind::InstallVariant(engine, name) } = &app.overlay else {
             anyhow::bail!("download must require confirmation defaulting to cancel");
         };
+        assert_eq!(engine, "cpu");
         assert_eq!(name, "fp16");
         assert!(text.contains("543 MiB"));
         confirm_key(&mut app, KeyCode::Enter);
@@ -2585,7 +2596,14 @@ fn overlay_lines(app: &App) -> Option<Vec<Line<'static>>> {
     match &app.overlay {
         Overlay::None => None,
         Overlay::ModelWeights(form) => Some(form.lines(&app.live.model_settings)),
-        Overlay::SavingWeights => Some(vec![line(t("正在保存并回读设置；提交期间请等待", "Saving and reading back settings; please wait for the commit"))]),
+        Overlay::SavingWeights => Some(vec![
+            line(match app.live.model_progress["phase"].as_str() {
+                Some("verify") => t("正在校验固定大小、SHA-256 和模型身份", "Validating pinned size, SHA-256 and model identity"),
+                Some("load") => t("正在实际加载和试推理；成功后保存", "Loading and running trial inference; saving after success"),
+                _ => t("等待加载事务完成；不会下载", "Waiting for model load transaction; no downloads"),
+            }),
+            line(t("请等待；加载期间不接受取消", "Please wait; loading cannot be cancelled")),
+        ]),
         Overlay::ModelMirror(input) => {
             let mut lines = vec![line(t("BGE-M3 下载源", "BGE-M3 download source"))];
             lines.extend(respire::model_install::MIRRORS.iter().map(|mirror| choice(input.text == *mirror, (*mirror).to_owned())));

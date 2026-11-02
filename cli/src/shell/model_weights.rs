@@ -46,18 +46,18 @@ impl Form {
                 else { t("（此系统不支持）", " (unsupported on this OS)") }))];
         for (index, variant) in MODEL_VARIANTS.iter().enumerate() {
             let state = if Self::present(settings, variant.name) {
-                t("文件存在，未验证推理", "present; inference unverified")
-            } else { t("需安装 / 校验", "install / verify required") };
+                t("已下载；加载前校验", "downloaded; validated before loading")
+            } else { t("需下载或重新下载", "download or redownload required") };
             rows.push(choice(self.cursor == index + 1, format!("{} {:<10} {:>4.0} MiB  {state}",
                 if index == self.variant { "●" } else { "○" }, variant.name, variant.size as f64 / 1048576.0)));
         }
-        rows.push(choice(self.cursor == MODEL_VARIANTS.len() + 1, t("保存引擎与所选权重", "Save engine and selected weights")));
-        rows.push(choice(self.cursor == MODEL_VARIANTS.len() + 2, t("安装 / 校验所选权重…", "Install / verify selected weights…")));
+        rows.push(choice(self.cursor == MODEL_VARIANTS.len() + 1, t("校验并加载所选权重", "Validate and load selected weights")));
+        rows.push(choice(self.cursor == MODEL_VARIANTS.len() + 2, t("预下载所选权重（不切换）…", "Download selected weights (keep current model)…")));
         rows.push(choice(self.cursor == MODEL_VARIANTS.len() + 3, t("返回（放弃草稿）", "Back (discard draft)")));
         rows.push(line(t("上下移动，回车选权重；只选不保存不会改变配置。切引擎保留所选权重。",
             "Up/down moves; Enter picks weights. Drafts do not change settings. Engine changes keep the selected weights.")));
-        rows.push(line(t("GPU/NPU 需要实际硬件及 provider；部分变体可能不支持。保存后在模型页运行推理验证。",
-            "GPU/NPU need hardware/providers; some variants may fail. After saving, run Check inference on the Models page.")));
+        rows.push(line(t("GPU/NPU 需要实际硬件及 provider；部分变体可能不支持。加载时会校验并试推理，成功后才保存。",
+            "GPU/NPU need hardware/providers; some variants may fail. Load validates files and runs trial inference before saving.")));
         rows
     }
 }

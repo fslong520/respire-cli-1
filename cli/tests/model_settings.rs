@@ -47,6 +47,14 @@ fn model_weights_persist_read_back_and_drive_the_next_load() -> Result<()> {
     anyhow::ensure!(run(&["model", "engine", "cpu", "--model", "q4f16"])?.status.success());
     assert_eq!(std::fs::read(&settings)?, before);
     assert!(!profile.path().join("models").exists(), "settings must not download models");
+    // Validated loading never saves an unavailable draft or fetches dependencies.
+    let failed_load = run(&["model", "load", "cpu", "--model", "fp16"])?;
+    assert!(!failed_load.status.success());
+    assert_eq!(std::fs::read(&settings)?, before);
+    assert!(!profile.path().join("models").exists());
+    assert!(!run(&["model", "install", "--model", "invalid", "--for-engine", "cpu"])?.status.success());
+    assert!(!profile.path().join("models").exists(), "invalid download request must fail before fetching baseline");
+
     // Tiny baseline fixtures permit directory resolution, but no valid weights
     // are present and no model bytes can be executed.
     let models = profile.path().join("models");

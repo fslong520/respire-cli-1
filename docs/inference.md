@@ -17,24 +17,29 @@ flowchart LR
 | NPU | Windows, Apple Silicon | Explicit selection and compatible provider/hardware/model |
 
 Choose an engine in the TUI or run `rsrs model engine cpu|gpu|npu`.
-On the Models page, open **Choose engine and model weights** to draft an engine
-and one of `quantized`, `fp16`, `int8`, `uint8`, `q4`, or `q4f16`. Changing the
-draft engine retains the selected weights. **Back** or Escape discards the draft;
-**Save** asks for confirmation, resets the previous session and persists both
-settings through the runtime. The saved selection is read back before success is
-shown and survives restarting the CLI.
+On the Models page, open **Choose engine and model weights** to draft CPU/GPU/NPU
+and one of `quantized`, `fp16`, `int8`, `uint8`, `q4`, or `q4f16`.
 
-Missing weights require **Install / verify selected weights** and a separate
-download confirmation showing the size; installing does not save the draft.
-The baseline model, tokenizer and CPU container may also be needed. File presence
-in this picker is a size check, not checksum or inference verification. The
-installer and model loader retain their checksum checks. After saving, use
-**Check inference** on the Models page. Available variant names do not guarantee
-that every provider or device supports every variant; GPU/NPU require compatible
-hardware and providers. Unsupported operating systems cannot save those engines
-from the picker. The equivalent command is
-`rsrs model engine cpu|gpu|npu --model VARIANT`; an engine-only change preserves an
-explicit saved variant.
+- **Download selected weights (keep current model)** prefetches the selected
+  variant and its dependencies after a size-labelled confirmation. Repeat to
+  prefetch multiple variants. Downloading does not change configuration or the
+  current session. Verified files are reused.
+- **Validate and load selected weights** never downloads. It checks pinned sizes
+  and SHA-256 identities for the selected BGE-M3 weights, tokenizer and required
+  CPU container, then loads and runs real trial inference. Only success saves
+  the selection and checks runtime read-back. Missing, corrupt or unsupported
+  weights are rejected. A failure after replacement attempts to reload and trial
+  the previous model; failure to recover is explicitly reported.
+- Escape/Back discards the draft; both confirmations default to cancel. File
+  presence in the picker is metadata only, with checksums verified on loading.
+
+GPU/NPU require compatible OS, hardware and providers. A listed variant is not a
+compatibility guarantee; trial inference must succeed. No node-placement or
+performance guarantee is implied. The commands are
+`rsrs model install --model VARIANT --for-engine cpu|gpu|npu` for prefetch and
+`rsrs model load cpu|gpu|npu --model VARIANT` for validated loading.
+`rsrs model engine cpu|gpu|npu --model VARIANT` remains a settings-only CLI command;
+TUI engine changes use the validated load path.
 
 `RSRS_ENGINE` overrides the saved selection. Automatic selection is unsupported.
 Missing hardware and inference failures are reported without switching engines.

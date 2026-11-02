@@ -2295,7 +2295,7 @@ fn diary_lexical_mode(args: &[String]) -> bool {
 fn needs_inference(args: &[String]) -> bool {
     matches!(command_name(args), Some("remember" | "recall" | "related" | "reembed" | "classify" | "update"))
         || (command_name(args) == Some("diary-search") && !diary_lexical_mode(args))
-        || (command_name(args) == Some("model") && args.iter().any(|arg| arg == "probe"))
+        || (command_name(args) == Some("model") && args.iter().any(|arg| matches!(arg.as_str(), "probe" | "load")))
 }
 
 fn cached(id: &str) -> Option<RpcResponse> {
