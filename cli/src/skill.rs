@@ -12,27 +12,27 @@ use respire::memory::engine::RecalledWithContext;
 use std::collections::HashMap;
 
 /// Canonical labels a skill body should carry, inside the standard
-/// cause/action/result markers (the markers stay mandatory).
-pub const SECTIONS: [&str; 6] = ["\u{89e6}\u{53d1}", "\u{524d}\u{7f6e}", "\u{6b65}\u{9aa4}", "\u{6821}\u{9a8c}", "\u{56de}\u{9000}", "\u{8fb9}\u{754c}"];
+/// `【Cause】/【Action】/【Result】` markers (required for new structured bodies); legacy Chinese remains readable.
+pub const SECTIONS: [&str; 6] = ["Trigger", "Prerequisites", "Steps", "Verification", "Rollback", "Scope"];
 
 /// Accepted spellings per section. Matching is substring-based so
 /// the bracketed trigger label, the label with a full-width colon and `Trigger:` all count.
 const ALIASES: [(&str, &[&str]); 6] = [
     (
-        "\u{89e6}\u{53d1}",
+        "Trigger",
         &["\u{89e6}\u{53d1}\u{6761}\u{4ef6}", "\u{89e6}\u{53d1}", "\u{4f55}\u{65f6}\u{7528}", "when to use", "trigger"],
     ),
     (
-        "\u{524d}\u{7f6e}",
-        &["\u{524d}\u{7f6e}\u{6761}\u{4ef6}", "\u{524d}\u{7f6e}", "\u{524d}\u{63d0}", "prerequisite", "requires"],
+        "Prerequisites",
+        &["\u{524d}\u{7f6e}\u{6761}\u{4ef6}", "\u{524d}\u{7f6e}", "\u{524d}\u{63d0}", "prerequisites", "prerequisite", "requires"],
     ),
-    ("\u{6b65}\u{9aa4}", &["\u{6267}\u{884c}\u{6b65}\u{9aa4}", "\u{6b65}\u{9aa4}", "steps", "procedure"]),
+    ("Steps", &["\u{6267}\u{884c}\u{6b65}\u{9aa4}", "\u{6b65}\u{9aa4}", "steps", "procedure"]),
     (
-        "\u{6821}\u{9a8c}",
+        "Verification",
         &["\u{6210}\u{529f}\u{5224}\u{636e}", "\u{6821}\u{9a8c}", "\u{9a8c}\u{8bc1}", "verification", "verify"],
     ),
     (
-        "\u{56de}\u{9000}",
+        "Rollback",
         &[
             "\u{5931}\u{8d25}\u{56de}\u{9000}",
             "\u{5931}\u{8d25}\u{5904}\u{7406}",
@@ -43,7 +43,7 @@ const ALIASES: [(&str, &[&str]); 6] = [
         ],
     ),
     (
-        "\u{8fb9}\u{754c}",
+        "Scope",
         &["\u{9002}\u{7528}\u{8fb9}\u{754c}", "\u{9002}\u{7528}\u{8303}\u{56f4}", "\u{8fb9}\u{754c}", "\u{4e0d}\u{9002}\u{7528}", "scope", "limits"],
     ),
 ];
@@ -220,17 +220,31 @@ mod tests {
     }
 
     #[test]
+    fn english_legacy_and_mixed_headings_have_the_same_requirements() {
+        let english = "\u{3010}Cause\u{3011}fixture\n\u{3010}Action\u{3011}\nTrigger: authorized task\nPrerequisites: ready\nSteps: run\nVerification: exit 0\nRollback: restore\nScope: Linux\n\u{3010}Result\u{3011}verified";
+        let legacy = "\u{3010}\u{524d}\u{56e0}\u{3011}fixture\n\u{3010}\u{884c}\u{4e3a}\u{3011}\n\u{89e6}\u{53d1}\u{6761}\u{4ef6}\u{ff1a}authorized task\n\u{524d}\u{7f6e}\u{6761}\u{4ef6}\u{ff1a}ready\n\u{6b65}\u{9aa4}\u{ff1a}run\n\u{6210}\u{529f}\u{5224}\u{636e}\u{ff1a}exit 0\n\u{5931}\u{8d25}\u{56de}\u{9000}\u{ff1a}restore\n\u{9002}\u{7528}\u{8fb9}\u{754c}\u{ff1a}Linux\n\u{3010}\u{540e}\u{679c}\u{3011}verified";
+        let mixed = english.replace("Verification:", "\u{6821}\u{9a8c}\u{ff1a}").replace("\u{3010}Cause\u{3011}", "\u{3010}\u{524d}\u{56e0}\u{3011}");
+        for body in [english, legacy, &mixed] {
+            assert!(missing_sections(body).is_empty(), "{body}");
+        }
+        for (label, old) in [("Verification: exit 0", "\u{6210}\u{529f}\u{5224}\u{636e}\u{ff1a}exit 0"), ("Rollback: restore", "\u{5931}\u{8d25}\u{56de}\u{9000}\u{ff1a}restore")] {
+            assert_eq!(missing_sections(&english.replace(label, "")), missing_sections(&legacy.replace(old, "")));
+        }
+        assert_eq!(missing_sections("\u{672a}\u{9a8c}\u{8bc1}; verification pending; rollback unavailable"), SECTIONS);
+    }
+
+    #[test]
     fn template_accepts_aliases_and_flags_gaps() {
         let full = "\u{3010}\u{524d}\u{56e0}\u{3011}x\n\u{3010}\u{884c}\u{4e3a}\u{3011}\n\u{89e6}\u{53d1}\u{6761}\u{4ef6}\u{ff1a}\u{4e0d}\u{80fd}\u{672c}\u{5730}\u{8dd1}\n\u{524d}\u{7f6e}\u{ff1a}\u{5df2}\u{767b}\u{5f55}\n\u{6b65}\u{9aa4}\u{ff1a}1) run\n\u{6821}\u{9a8c}\u{ff1a}\u{9000}\u{51fa}\u{7801} 0\n\u{56de}\u{9000}\u{ff1a}\u{8fd8}\u{539f}\u{5907}\u{4efd}\n\u{8fb9}\u{754c}\u{ff1a}\u{4ec5} Linux\n\u{3010}\u{540e}\u{679c}\u{3011}y";
         let missing = missing_sections(full);
         assert!(missing.is_empty(), "missing={missing:?}");
 
         let missing = missing_sections("\u{3010}\u{524d}\u{56e0}\u{3011}x\u{3010}\u{884c}\u{4e3a}\u{3011}\u{6b65}\u{9aa4}\u{ff1a}\u{53ea}\u{5199}\u{4e86}\u{4e00}\u{6b65}\u{3010}\u{540e}\u{679c}\u{3011}y");
-        assert_eq!(missing, vec!["\u{89e6}\u{53d1}", "\u{524d}\u{7f6e}", "\u{6821}\u{9a8c}", "\u{56de}\u{9000}", "\u{8fb9}\u{754c}"]);
+        assert_eq!(missing, vec!["Trigger", "Prerequisites", "Verification", "Rollback", "Scope"]);
 
         // Prose that merely contains an alias word does not satisfy the template.
         let prose = missing_sections("\u{3010}\u{524d}\u{56e0}\u{3011}x\u{3010}\u{884c}\u{4e3a}\u{3011}\u{6b65}\u{9aa4}\u{ff1a}\u{7ed3}\u{679c}\u{672a}\u{9a8c}\u{8bc1}\u{ff0c}\u{8fb9}\u{754c}\u{60c5}\u{51b5}\u{5f88}\u{591a}\u{3010}\u{540e}\u{679c}\u{3011}y");
-        assert!(prose.contains(&"\u{6821}\u{9a8c}"), "\u{672a}\u{9a8c}\u{8bc1} must not stand in for \u{6821}\u{9a8c}");
+        assert!(prose.contains(&"Verification"), "\u{672a}\u{9a8c}\u{8bc1} must not stand in for \u{6821}\u{9a8c}");
     }
 
     #[test]
