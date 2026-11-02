@@ -7826,7 +7826,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     }
                     result
                         .actions
-                        .push("rsrs remember \"<content>\" --force to write as new entry".into());
+                        .push("Read candidate bodies; choose update, merge or a real --parent, or explicitly defer. Do not bypass candidate review with bare --force.".into());
                     result.actions.extend(respire::service::write_decision_actions().iter().map(|action| (*action).to_owned()));
                     emit_result(result)?;
                     return Ok(());
@@ -7862,7 +7862,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                         .push("rsrs remember \"<content>\" --parent <candidate id>".into());
                     result
                         .actions
-                        .push("rsrs remember \"<content>\" --force to write as new entry".into());
+                        .push("Read candidate bodies; choose update, merge or a real --parent, or explicitly defer. Do not bypass candidate review with bare --force.".into());
                     result.actions.extend(respire::service::write_decision_actions().iter().map(|action| (*action).to_owned()));
                     emit_result(result)?;
                     return Ok(());
