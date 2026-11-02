@@ -50,8 +50,8 @@ picker and is mutually exclusive with every option above and with `--json`
 
 One memory per session by default:
 
-- title: `<Platform> 会话 <first request>`
-- body: the mandatory `【前因】【行为】【后果】` three-marker form, carrying the
+- title: `<Platform> session <first request>`
+- body: the mandatory cause/action/result three-marker form, carrying the
   working directory, model/provider, first and last user requests, token usage
   and any subagent linkage
 - `importance`/`kind` from the flags; `device`/`user` auto-filled

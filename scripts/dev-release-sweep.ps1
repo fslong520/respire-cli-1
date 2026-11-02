@@ -19,6 +19,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The taxonomy parent and the cause/action/result markers are built from code points so this
+# script stays pure ASCII while still producing the exact values the store expects.
+$TX_DEV = [string]::Join('', @(0x7F16, 0x7A0B, 0x5F00, 0x53D1 | ForEach-Object { [char]$_ }))
+$MARK_CAUSE = [string]::Join('', @(0x3010, 0x524D, 0x56E0, 0x3011 | ForEach-Object { [char]$_ }))
+$MARK_ACTION = [string]::Join('', @(0x3010, 0x884C, 0x4E3A, 0x3011 | ForEach-Object { [char]$_ }))
+$MARK_RESULT = [string]::Join('', @(0x3010, 0x540E, 0x679C, 0x3011 | ForEach-Object { [char]$_ }))
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Release smoke may run only in GitHub Actions.' }
 if ($Server -cne 'https://api-dev.rsrs.rs') { throw 'Release smoke requires exactly https://api-dev.rsrs.rs.' }
 if (-not $Exe -or $ExpectVersion -notmatch '^\d+\.\d+\.\d+(-dev\.\d+)?$') {
@@ -30,7 +37,7 @@ if ([string]::IsNullOrWhiteSpace($env:RSRS_DEV_SERVER_ADDR) -or $Server -ne $env
 }
 $pkgMatch = [regex]::Match($Package, '^rsrs-cli@(dev|\d+\.\d+\.\d+(-dev\.\d+)?)$')
 if (-not $pkgMatch.Success) {
-    throw "拒绝：包必须是 rsrs-cli@dev 或 rsrs-cli@x.y.z[-dev.n]，收到 $Package"
+    throw "Refused: the package must be rsrs-cli@dev or rsrs-cli@x.y.z[-dev.n], got $Package"
 }
 $requested = $pkgMatch.Groups[1].Value
 
@@ -46,7 +53,7 @@ if (-not $Root) {
 }
 $resolvedRoot = [System.IO.Path]::GetFullPath($Root)
 if ($resolvedRoot -match '(?i)[/\\]\.(onememory|respire)([/\\]|$)') {
-    throw "拒绝：根目录落在用户库 .onememory/.respire 内：$resolvedRoot"
+    throw "Refused: the root sits inside the user store .onememory/.respire: $resolvedRoot"
 }
 $Root = $resolvedRoot
 New-Item -ItemType Directory -Force -Path $Root, (Join-Path $Root 'logs'), (Join-Path $Root 'secrets'), (Join-Path $Root 'work') | Out-Null
@@ -495,7 +502,7 @@ function Invoke-Om {
     if ($envlp -and $envlp.PSObject.Properties['status']) { $status = [string]$envlp.status }
     if ($envlp -and [string]$envlp.command -eq 'cli') {
         $keys = @($envlp.summary.PSObject.Properties.Name)
-        if ($keys.Count -eq 0) { $Note = ("RPC 带回空 cli 信封 " + $Note).Trim() }
+        if ($keys.Count -eq 0) { $Note = ("RPC returned an empty cli envelope " + $Note).Trim() }
     }
     if ($Raw -or -not $status) {
         $exitOk = $ExpectExit -contains [int]$exit
@@ -507,7 +514,7 @@ function Invoke-Om {
         $exitOk = ($exit -eq $want)
         $statusOk = $AllowStatus -contains $status
     }
-    if ($stdout.Length -lt $MinStdout) { $statusOk = $false; $Note = ("stdout 过短 " + $Note).Trim() }
+    if ($stdout.Length -lt $MinStdout) { $statusOk = $false; $Note = ("stdout too short " + $Note).Trim() }
     if ($RequireCommand) {
         $got = [string]$envlp.command
         $total = $null
@@ -557,7 +564,7 @@ function Invoke-Om {
         }
     }
     } while (($readyFail -and $readyTries -lt 2) -or $retryIndexPending)
-    if ($readyTries -gt 1) { $Note = ("runtime 重试 $readyTries 次 " + $Note).Trim() }
+    if ($readyTries -gt 1) { $Note = ("runtime retried $readyTries time(s) " + $Note).Trim() }
     $ok = $exitOk -and $statusOk -and ($leaks.Count -eq 0) -and (-not $timedOut)
     $commandTokens = @($ArgList | Where-Object { $_ -notin @('--direct', '--client-only', '--json') })
     $commandPath = ''
@@ -598,7 +605,7 @@ function Assert-Count([string]$Name, $Envelope, [string]$Field, [int]$Min) {
     if ($Envelope -and $Envelope.summary -and $null -ne $Envelope.summary.$Field) {
         $n = [int]$Envelope.summary.$Field
     }
-    if ($n -lt $Min) { throw "$Name ${Field}=$n，需要至少 $Min" }
+    if ($n -lt $Min) { throw "$Name ${Field}=$n, expected at least $Min" }
 }
 
 function New-Pass {
@@ -673,7 +680,7 @@ function Invoke-CloudCleanup {
 $script:UseExe = [bool]$Exe
 $script:ExePath = $Exe
 if ($script:UseExe) {
-    if (-not (Test-Path $script:ExePath)) { throw "找不到二进制 $($script:ExePath)" }
+    if (-not (Test-Path $script:ExePath)) { throw "binary not found: $($script:ExePath)" }
     Write-Host "ROOT $resolvedRoot"
     Write-Host "EXE $($script:ExePath)"
     $script:CliJs = ''
@@ -688,19 +695,19 @@ for ($try = 0; $try -lt 24; $try++) {
     if ($LASTEXITCODE -eq 0 -and $seen) { break }
     Start-Sleep -Seconds 10
 }
-if (-not $seen) { throw "npm 上还看不到 $Package" }
+if (-not $seen) { throw "package not visible on npm yet: $Package" }
 Write-Host "INSTALL $Package ($seen)"
 npm install --prefix $Prefix $Package --include=optional --no-fund --no-audit --registry https://registry.npmjs.org
-if ($LASTEXITCODE -ne 0) { throw "npm install 失败：$LASTEXITCODE" }
+if ($LASTEXITCODE -ne 0) { throw "npm install failed: $LASTEXITCODE" }
 $script:CliJs = Join-Path $Prefix 'node_modules\rsrs-cli\bin\cli.js'
-if (-not (Test-Path $script:CliJs)) { throw "找不到 $script:CliJs" }
+if (-not (Test-Path $script:CliJs)) { throw "$script:CliJs not found" }
 $pkgJson = Get-Content (Join-Path $Prefix 'node_modules\rsrs-cli\package.json') -Raw | ConvertFrom-Json
 $cliVersion = [string]$pkgJson.version
 $tags = npm view rsrs-cli dist-tags --json --registry https://registry.npmjs.org | ConvertFrom-Json
 $specIsDev = $requested -eq 'dev' -or $requested -match '-dev\.'
-if ($specIsDev -and $cliVersion -notmatch '-dev') { throw "拒绝：装到的版本不是 dev：$cliVersion" }
-if ($requested -ne 'dev' -and $cliVersion -ne $requested) { throw "装到 $cliVersion，要的是 $requested" }
-if ($specIsDev -and [string]$tags.latest -eq $cliVersion) { throw "拒绝：dev 版本 $cliVersion 已等于 latest" }
+if ($specIsDev -and $cliVersion -notmatch '-dev') { throw "Refused: the installed version is not a dev build: $cliVersion" }
+if ($requested -ne 'dev' -and $cliVersion -ne $requested) { throw "installed $cliVersion but $requested was requested" }
+if ($specIsDev -and [string]$tags.latest -eq $cliVersion) { throw "Refused: dev version $cliVersion already equals latest" }
 Write-Host "CLI $cliVersion latest=$($tags.latest) dev=$($tags.dev)"
 $rid = [System.Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier
 $plat = switch ($rid) {
@@ -717,7 +724,7 @@ if ($env:RSRS_LIBC -and $rid -like 'linux-*') {
 }
 if ($plat) {
     npm install --prefix $Prefix "$plat@$cliVersion" --no-fund --no-audit --registry https://registry.npmjs.org
-    if ($LASTEXITCODE -ne 0) { throw "平台包 $plat 安装失败：$LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "platform package $plat install failed: $LASTEXITCODE" }
 }
 }
 
@@ -729,7 +736,7 @@ $verJson = Invoke-Om -Name 'version-json' -ArgList @('--json', 'v') -DataDir $Di
 if (-not ($verJson.Stdout -like '*"command":"version"*')) {
     Add-SweepRow 'version-json-command' $false $verJson.Stdout
 }
-if ($wantVersion -and $ver.Stdout -notmatch [regex]::Escape($wantVersion)) { throw "version 输出与 $wantVersion 不符" }
+if ($wantVersion -and $ver.Stdout -notmatch [regex]::Escape($wantVersion)) { throw "version output does not match $wantVersion" }
 $script:ObservedVersion = [string]$verJson.Envelope.summary.version
 $script:ObservedVersionDisplay = $ver.Stdout.Trim()
 Assert-Smoke 'exact-artifact-version' ($ver.Ok -and $verJson.Ok -and $script:ObservedVersion -ceq $wantVersion -and $script:ObservedVersionDisplay -ceq "rsrs $wantVersion")
@@ -742,7 +749,7 @@ foreach ($path in $script:Catalog.command_paths) {
 }
 $prompt = Invoke-Om -Name 'prompt' -ArgList @('--json', 'prompt') -DataDir $DirA
 Assert-Smoke 'prompt-instructions-present' ($prompt.Ok -and [string]$prompt.Envelope.command -eq 'prompt' -and [string]$prompt.Envelope.summary.instructions -match 'rsrs')
-Invoke-Om -Name 'no-args-no-tty' -ArgList @() -DataDir $DirA -ExpectExit @(2) -Raw -Note '无 TTY 应退出 2' | Out-Null
+Invoke-Om -Name 'no-args-no-tty' -ArgList @() -DataDir $DirA -ExpectExit @(2) -Raw -Note 'no TTY should exit 2' | Out-Null
 Invoke-Om -Name 'parse-error' -ArgList @('not-a-command') -DataDir $DirA -ExpectExit @(2) -Raw | Out-Null
 
 $splitHelp = Invoke-Om -Name 'split-help-contract' -ArgList @('split', '--help') -DataDir $DirA -Raw
@@ -762,7 +769,7 @@ Invoke-Om -Name 'chain-reject-from-flag' -ArgList @('chain', '--from', 'missing'
 Invoke-Om -Name 'config-addr' -ArgList @('--json', 'config', '--addr', $Server) -DataDir $DirA | Out-Null
 $cfg = Invoke-Om -Name 'config-read' -ArgList @('--json', 'config') -DataDir $DirA
 $cfgAddr = [string]$cfg.Envelope.summary.addr
-if ($cfgAddr -ne $Server) { throw "config 地址不是测试服：$cfgAddr" }
+if ($cfgAddr -ne $Server) { throw "config address is not the test server: $cfgAddr" }
 $configWrite = Invoke-Om -Name 'config-isolated-settings' -ArgList @('--json', 'config', '--autosync', 'false', '--cure-auto', 'false', '--rpc-parallelism', '1') -DataDir $DirA
 $configRead = Invoke-Om -Name 'config-settings-readback' -ArgList @('--json', 'config') -DataDir $DirA
 Assert-Smoke 'config-settings-persisted' ($configWrite.Ok -and $configRead.Ok -and $configRead.Envelope.summary.autosync -eq $false -and $configRead.Envelope.summary.cure_auto -eq $false -and [int]$configRead.Envelope.summary.rpc_parallelism -eq 1)
@@ -802,17 +809,17 @@ $mainCloudAccount = Add-CloudRegistration $user $pass
 [System.IO.File]::WriteAllText((Join-Path $Secrets 'account.txt'), "user=$user`n", [Text.UTF8Encoding]::new($false))
 $reg = Invoke-Om -Name 'register' -ArgList @('--json', 'register', '--addr', $Server, '--user', $user, '--pass', $pass) -DataDir $DirA -Secret -TimeoutSec 120
 Confirm-CloudRegistration $mainCloudAccount $reg
-if (-not $reg.Ok) { throw 'register 失败，中止。密钥见 secrets，勿外传。' }
+if (-not $reg.Ok) { throw 'register failed, aborting. The key lives in secrets; never share it.' }
 $super = ''
 if ($reg.Envelope.summary.super) { $super = [string]$reg.Envelope.summary.super }
-if (-not $super) { throw 'register 响应没有 summary.super' }
+if (-not $super) { throw 'register response has no summary.super' }
 $regAddr = [string]$reg.Envelope.summary.addr
-if ($regAddr -ne $Server) { throw "register 地址不是测试服：$regAddr" }
+if ($regAddr -ne $Server) { throw "register address is not the test server: $regAddr" }
 
 $st = Invoke-Om -Name 'status-json' -ArgList @('--json', 'status') -DataDir $DirA
 $serverAddr = ''
 if ($st.Envelope.summary.server_addr) { $serverAddr = [string]$st.Envelope.summary.server_addr }
-if ($serverAddr -ne $Server) { throw "status.server_addr=$serverAddr，不是测试服。中止。" }
+if ($serverAddr -ne $Server) { throw "status.server_addr=$serverAddr is not the test server. Aborting." }
 Invoke-Om -Name 'status-human' -ArgList @('status') -DataDir $DirA -Raw | Out-Null
 $revisionInitial = Invoke-Om -Name 'memory-revision-json' -ArgList @('--json', 'memory-revision') -DataDir $DirA
 Assert-Smoke 'memory-revision-profile-token' ($revisionInitial.Ok -and [string]$revisionInitial.Envelope.command -ceq 'memory-revision' -and [string]$revisionInitial.Envelope.summary.profile -ceq [string]$st.Envelope.summary.data_dir -and [string]$revisionInitial.Envelope.summary.revision -cmatch '^[0-9a-f]{32}$')
@@ -820,8 +827,8 @@ Invoke-Om -Name 'status-before-revision-repeat' -ArgList @('--json', 'status') -
 $revisionRepeat = Invoke-Om -Name 'memory-revision-repeat' -ArgList @('--json', 'memory-revision') -DataDir $DirA
 Assert-Smoke 'memory-revision-reads-stable' ($revisionRepeat.Ok -and [string]$revisionRepeat.Envelope.command -ceq 'memory-revision' -and [string]$revisionRepeat.Envelope.summary.profile -ceq [string]$revisionInitial.Envelope.summary.profile -and [string]$revisionRepeat.Envelope.summary.revision -ceq [string]$revisionInitial.Envelope.summary.revision)
 
-Invoke-Om -Name 'doctor-human' -ArgList @('doctor') -DataDir $DirA -Raw -ExpectExit @(0, 1, 2) -MinStdout 40 -TimeoutSec 180 -Note '退出 1 表示有检查项失败，干净 runner 上允许' | Out-Null
-$docj = Invoke-Om -Name 'doctor-json' -ArgList @('--json', 'doctor') -DataDir $DirA -TimeoutSec 180 -AllowStatus @('ok', 'warn', 'fail', 'skip') -RequireCommand 'doctor' -Note '信封必须是 doctor 且 summary.total 存在'
+Invoke-Om -Name 'doctor-human' -ArgList @('doctor') -DataDir $DirA -Raw -ExpectExit @(0, 1, 2) -MinStdout 40 -TimeoutSec 180 -Note 'exit 1 means a check failed; allowed on a clean runner' | Out-Null
+$docj = Invoke-Om -Name 'doctor-json' -ArgList @('--json', 'doctor') -DataDir $DirA -TimeoutSec 180 -AllowStatus @('ok', 'warn', 'fail', 'skip') -RequireCommand 'doctor' -Note 'the envelope must be doctor and summary.total must exist'
 $mcpBinItem = @($docj.Envelope.items) | Where-Object { [string]$_.name -eq 'mcp bin' } | Select-Object -First 1
 $mcpHttpItem = @($docj.Envelope.items) | Where-Object { [string]$_.name -eq 'mcp http' } | Select-Object -First 1
 $binName = if ($IsWindows) { 'rsrs.exe' } else { 'rsrs' }
@@ -831,7 +838,7 @@ Add-SweepRow 'doctor-mcp-http-item' ($null -ne $mcpHttpItem -and ([string]$mcpHt
 Add-SweepRow 'mcp-bin-file' (Test-Path -LiteralPath $mcpBinPath) $mcpBinPath
 $embedder = @($docj.Envelope.items) | Where-Object { [string]$_.name -eq 'embedder' } | Select-Object -First 1
 if ($embedder -and [string]$embedder.status -eq 'fail') {
-    Invoke-Om -Name 'doctor-fix' -ArgList @('--json', 'doctor', '--fix') -DataDir $DirA -TimeoutSec 900 -AllowStatus @('ok', 'warn', 'fail') -RequireCommand 'doctor' -Note '干净环境安装 BGE' | Out-Null
+    Invoke-Om -Name 'doctor-fix' -ArgList @('--json', 'doctor', '--fix') -DataDir $DirA -TimeoutSec 900 -AllowStatus @('ok', 'warn', 'fail') -RequireCommand 'doctor' -Note 'install BGE on a clean environment' | Out-Null
 }
 $remoteDoctor = Invoke-Om -Name 'doctor-remote' -ArgList @('--json', 'doctor', '--remote') -DataDir $DirA -TimeoutSec 180 -AllowStatus @('ok', 'warn', 'fail') -RequireCommand 'doctor'
 $remoteItem = @($remoteDoctor.Envelope.items | Where-Object { [string]$_.name -eq 'remote' } | Select-Object -First 1)
@@ -839,7 +846,7 @@ Assert-Smoke 'doctor-remote-health-reachable' ($remoteDoctor.Ok -and $remoteItem
 
 Invoke-Om -Name 'taxonomy' -ArgList @('--json', 'taxonomy') -DataDir $DirA | Out-Null
 Invoke-Om -Name 'taxonomy-list' -ArgList @('--json', 'taxonomy', '--list') -DataDir $DirA | Out-Null
-Invoke-Om -Name 'taxonomy-ensure' -ArgList @('--json', 'taxonomy', '--ensure', '编程开发') -DataDir $DirA | Out-Null
+Invoke-Om -Name 'taxonomy-ensure' -ArgList @('--json', 'taxonomy', '--ensure', $TX_DEV) -DataDir $DirA | Out-Null
 Invoke-Om -Name 'agent-config' -ArgList @('--json', 'agent-config') -DataDir $DirA | Out-Null
 Invoke-Om -Name 'agent-config-set' -ArgList @('--json', 'agent-config', '--set', 'diary_mode=concise') -DataDir $DirA | Out-Null
 Invoke-Om -Name 'update-check' -ArgList @('--json', 'update-check') -DataDir $DirA -TimeoutSec 180 | Out-Null
@@ -860,56 +867,56 @@ try {
     Remove-Item -LiteralPath $pluginPath
 }
 Invoke-Om -Name 'inject-targets' -ArgList @('--json', 'inject', '--targets') -DataDir $DirA | Out-Null
-Invoke-Om -Name 'inject-preview-codex' -ArgList @('--json', 'inject', '--preview', '--id', 'codex') -DataDir $DirA -ExpectExit @(0, 1, 2) -Raw -Note '只预览，不写本机 Agent 配置' | Out-Null
-Invoke-Om -Name 'inject-tui-no-tty' -ArgList @('inject', '--tui') -DataDir $DirA -ExpectExit @(1, 2) -Raw -Note '无 TTY' | Out-Null
+Invoke-Om -Name 'inject-preview-codex' -ArgList @('--json', 'inject', '--preview', '--id', 'codex') -DataDir $DirA -ExpectExit @(0, 1, 2) -Raw -Note 'preview only, do not write local agent config' | Out-Null
+Invoke-Om -Name 'inject-tui-no-tty' -ArgList @('inject', '--tui') -DataDir $DirA -ExpectExit @(1, 2) -Raw -Note 'no TTY' | Out-Null
 
 # Disable autosync so the later explicit sync owns the push step.
 Invoke-Om -Name 'config-autosync-off-before-write' -ArgList @('--json', 'config', '--autosync', 'false') -DataDir $DirA | Out-Null
 $revisionBeforeWrite = Invoke-Om -Name 'memory-revision-before-write' -ArgList @('--json', 'memory-revision') -DataDir $DirA
 $marker = "sweep-marker-$stamp"
-$title = "sweep标记$stamp"
+$title = "sweep-marker-$stamp"
 $rem = Invoke-Om -Name 'remember-force' -ArgList @(
     '--json', 'remember', "dev sweep marker $marker on TB16P",
     '--title', $title, '--type', 'decision', '--importance', 'important', '--force', '--project', 'respire-cli'
 ) -DataDir $DirA -TimeoutSec 300
 $id = ''
 if ($rem.Envelope.summary.id) { $id = [string]$rem.Envelope.summary.id }
-if (-not $id) { throw 'remember 没有 summary.id，后面的提取链无法继续。' }
+if (-not $id) { throw 'remember returned no summary.id, the extraction chain cannot continue.' }
 $revisionAfterWrite = Invoke-Om -Name 'memory-revision-after-write-read' -ArgList @('--json', 'memory-revision') -DataDir $DirA
 Assert-Smoke 'memory-revision-after-write' ($revisionBeforeWrite.Ok -and $revisionAfterWrite.Ok -and [string]$revisionBeforeWrite.Envelope.command -ceq 'memory-revision' -and [string]$revisionAfterWrite.Envelope.command -ceq 'memory-revision' -and [string]$revisionBeforeWrite.Envelope.summary.profile -ceq [string]$revisionAfterWrite.Envelope.summary.profile -and [string]$revisionBeforeWrite.Envelope.summary.revision -cne [string]$revisionAfterWrite.Envelope.summary.revision)
 $short = $id.Substring(0, [Math]::Min(8, $id.Length))
-Invoke-Om -Name 'remember-human' -ArgList @('remember', "human path $marker", '--title', "人类$stamp", '--force', '--importance', 'trivial') -DataDir $DirA -Raw -TimeoutSec 300 | Out-Null
+Invoke-Om -Name 'remember-human' -ArgList @('remember', "human path $marker", '--title', "human-$stamp", '--force', '--importance', 'trivial') -DataDir $DirA -Raw -TimeoutSec 300 | Out-Null
 $child = Invoke-Om -Name 'remember-parent' -ArgList @(
-    '--json', 'remember', "child of $marker", '--title', "子条$stamp", '--parent', $short, '--force', '--importance', 'important', '--type', 'context'
+    '--json', 'remember', "child of $marker", '--title', "child-$stamp", '--parent', $short, '--force', '--importance', 'important', '--type', 'context'
 ) -DataDir $DirA -TimeoutSec 300
 $childId = [string]$child.Envelope.summary.id
 $disp = Invoke-Om -Name 'remember-disposable' -ArgList @(
-    '--json', 'remember', "disposable $marker", '--title', "丢弃$stamp", '--force', '--importance', 'important'
+    '--json', 'remember', "disposable $marker", '--title', "discard-$stamp", '--force', '--importance', 'important'
 ) -DataDir $DirA -TimeoutSec 300
 $dispId = [string]$disp.Envelope.summary.id
 
 $mergeA = Invoke-Om -Name 'merge-src-a' -ArgList @(
     '--json', 'remember', "merge source A $marker",
-    '--title', "合并甲$stamp", '--type', 'decision', '--importance', 'important', '--force', '--project', 'respire-cli'
+    '--title', "merge-a-$stamp", '--type', 'decision', '--importance', 'important', '--force', '--project', 'respire-cli'
 ) -DataDir $DirA -TimeoutSec 180
 $mergeAId = [string]$mergeA.Envelope.summary.id
-if (-not $mergeAId) { throw 'merge-src-a 没有 id' }
+if (-not $mergeAId) { throw 'merge-src-a returned no id' }
 $mergeShort = $mergeAId.Substring(0, [Math]::Min(8, $mergeAId.Length))
 Invoke-Om -Name 'merge-src-b' -ArgList @(
     '--json', 'remember', "merge source B $marker",
-    '--title', "合并乙$stamp", '--type', 'decision', '--importance', 'important', '--force', '--project', 'respire-cli'
+    '--title', "merge-b-$stamp", '--type', 'decision', '--importance', 'important', '--force', '--project', 'respire-cli'
 ) -DataDir $DirA -TimeoutSec 180 | Out-Null
 $merged = Invoke-Om -Name 'merge-ids-short-and-title' -ArgList @(
     '--json', 'remember', "merged $marker",
-    '--title', "合并结果$stamp", '--merge-ids', "$mergeShort,合并乙$stamp",
+    '--title', "merge-result-$stamp", '--merge-ids', "$mergeShort,merge-b-$stamp",
     '--type', 'decision', '--importance', 'important', '--force', '--project', 'respire-cli'
 ) -DataDir $DirA -TimeoutSec 180
-if (-not $merged.Ok) { throw 'merge-ids 失败' }
+if (-not $merged.Ok) { throw 'merge-ids failed' }
 if ([int]$merged.Envelope.summary.dropped -lt 2) {
-    throw "merge-ids dropped=$($merged.Envelope.summary.dropped)，短 id 或纲名没有删掉"
+    throw "merge-ids dropped=$($merged.Envelope.summary.dropped); the short id or taxonomy name was not removed"
 }
 $gone = Invoke-Om -Name 'merge-old-gone' -ArgList @('--json', 'show', $mergeShort) -DataDir $DirA -ExpectExit @(1, 2) -AllowStatus @('fail')
-if ($gone.Exit -eq 0) { throw "合并后旧短 id $mergeShort 仍能 show，旧条还在" }
+if ($gone.Exit -eq 0) { throw "the old short id $mergeShort still resolves after the merge, so the old entry is still there" }
 
 # Full merge regressions: both input orders, a root and an external parent,
 # surviving descendants, and rejection before deleting any source.
@@ -939,7 +946,7 @@ foreach ($rootCase in @($true, $false)) {
 }
 
 $recA = Invoke-Om -Name 'recall' -ArgList @('--json', 'recall', $marker, '--limit', '3', '--project', 'respire-cli') -DataDir $DirA -TimeoutSec 180
-if ($recA.Stdout -notlike "*$marker*") { throw "A recall 没有召回标记 $marker" }
+if ($recA.Stdout -notlike "*$marker*") { throw "A recall did not return the marker $marker" }
 Invoke-Om -Name 'recall-human' -ArgList @('recall', $marker, '--limit', '3') -DataDir $DirA -Raw -TimeoutSec 180 | Out-Null
 Invoke-Om -Name 'recall-trace' -ArgList @('--json', 'recall', $marker, '--trace', '--limit', '3') -DataDir $DirA -TimeoutSec 180 | Out-Null
 $filtered = Invoke-Om -Name 'recall-filtered-titles' -ArgList @('--json', 'recall', $marker, '--mode', 'fast', '--type', 'decision', '--project', 'respire-cli', '--titles', '--limit', '10') -DataDir $DirA
@@ -953,7 +960,7 @@ Invoke-Om -Name 'show' -ArgList @('--json', 'show', $short) -DataDir $DirA | Out
 Invoke-Om -Name 'show-human' -ArgList @('show', $short) -DataDir $DirA -Raw | Out-Null
 Invoke-Om -Name 'chain' -ArgList @('--json', 'chain', $short, '--depth', '2') -DataDir $DirA | Out-Null
 Invoke-Om -Name 'candidates' -ArgList @('--json', 'candidates', "dev sweep marker $marker") -DataDir $DirA -TimeoutSec 180 | Out-Null
-Invoke-Om -Name 'update' -ArgList @('--json', 'update', $short, '--title', "sweep已改$stamp", '--content', "updated $marker") -DataDir $DirA -TimeoutSec 180 | Out-Null
+Invoke-Om -Name 'update' -ArgList @('--json', 'update', $short, '--title', "sweep-updated-$stamp", '--content', "updated $marker") -DataDir $DirA -TimeoutSec 180 | Out-Null
 Invoke-Om -Name 'retitle' -ArgList @('--json', 'retitle', $short, '--title', $title) -DataDir $DirA -TimeoutSec 180 | Out-Null
 $retitleFile = Join-Path $Work 'retitle.json'
 [System.IO.File]::WriteAllText($retitleFile, "[{`"id`":`"$id`",`"title`":`"$title`"}]", [Text.UTF8Encoding]::new($false))
@@ -988,7 +995,7 @@ Invoke-Om -Name 'resort-status' -ArgList @('--json', 'resort', '--status') -Data
 Invoke-Om -Name 'resort-threshold' -ArgList @('--json', 'resort', '--threshold', '50') -DataDir $DirA | Out-Null
 if ($childId) {
     $spec = (@{ ops = @(@{ id = $childId; parent = $id }) } | ConvertTo-Json -Compress)
-    Invoke-Om -Name 'resort-dry' -ArgList @('--json', 'resort', '--spec', $spec) -DataDir $DirA -AllowStatus @('ok', 'pending', 'warn') -Note '无 --go 时应为 pending' | Out-Null
+    Invoke-Om -Name 'resort-dry' -ArgList @('--json', 'resort', '--spec', $spec) -DataDir $DirA -AllowStatus @('ok', 'pending', 'warn') -Note 'without --go it must be pending' | Out-Null
 }
 Invoke-Om -Name 'defrag' -ArgList @('--json', 'defrag', '--top', '5') -DataDir $DirA -TimeoutSec 180 | Out-Null
 Invoke-Om -Name 'tree-cure' -ArgList @('--json', 'tree-cure', '--top', '5') -DataDir $DirA -TimeoutSec 180 | Out-Null
@@ -1019,7 +1026,7 @@ Invoke-Om -Name 'resort-reset' -ArgList @('--json', 'resort', '--reset') -DataDi
 Invoke-Om -Name 'tree-float-go' -ArgList @('--json', 'tree-float', '--go') -DataDir $DirA | Out-Null
 $structuralAudit = Invoke-Om -Name 'tree-mutations-audit' -ArgList @('--json', 'audit') -DataDir $DirA
 Assert-Smoke 'tree-mutations-no-orphans' ($structuralAudit.Ok -and [int]$structuralAudit.Envelope.summary.orphans -eq 0)
-Invoke-Om -Name 'tree-deepen' -ArgList @('--json', 'tree-deepen', '--root', $short) -DataDir $DirA -AllowStatus @('ok', 'fail') -Note '小树应拒绝加深' | Out-Null
+Invoke-Om -Name 'tree-deepen' -ArgList @('--json', 'tree-deepen', '--root', $short) -DataDir $DirA -AllowStatus @('ok', 'fail') -Note 'a small tree must refuse deepening' | Out-Null
 Invoke-Om -Name 'classify-plan' -ArgList @('--json', 'classify', '--plan', '--limit', '5') -DataDir $DirA | Out-Null
 Invoke-Om -Name 'classify-dry-run' -ArgList @('--json', 'classify', '--dry-run', '--limit', '1') -DataDir $DirA | Out-Null
 Invoke-Om -Name 'repack' -ArgList @('--json', 'repack') -DataDir $DirA -TimeoutSec 300 | Out-Null
@@ -1056,8 +1063,8 @@ Invoke-Om -Name 'passport' -ArgList @('--json', 'passport') -DataDir $DirA | Out
 $shareFile = Join-Path $Work 'share.txt'
 Invoke-Om -Name 'share' -ArgList @('--json', 'share', '--root', $short, '--out', $shareFile) -DataDir $DirA | Out-Null
 if (Test-Path $shareFile) {
-    Invoke-Om -Name 'share-import-preview' -ArgList @('--json', 'share-import', $shareFile) -DataDir $DirA -AllowStatus @('ok', 'pending', 'warn') -Note '预览待决时 status=pending、退出 2' | Out-Null
-    Invoke-Om -Name 'share-import-go' -ArgList @('--json', 'share-import', $shareFile, '--go', '--force', '--title', "导入$stamp") -DataDir $DirA | Out-Null
+    Invoke-Om -Name 'share-import-preview' -ArgList @('--json', 'share-import', $shareFile) -DataDir $DirA -AllowStatus @('ok', 'pending', 'warn') -Note 'a pending preview has status=pending and exit 2' | Out-Null
+    Invoke-Om -Name 'share-import-go' -ArgList @('--json', 'share-import', $shareFile, '--go', '--force', '--title', "imported-$stamp") -DataDir $DirA | Out-Null
 }
 $exportFile = Join-Path $Work 'export.json'
 $backupFile = Join-Path $Work 'backup.sqlite'
@@ -1074,11 +1081,11 @@ foreach ($invalidOutput in @(
 Assert-Smoke 'invalid-output-does-not-create-directory' (-not (Test-Path -LiteralPath (Split-Path -Parent $missingOutput)))
 Assert-Smoke 'invalid-mode-preserves-config' ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $DirA 'client.json'))) -ceq [Convert]::ToBase64String($modeConfigBefore))
 Invoke-Om -Name 'export' -ArgList @('--json', 'export', $exportFile) -DataDir $DirA | Out-Null
-if (-not (Test-Path $exportFile) -or (Get-Item $exportFile).Length -lt 10) { throw 'export 没有写出非空文件' }
+if (-not (Test-Path $exportFile) -or (Get-Item $exportFile).Length -lt 10) { throw 'export wrote no non-empty file' }
 Invoke-Om -Name 'backup' -ArgList @('--json', 'backup', $backupFile) -DataDir $DirA | Out-Null
 Assert-Smoke 'backup-file-sqlite-header' ((Test-Path -LiteralPath $backupFile) -and (Get-Item -LiteralPath $backupFile).Length -gt 16 -and [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($backupFile)[0..15]) -eq "SQLite format 3`0")
 $imported = Invoke-Om -Name 'import' -ArgList @('--json', 'import', $exportFile) -DataDir $DirA -TimeoutSec 300
-if (-not $imported.Ok) { throw 'import 失败' }
+if (-not $imported.Ok) { throw 'import failed' }
 $evalFile = Join-Path $Work 'eval.jsonl'
 [System.IO.File]::WriteAllText($evalFile, "{`"query`":`"$marker`",`"expect`":[`"$short`"]}`n", [Text.UTF8Encoding]::new($false))
 $benchOut = Join-Path $Work 'bench.json'
@@ -1087,7 +1094,7 @@ Invoke-Om -Name 'bench-run' -ArgList @('--json', 'bench', 'run', $evalFile, '--s
 if (Test-Path $benchOut) {
     Invoke-Om -Name 'bench-baseline' -ArgList @('--json', 'bench', 'run', $evalFile, '--baseline', $benchOut) -DataDir $DirA -TimeoutSec 180 | Out-Null
 }
-Invoke-Om -Name 'keygen-refuse' -ArgList @('--json', 'keygen') -DataDir $DirA -AllowStatus @('fail') -Note '已有云端密钥，必须拒绝覆盖' | Out-Null
+Invoke-Om -Name 'keygen-refuse' -ArgList @('--json', 'keygen') -DataDir $DirA -AllowStatus @('fail') -Note 'a cloud key already exists, so overwriting must be refused' | Out-Null
 Invoke-Om -Name 'secret-masked' -ArgList @('--json', 'secret') -DataDir $DirA -Secret | Out-Null
 Invoke-Om -Name 'keys-export' -ArgList @('--json', 'keys-export', '--out', (Join-Path $Secrets 'keys.txt')) -DataDir $DirA -Secret | Out-Null
 Invoke-Om -Name 'account-list' -ArgList @('--json', 'account', 'list') -DataDir $DirA | Out-Null
@@ -1096,8 +1103,8 @@ $otherPass = New-Pass
 $otherCloudAccount = Add-CloudRegistration $otherUser $otherPass
 $otherReg = Invoke-Om -Name 'register-second-user' -ArgList @('--json', 'register', '--addr', $Server, '--user', $otherUser, '--pass', $otherPass) -DataDir $DirA -Secret -HostProfile
 Confirm-CloudRegistration $otherCloudAccount $otherReg
-if (-not $otherReg.Ok) { throw '已有主账号时 register 第二个用户失败，不能报 none in the local keyring。' }
-if (-not $otherReg.Envelope.summary.super) { throw '第二个用户 register 没有发出新的 super' }
+if (-not $otherReg.Ok) { throw 'registering a second user failed while a main account exists; it must not report none in the local keyring.' }
+if (-not $otherReg.Envelope.summary.super) { throw 'the second user register did not issue a new super' }
 # Exercise host takeover while the actual fixture runtime is still serving.
 Invoke-Om -Name 'account-live-initial-status' -ArgList @('--json', 'status') -DataDir $DirA | Out-Null
 $otherHealth = Get-OwnedRuntimeHealth $DirA
@@ -1137,8 +1144,8 @@ $spacePass = New-Pass
 $spaceCloudAccount = Add-CloudRegistration $spaceUser $spacePass
 $spaceReg = Invoke-Om -Name 'space-register' -ArgList @('--json', 'register', '--addr', $Server, '--user', $spaceUser, '--pass', $spacePass) -DataDir $DirA -Secret
 Confirm-CloudRegistration $spaceCloudAccount $spaceReg
-if (-not $spaceReg.Ok) { throw 'space 档案上 register 失败。空档案应发新的 super，不能报 none in the local keyring。' }
-if (-not $spaceReg.Envelope.summary.super) { throw 'space register 没有发出新的 super' }
+if (-not $spaceReg.Ok) { throw 'register failed on the space profile. An empty profile must issue a new super and must not report none in the local keyring.' }
+if (-not $spaceReg.Envelope.summary.super) { throw 'space register did not issue a new super' }
 $spaceMarker = "space-marker-$stamp"
 $spaceWrite = Invoke-Om -Name 'space-owner-write' -ArgList @('--json', 'remember', $spaceMarker, '--title', $spaceMarker, '--importance', 'important', '--force') -DataDir $DirA
 $spaceEntryId = [string]$spaceWrite.Envelope.summary.id
@@ -1173,7 +1180,7 @@ if ($inviteCode) {
     $stC = Invoke-Om -Name 'status-c' -ArgList @('--json', 'status') -DataDir $DirC
     $addrC = ''
     if ($stC.Envelope.summary.server_addr) { $addrC = [string]$stC.Envelope.summary.server_addr }
-    if ($addrC -ne $Server) { throw "space join 后 server_addr=$addrC" }
+    if ($addrC -ne $Server) { throw "server_addr=$addrC after space join" }
     $spacePull = Invoke-Om -Name 'space-member-sync' -ArgList @('--json', 'sync') -DataDir $DirC
     $spaceRead = Invoke-Om -Name 'space-member-readback' -ArgList @('--json', 'show', $spaceEntryId) -DataDir $DirC
     Assert-Smoke 'space-member-can-read-owner-entry' ($spacePull.Ok -and $spaceRead.Ok -and [string]$spaceRead.Envelope.details.entry.content -eq $spaceMarker)
@@ -1212,9 +1219,9 @@ Assert-Smoke 'space-kicked-readonly-session-denied' ($readonlyKicked.Ok -and $re
 Invoke-Om -Name 'runtime-stop-before-space-remove' -ArgList @('--runtime-internal', '--stop') -DataDir $DirA -Raw -ExpectExit @(0, 2) | Out-Null
 Stop-OurRuntimes
 Start-Sleep -Seconds 1
-Invoke-Om -Name 'account-use-main' -ArgList @('--direct', '--json', 'account', 'use', 'main') -DataDir $DirA -Note 'web --stop 可能在进程仍存活时返回，先结束本轮 runtime 再用 --direct' | Out-Null
+Invoke-Om -Name 'account-use-main' -ArgList @('--direct', '--json', 'account', 'use', 'main') -DataDir $DirA -Note 'web --stop may return while the process is still alive; end this runtime first and then use --direct' | Out-Null
 Invoke-Om -Name 'space-remove' -ArgList @('--direct', '--json', 'space', 'remove', 'sweepspace', '--yes') -DataDir $DirA | Out-Null
-Invoke-Om -Name 'root-create' -ArgList @('--json', 'root-create', "sweep根$stamp", '--content', '一次性验收根', '--yes') -DataDir $DirA | Out-Null
+Invoke-Om -Name 'root-create' -ArgList @('--json', 'root-create', "sweep-root-$stamp", '--content', 'disposable acceptance root', '--yes') -DataDir $DirA | Out-Null
 $grant = Invoke-Om -Name 'grant-create' -ArgList @('--json', 'grant', 'create', '--root', $id, '--label', 'sweep') -DataDir $DirA -Secret
 $grantList = Invoke-Om -Name 'grant-list' -ArgList @('--json', 'grant', 'list') -DataDir $DirA
 $grantId = ''
@@ -1236,11 +1243,11 @@ Invoke-Om -Name 'grant-root-forget' -ArgList @('--json', 'forget', $grantRootId)
 $autoRevoked = Invoke-Om -Name 'grant-delete-root-readback' -ArgList @('--json', 'grant', 'list') -DataDir $DirA
 Assert-Smoke 'grant-delete-root-auto-revoked' ($deleteGrant.Ok -and [bool]$deleteGrantId -and @($autoRevoked.Envelope.details.grants | Where-Object { $_.id -eq $deleteGrantId -and $_.revoked -eq $true }).Count -eq 1)
 Invoke-Om -Name 'session-list' -ArgList @('--json', 'session', 'list') -DataDir $DirA -TimeoutSec 120 | Out-Null
-Invoke-Om -Name 'session-revoke-bogus' -ArgList @('--json', 'session', 'revoke', '00000000-0000-0000-0000-000000000000') -DataDir $DirA -ExpectExit @(0, 1) -Note '不撤销当前会话' | Out-Null
+Invoke-Om -Name 'session-revoke-bogus' -ArgList @('--json', 'session', 'revoke', '00000000-0000-0000-0000-000000000000') -DataDir $DirA -ExpectExit @(0, 1) -Note 'do not revoke the current session' | Out-Null
 $retiredInstall = Invoke-Om -Name 'model-install-rerank' -ArgList @('--json', 'model', 'install-rerank') -DataDir $DirA -ExpectExit @(2) -Raw
 
 $syncA = Invoke-Om -Name 'sync-a' -ArgList @('--json', 'sync') -DataDir $DirA -TimeoutSec 180
-if (-not $syncA.Ok) { throw 'A 同步失败' }
+if (-not $syncA.Ok) { throw 'A sync failed' }
 Assert-Count 'A sync' $syncA.Envelope 'pushed' 1
 Invoke-Om -Name 'sync-human' -ArgList @('sync') -DataDir $DirA -Raw -TimeoutSec 180 | Out-Null
 Invoke-Om -Name 'sync-conflicts' -ArgList @('--json', 'sync-conflicts') -DataDir $DirA -TimeoutSec 120 | Out-Null
@@ -1267,24 +1274,24 @@ $remoteRead = Invoke-Om -Name 'sync-restore-remote-readback' -ArgList @('--json'
 Assert-Smoke 'sync-restore-remote-content-persisted' ($restoreRemote.Ok -and $remoteRead.Ok -and [string]$remoteRead.Envelope.details.entry.content -eq "restore original $stamp")
 Invoke-Om -Name 'sync-resolve-bogus' -ArgList @(
     '--json', 'sync-resolve', '--epoch', '0', '--rev', '0', '--head-rev', '0', '--action', 'keep-current'
-) -DataDir $DirA -AllowStatus @('fail') -Note '无冲突时必须失败' | Out-Null
+) -DataDir $DirA -AllowStatus @('fail') -Note 'must fail when there is no conflict' | Out-Null
 
 Invoke-Om -Name 'config-addr-b' -ArgList @('--json', 'config', '--addr', $Server) -DataDir $DirB | Out-Null
 $loginB = Invoke-Om -Name 'login-b' -ArgList @('--json', 'login', '--interactive', '--addr', $Server, '--user', $user, '--pass', $pass, '--super', $super) -DataDir $DirB -Secret -HostProfile -TimeoutSec 180
-if (-not $loginB.Ok) { throw 'B 登录失败。super 必须用 register 响应里的 summary.super。已中止，避免后续命令走默认正式服。' }
+if (-not $loginB.Ok) { throw 'B login failed. super must come from the register response summary.super. Aborted so later commands do not hit the default production server.' }
 $stB = Invoke-Om -Name 'status-b' -ArgList @('--json', 'status') -DataDir $DirB
 $addrB = ''
 if ($stB.Envelope.summary.server_addr) { $addrB = [string]$stB.Envelope.summary.server_addr }
 if ($addrB -ne $Server) { throw "B server_addr=$addrB" }
 $syncB = Invoke-Om -Name 'sync-b' -ArgList @('--json', 'sync') -DataDir $DirB -TimeoutSec 180
-if (-not $syncB.Ok) { throw 'B 下载同步失败' }
+if (-not $syncB.Ok) { throw 'B download sync failed' }
 Assert-Smoke 'device-b-sync-converged' ($syncB.Envelope.summary.converged -eq $true -and [int]$syncB.Envelope.summary.pending -eq 0)
 $recB = Invoke-Om -Name 'recall-b' -ArgList @('--json', 'recall', $marker, '--limit', '3') -DataDir $DirB -TimeoutSec 180 -AllowIndexWait
-if ($recB.Stdout -notlike "*$marker*") { throw "B recall 没有召回 A 写入的标记 $marker" }
+if ($recB.Stdout -notlike "*$marker*") { throw "B recall did not return the marker $marker written by A" }
 Invoke-Om -Name 'show-b' -ArgList @('--json', 'show', $short) -DataDir $DirB | Out-Null
 $bad = Join-Path $Root 'bad'
 Invoke-Om -Name 'config-addr-bad' -ArgList @('--json', 'config', '--addr', $Server) -DataDir $bad | Out-Null
-Invoke-Om -Name 'login-wrong-pass' -ArgList @('--json', 'login', '--interactive', '--addr', $Server, '--user', $user, '--pass', 'wrong-pass-000') -DataDir $bad -AllowStatus @('fail') -Secret -HostProfile -Note '错误口令应失败' | Out-Null
+Invoke-Om -Name 'login-wrong-pass' -ArgList @('--json', 'login', '--interactive', '--addr', $Server, '--user', $user, '--pass', 'wrong-pass-000') -DataDir $bad -AllowStatus @('fail') -Secret -HostProfile -Note 'a wrong passphrase must fail' | Out-Null
 
 # The second device uses fivekeys. Read material from device A without printing it.
 $sessionPath = Join-Path $DirA 'session.json'
@@ -1408,11 +1415,11 @@ $ownerStatus = Invoke-Om -Name 'session-owner-device-mode-readback' -ArgList @('
 Assert-Smoke 'session-owner-device-normal-restored' ($ownerStatus.Ok -and [string]$ownerStatus.Envelope.summary.workspace -eq 'normal')
 Invoke-Om -Name 'logout' -ArgList @('--json', 'logout') -DataDir $DirB | Out-Null
 $loginAgain = Invoke-Om -Name 'login-b-again' -ArgList @('--json', 'login', '--interactive', '--addr', $Server, '--user', $user, '--pass', $pass, '--super', $super) -DataDir $DirB -Secret -TimeoutSec 180
-if (-not $loginAgain.Ok) { throw '重新登录失败' }
+if (-not $loginAgain.Ok) { throw 're-login failed' }
 $recallAgain = Invoke-Om -Name 'recall-after-relogin' -ArgList @('--json', 'recall', $marker, '--limit', '3') -DataDir $DirB -TimeoutSec 180 -AllowIndexWait
-if ($recallAgain.Stdout -notlike "*$marker*") { throw '重新登录后没有检索到标记' }
+if ($recallAgain.Stdout -notlike "*$marker*") { throw 'the marker was not found after re-login' }
 $syncAgain = Invoke-Om -Name 'sync-after-relogin' -ArgList @('--json', 'sync') -DataDir $DirB -TimeoutSec 180
-if (-not $syncAgain.Ok) { throw '重新登录后同步失败' }
+if (-not $syncAgain.Ok) { throw 'sync failed after re-login' }
 $superReset = Invoke-Om -Name 'super-reset' -ArgList @('--json', 'super-reset', '--super', $super) -DataDir $DirA -Secret -TimeoutSec 180
 $newSuper = [string]$superReset.Envelope.summary.super
 if ($superReset.Ok -and $newSuper) { $mainCloudAccount.Super = $newSuper }
@@ -1465,7 +1472,7 @@ try {
     if ($null -eq $previousResetSuper) { Remove-Item Env:RSRS_SUPER -ErrorAction SilentlyContinue }
     else { $env:RSRS_SUPER = $previousResetSuper }
 }
-Invoke-Om -Name 'sync-reset' -ArgList @('--json', 'sync-reset') -DataDir $DirA -TimeoutSec 180 -Note '一次性账号上的快照重建' | Out-Null
+Invoke-Om -Name 'sync-reset' -ArgList @('--json', 'sync-reset') -DataDir $DirA -TimeoutSec 180 -Note 'snapshot rebuild on a disposable account' | Out-Null
 
 # Web opens the hosted dashboard; runtime lifecycle is a separate hidden command.
 $dashboardDir = Join-Path $Root 'dashboard-launch'
@@ -1607,10 +1614,10 @@ Add-SweepRow 'mcp-stdio-status-envelope' ($null -ne $statusTool.Envelope -and [s
 $taxTool = Invoke-McpStdioTool -Name 'mcp-stdio-taxonomy' -Tool 'memory_taxonomy' -DataDir $DirA
 Add-SweepRow 'mcp-stdio-taxonomy-envelope' ($null -ne $taxTool.Envelope -and [string]$taxTool.Envelope.command -eq 'taxonomy') ([string]$taxTool.Envelope.command)
 $rememberTool = Invoke-McpStdioTool -Name 'mcp-stdio-remember' -Tool 'memory_remember' -Arguments @{
-    content = "【前因】扫测 MCP 业务。【行为】写入标记 $mcpMarker。【后果】供 recall/show/update/attach/forget 断言。"
-    title = "MCP扫测标记"
+    content = "$MARK_CAUSE Sweep the MCP surface. $MARK_ACTION Write marker $mcpMarker. $MARK_RESULT Used by the recall/show/update/attach/forget assertions."
+    title = "mcp-sweep-marker"
     importance = 'important'
-    parent = '编程开发'
+    parent = $TX_DEV
     force = $true
 } -DataDir $DirA
 $mcpId = ''
@@ -1625,7 +1632,7 @@ Add-SweepRow 'mcp-stdio-list-envelope' ($null -ne $listTool.Envelope -and [strin
 if ($mcpId) {
     $showTool = Invoke-McpStdioTool -Name 'mcp-stdio-show' -Tool 'memory_show' -Arguments @{ id = $mcpId } -DataDir $DirA
     Add-SweepRow 'mcp-stdio-show-hit' ($showTool.Run.Stdout -like "*$mcpMarker*") 'show contains marker'
-    $updTool = Invoke-McpStdioTool -Name 'mcp-stdio-update' -Tool 'memory_update' -Arguments @{ id = $mcpId; title = 'MCP扫测标记已改' } -DataDir $DirA
+    $updTool = Invoke-McpStdioTool -Name 'mcp-stdio-update' -Tool 'memory_update' -Arguments @{ id = $mcpId; title = 'mcp-sweep-marker-updated' } -DataDir $DirA
     Add-SweepRow 'mcp-stdio-update-envelope' ($null -ne $updTool.Envelope -and [string]$updTool.Envelope.command -eq 'update') ([string]$updTool.Envelope.command)
     $parentPrefix = ''
     if ($listTool.Envelope -and $listTool.Envelope.items) {
@@ -1790,17 +1797,17 @@ Write-SweepReport -Force
 $failed = @($Rows | Where-Object { -not $_.Ok })
 $passed = @($Rows | Where-Object { $_.Ok -and $_.Status -notin @('fail', 'skip') })
 $lines = New-Object System.Collections.Generic.List[string]
-$lines.Add("# CLI dev 扫测 $cliVersion") | Out-Null
+$lines.Add("# CLI dev sweep $cliVersion") | Out-Null
 $lines.Add("") | Out-Null
-$lines.Add("- 时间: $([DateTimeOffset]::UtcNow.ToString('o'))") | Out-Null
-$lines.Add("- 包: $Package") | Out-Null
-$lines.Add("- 版本: $cliVersion") | Out-Null
-$lines.Add("- 服务器: $Server") | Out-Null
+$lines.Add("- time: $([DateTimeOffset]::UtcNow.ToString('o'))") | Out-Null
+$lines.Add("- package: $Package") | Out-Null
+$lines.Add("- version: $cliVersion") | Out-Null
+$lines.Add("- server: $Server") | Out-Null
 $lines.Add("- latest: $($tags.latest)") | Out-Null
-$lines.Add("- 目录: $resolvedRoot") | Out-Null
-$lines.Add("- 通过: $($passed.Count)  失败: $($failed.Count)") | Out-Null
+$lines.Add("- directory: $resolvedRoot") | Out-Null
+$lines.Add("- passed: $($passed.Count)  failed: $($failed.Count)") | Out-Null
 $lines.Add("") | Out-Null
-$lines.Add("| 步骤 | 命令 | 退出 | 状态 | 结果 | 备注 |") | Out-Null
+$lines.Add("| step | command | exit | status | result | note |") | Out-Null
 $lines.Add("| --- | --- | --- | --- | --- | --- |") | Out-Null
 foreach ($row in $Rows) {
     $mark = if (-not $row.Ok) { 'FAIL' } elseif ($row.Status -eq 'fail') { 'EXPECTED_ERROR' } elseif ($row.Status -eq 'skip') { 'SKIP' } else { 'PASS' }

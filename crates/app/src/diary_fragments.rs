@@ -6,8 +6,8 @@ pub const CHUNK_CHARS: usize = 800;
 fn starts_record(line: &str) -> bool {
     let text = line.trim_start();
     let inner = text
-        .strip_prefix('【')
-        .and_then(|s| s.split_once('】').map(|p| p.0))
+        .strip_prefix('\u{3010}')
+        .and_then(|s| s.split_once('\u{3011}').map(|p| p.0))
         .or_else(|| {
             text.strip_prefix('[')
                 .and_then(|s| s.split_once(']').map(|p| p.0))

@@ -354,13 +354,13 @@ fn public_title_edit_and_blank_title_still_append_without_changing_metadata() ->
 fn canonical_identity_merges_legacy_tracks_without_touching_other_users_or_days() -> anyhow::Result<()> {
     let mut fixture = Fixture::new()?;
     let day = day();
-    let title = format!("活动轨迹 {day}");
+    let title = format!("\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} {day}");
     let id = track_id("synthetic-diary", &day);
     let canonical = entry(&id, "synthetic-diary", "Renamed canonical", "canonical-event");
     fixture.seed_with_owner(&canonical, false, "server-routing-owner")?;
     fixture.seed_with_owner(&entry("legacy-today", "synthetic-diary", &title, "legacy-event"), false, "server-routing-owner")?;
     let foreign = fixture.seed_with_owner(&entry(&track_id("another-user", &day), "another-user", &title, "foreign-event"), false, "server-routing-owner")?;
-    let previous = fixture.seed(&entry(&track_id("synthetic-diary", "2000-01-01"), "synthetic-diary", "活动轨迹 2000-01-01", "previous-day-event"), false)?;
+    let previous = fixture.seed(&entry(&track_id("synthetic-diary", "2000-01-01"), "synthetic-diary", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2000-01-01", "previous-day-event"), false)?;
     fixture.start()?;
     let result = fixture.remember("fresh-event")?;
     assert_eq!(result["summary"]["id"], id);
@@ -392,7 +392,7 @@ fn deleted_stable_track_uses_legacy_fallback_and_deleted_history_is_not_resurrec
     let mut fixture = Fixture::new()?;
     let day = day();
     let id = track_id("synthetic-diary", &day);
-    let title = format!("活动轨迹 {day}");
+    let title = format!("\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} {day}");
     fixture.seed(&entry(&id, "synthetic-diary", "deleted renamed track", "deleted-event"), true)?;
     fixture.seed(&entry("legacy-live", "synthetic-diary", &title, "legacy-live-event"), false)?;
     fixture.start()?;
@@ -454,9 +454,9 @@ fn old_owner_normalized_diary_keeps_its_author_after_public_title_edit() -> anyh
     let day = day();
     let id = track_id("synthetic-diary", &day);
     // This is the payload produced by dev.7 after an owner-normalizing pull + append.
-    let legacy = entry(&id, "synthetic-account-owner", &format!("活动轨迹 {day}"), "old-owner-event");
+    let legacy = entry(&id, "synthetic-account-owner", &format!("\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} {day}"), "old-owner-event");
     fixture.seed(&legacy, false)?;
-    fixture.seed(&entry("old-owner-legacy", "synthetic-account-owner", &format!("活动轨迹 {day}"), "old-owner-legacy-event"), false)?;
+    fixture.seed(&entry("old-owner-legacy", "synthetic-account-owner", &format!("\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} {day}"), "old-owner-legacy-event"), false)?;
     fixture.start()?;
     fixture.run(&["update", &id, "--title", "Renamed old owner-normalized diary"])?;
     fixture.remember("new-owner-event")?;
@@ -477,7 +477,7 @@ fn unrelated_canonical_author_fails_without_writes_or_private_output() -> anyhow
     let day = day();
     fixture.seed_with_owner(&entry(&track_id("synthetic-diary", &day), "foreign-private-author",
         "Renamed foreign track", "foreign-private-event"), false, "synthetic-diary")?;
-    fixture.seed(&entry("legacy-must-survive", "synthetic-diary", &format!("活动轨迹 {day}"), "legacy-live-event"), false)?;
+    fixture.seed(&entry("legacy-must-survive", "synthetic-diary", &format!("\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} {day}"), "legacy-live-event"), false)?;
     fixture.start()?;
     fixture.assert_author_rejection()
 }

@@ -68,245 +68,245 @@ fn known_field(lang: Lang, key: &str) -> Option<&'static str> {
     Some(match key {
         "conflict_history" => {
             if zh {
-                "冲突历史"
+                "\u{51b2}\u{7a81}\u{5386}\u{53f2}"
             } else {
                 "Conflict history"
             }
         }
         "conflicts" => {
             if zh {
-                "冲突"
+                "\u{51b2}\u{7a81}"
             } else {
                 "Conflicts"
             }
         }
         "converged" => {
             if zh {
-                "已对齐"
+                "\u{5df2}\u{5bf9}\u{9f50}"
             } else {
                 "Converged"
             }
         }
         "historical_conflicts" => {
             if zh {
-                "历史冲突"
+                "\u{5386}\u{53f2}\u{51b2}\u{7a81}"
             } else {
                 "Historical conflicts"
             }
         }
         "index_pending" => {
             if zh {
-                "待嵌入"
+                "\u{5f85}\u{5d4c}\u{5165}"
             } else {
                 "Index pending"
             }
         }
         "local_alive" => {
             if zh {
-                "本地有效"
+                "\u{672c}\u{5730}\u{6709}\u{6548}"
             } else {
                 "Local active"
             }
         }
         "local_total" => {
             if zh {
-                "本地总数"
+                "\u{672c}\u{5730}\u{603b}\u{6570}"
             } else {
                 "Local total"
             }
         }
         "pending" => {
             if zh {
-                "待推送"
+                "\u{5f85}\u{63a8}\u{9001}"
             } else {
                 "Pending"
             }
         }
         "processed_conflicts" => {
             if zh {
-                "已处理冲突"
+                "\u{5df2}\u{5904}\u{7406}\u{51b2}\u{7a81}"
             } else {
                 "Processed conflicts"
             }
         }
         "protocol" => {
             if zh {
-                "协议"
+                "\u{534f}\u{8bae}"
             } else {
                 "Protocol"
             }
         }
         "pulled" => {
             if zh {
-                "下载"
+                "\u{4e0b}\u{8f7d}"
             } else {
                 "Pulled"
             }
         }
         "purged" => {
             if zh {
-                "已清除"
+                "\u{5df2}\u{6e05}\u{9664}"
             } else {
                 "Purged"
             }
         }
         "pushed" => {
             if zh {
-                "上传"
+                "\u{4e0a}\u{4f20}"
             } else {
                 "Pushed"
             }
         }
         "remote_alive" => {
             if zh {
-                "云端有效"
+                "\u{4e91}\u{7aef}\u{6709}\u{6548}"
             } else {
                 "Remote active"
             }
         }
         "remote_total" => {
             if zh {
-                "云端总数"
+                "\u{4e91}\u{7aef}\u{603b}\u{6570}"
             } else {
                 "Remote total"
             }
         }
         "resolution_supported" => {
             if zh {
-                "可解决冲突"
+                "\u{53ef}\u{89e3}\u{51b3}\u{51b2}\u{7a81}"
             } else {
                 "Resolution supported"
             }
         }
         "resolving_conflicts" => {
             if zh {
-                "解决中"
+                "\u{89e3}\u{51b3}\u{4e2d}"
             } else {
                 "Resolving"
             }
         }
         "total_matched" => {
             if zh {
-                "总数一致"
+                "\u{603b}\u{6570}\u{4e00}\u{81f4}"
             } else {
                 "Totals match"
             }
         }
         "undecodable" => {
             if zh {
-                "无法解码"
+                "\u{65e0}\u{6cd5}\u{89e3}\u{7801}"
             } else {
                 "Undecodable"
             }
         }
         "remote" => {
             if zh {
-                "云端"
+                "\u{4e91}\u{7aef}"
             } else {
                 "Remote"
             }
         }
         "local" => {
             if zh {
-                "本地"
+                "\u{672c}\u{5730}"
             } else {
                 "Local"
             }
         }
         "changes" => {
             if zh {
-                "变更"
+                "\u{53d8}\u{66f4}"
             } else {
                 "Changes"
             }
         }
         "state" => {
             if zh {
-                "状态"
+                "\u{72b6}\u{6001}"
             } else {
                 "State"
             }
         }
         "user" => {
             if zh {
-                "用户"
+                "\u{7528}\u{6237}"
             } else {
                 "User"
             }
         }
         "server" | "server_addr" | "addr" => {
             if zh {
-                "服务器"
+                "\u{670d}\u{52a1}\u{5668}"
             } else {
                 "Server"
             }
         }
         "mode" => {
             if zh {
-                "模式"
+                "\u{6a21}\u{5f0f}"
             } else {
                 "Mode"
             }
         }
         "memories" => {
             if zh {
-                "记忆"
+                "\u{8bb0}\u{5fc6}"
             } else {
                 "Memories"
             }
         }
         "max_updated_at" => {
             if zh {
-                "最近更新"
+                "\u{6700}\u{8fd1}\u{66f4}\u{65b0}"
             } else {
                 "Last update"
             }
         }
         "remote_configured" => {
             if zh {
-                "已配置远程"
+                "\u{5df2}\u{914d}\u{7f6e}\u{8fdc}\u{7a0b}"
             } else {
                 "Remote configured"
             }
         }
         "autosync" => {
             if zh {
-                "自动同步"
+                "\u{81ea}\u{52a8}\u{540c}\u{6b65}"
             } else {
                 "Auto-sync"
             }
         }
         "workspace" => {
             if zh {
-                "工作区"
+                "\u{5de5}\u{4f5c}\u{533a}"
             } else {
                 "Workspace"
             }
         }
         "pass" => {
             if zh {
-                "通过数"
+                "\u{901a}\u{8fc7}\u{6570}"
             } else {
                 "Pass"
             }
         }
         "warn" => {
             if zh {
-                "警告数"
+                "\u{8b66}\u{544a}\u{6570}"
             } else {
                 "Warn"
             }
         }
         "reembedded" => {
             if zh {
-                "已重嵌入"
+                "\u{5df2}\u{91cd}\u{5d4c}\u{5165}"
             } else {
                 "Re-embedded"
             }
         }
         "dimensions" => {
             if zh {
-                "维度"
+                "\u{7ef4}\u{5ea6}"
             } else {
                 "Dimensions"
             }
@@ -317,8 +317,8 @@ fn known_field(lang: Lang, key: &str) -> Option<&'static str> {
 
 pub fn yes_no(flag: bool) -> &'static str {
     match (lang(), flag) {
-        (Lang::Zh, true) => "是",
-        (Lang::Zh, false) => "否",
+        (Lang::Zh, true) => "\u{662f}",
+        (Lang::Zh, false) => "\u{5426}",
         (_, true) => "yes",
         (_, false) => "no",
     }
@@ -326,17 +326,17 @@ pub fn yes_no(flag: bool) -> &'static str {
 
 pub fn chrome_for(lang: Lang, key: &str) -> &'static str {
     match (lang, key) {
-        (Lang::Zh, "summary") => "摘要",
-        (Lang::Zh, "result") => "结果",
-        (Lang::Zh, "item") => "项",
-        (Lang::Zh, "status") => "状态",
-        (Lang::Zh, "value") => "值",
-        (Lang::Zh, "action") => "动作",
-        (Lang::Zh, "pass") => "通过",
-        (Lang::Zh, "warn") => "警告",
-        (Lang::Zh, "fail") => "失败",
-        (Lang::Zh, "skip") => "跳过",
-        (Lang::Zh, "pending") => "等待",
+        (Lang::Zh, "summary") => "\u{6458}\u{8981}",
+        (Lang::Zh, "result") => "\u{7ed3}\u{679c}",
+        (Lang::Zh, "item") => "\u{9879}",
+        (Lang::Zh, "status") => "\u{72b6}\u{6001}",
+        (Lang::Zh, "value") => "\u{503c}",
+        (Lang::Zh, "action") => "\u{52a8}\u{4f5c}",
+        (Lang::Zh, "pass") => "\u{901a}\u{8fc7}",
+        (Lang::Zh, "warn") => "\u{8b66}\u{544a}",
+        (Lang::Zh, "fail") => "\u{5931}\u{8d25}",
+        (Lang::Zh, "skip") => "\u{8df3}\u{8fc7}",
+        (Lang::Zh, "pending") => "\u{7b49}\u{5f85}",
         (_, "summary") => "SUMMARY",
         (_, "result") => "RESULT",
         (_, "item") => "ITEM",
@@ -355,14 +355,14 @@ pub fn chrome_for(lang: Lang, key: &str) -> &'static str {
 pub fn text(key: &str) -> &'static str {
     match (lang(), key) {
         (Lang::Zh, "need_tty") => {
-            "无参数启动需要终端。查看状态请运行 rsrs status。"
+            "\u{65e0}\u{53c2}\u{6570}\u{542f}\u{52a8}\u{9700}\u{8981}\u{7ec8}\u{7aef}\u{3002}\u{67e5}\u{770b}\u{72b6}\u{6001}\u{8bf7}\u{8fd0}\u{884c} rsrs status\u{3002}"
         }
         (_, "need_tty") => "A terminal is required when no command is given. Use `rsrs status`.",
-        (Lang::Zh, "direct") => "警告：--direct 绕过本机 runtime，直接打开本地库。",
+        (Lang::Zh, "direct") => "\u{8b66}\u{544a}\u{ff1a}--direct \u{7ed5}\u{8fc7}\u{672c}\u{673a} runtime\u{ff0c}\u{76f4}\u{63a5}\u{6253}\u{5f00}\u{672c}\u{5730}\u{5e93}\u{3002}",
         (_, "direct") => "WARN: --direct bypasses the local runtime and opens the library itself.",
-        (Lang::Zh, "web_down") => "本机 runtime 没有在运行。",
+        (Lang::Zh, "web_down") => "\u{672c}\u{673a} runtime \u{6ca1}\u{6709}\u{5728}\u{8fd0}\u{884c}\u{3002}",
         (_, "web_down") => "The local runtime is not running.",
-        (Lang::Zh, "busy") => "有长任务在运行，status 先返回。",
+        (Lang::Zh, "busy") => "\u{6709}\u{957f}\u{4efb}\u{52a1}\u{5728}\u{8fd0}\u{884c}\u{ff0c}status \u{5148}\u{8fd4}\u{56de}\u{3002}",
         (_, "busy") => "A long task is running; status returns without waiting.",
         _ => "",
     }
@@ -396,17 +396,17 @@ mod tests {
     #[test]
     fn chinese_chrome_is_translated() {
         for (key, zh, en) in [
-            ("summary", "摘要", "SUMMARY"),
-            ("result", "结果", "RESULT"),
-            ("item", "项", "ITEM"),
-            ("status", "状态", "STATUS"),
-            ("value", "值", "VALUE"),
-            ("action", "动作", "ACTION"),
-            ("pass", "通过", "PASS"),
-            ("warn", "警告", "WARN"),
-            ("fail", "失败", "FAIL"),
-            ("skip", "跳过", "SKIP"),
-            ("pending", "等待", "PENDING"),
+            ("summary", "\u{6458}\u{8981}", "SUMMARY"),
+            ("result", "\u{7ed3}\u{679c}", "RESULT"),
+            ("item", "\u{9879}", "ITEM"),
+            ("status", "\u{72b6}\u{6001}", "STATUS"),
+            ("value", "\u{503c}", "VALUE"),
+            ("action", "\u{52a8}\u{4f5c}", "ACTION"),
+            ("pass", "\u{901a}\u{8fc7}", "PASS"),
+            ("warn", "\u{8b66}\u{544a}", "WARN"),
+            ("fail", "\u{5931}\u{8d25}", "FAIL"),
+            ("skip", "\u{8df3}\u{8fc7}", "SKIP"),
+            ("pending", "\u{7b49}\u{5f85}", "PENDING"),
         ] {
             assert_eq!(chrome_for(Lang::Zh, key), zh);
             assert_eq!(chrome_for(Lang::En, key), en);
@@ -462,7 +462,7 @@ mod tests {
             let label = field_label(key);
             anyhow::ensure!(!label.is_empty() && label != key, "{key} -> {label}");
         }
-        anyhow::ensure!(yes_no(true) == "是" && yes_no(false) == "否");
+        anyhow::ensure!(yes_no(true) == "\u{662f}" && yes_no(false) == "\u{5426}");
         std::env::set_var("RSRS_LANG", "en");
         for key in keys {
             anyhow::ensure!(!field_label(key).is_empty(), "{key}");
@@ -498,11 +498,11 @@ mod tests {
         set_lang(Lang::Zh)?;
         assert_eq!(read_lang_file(), Some(Lang::Zh));
         assert_eq!(lang(), Lang::Zh);
-        assert_eq!(chrome("summary"), "摘要");
-        assert!(text("need_tty").contains("终端"));
-        assert!(text("direct").contains("警告"));
-        assert!(text("web_down").contains("没有"));
-        assert!(text("busy").contains("长任务"));
+        assert_eq!(chrome("summary"), "\u{6458}\u{8981}");
+        assert!(text("need_tty").contains("\u{7ec8}\u{7aef}"));
+        assert!(text("direct").contains("\u{8b66}\u{544a}"));
+        assert!(text("web_down").contains("\u{6ca1}\u{6709}"));
+        assert!(text("busy").contains("\u{957f}\u{4efb}\u{52a1}"));
         set_lang(Lang::En)?;
         assert_eq!(lang(), Lang::En);
         assert!(text("need_tty").contains("terminal"));

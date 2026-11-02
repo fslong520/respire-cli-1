@@ -1,7 +1,7 @@
 //! Convert a normalized [`Session`] into a protocol `MemoryEntry`.
 //!
-//! The body follows the mandatory `【前因】【行为】【后果】` three-marker
-//! convention so recall renders it in full. Credentials embedded in transcripts
+//! The body follows the mandatory three-marker cause/action/result convention
+//! so recall renders it in full. Credentials embedded in transcripts
 //! are scrubbed best-effort before storage (agent policy requires inspecting
 //! content before writing; this is a safety net, not a scanner guarantee).
 
@@ -104,32 +104,32 @@ fn platform_label(platform: &str) -> String {
     }
 }
 
-/// Session title: `<Platform> 会话 <first request>` (concise, event-shaped).
+/// Session title: `<Platform> session <first request>` (concise, event-shaped).
 pub fn derive_title(session: &Session) -> String {
     let platform = platform_label(&session.platform);
     let snippet = first_line(&scrub(&session.first_user_message));
     if snippet.is_empty() {
-        format!("{platform} 会话 {}", short_id(&session.id))
+        format!("{platform} \u{4f1a}\u{8bdd} {}", short_id(&session.id))
     } else {
-        format!("{platform} 会话 {snippet}")
+        format!("{platform} \u{4f1a}\u{8bdd} {snippet}")
     }
 }
 
-/// Assemble the `【前因】【行为】【后果】` body.
+/// Assemble the cause/action/result three-marker body.
 pub fn build_body(session: &Session) -> String {
-    let cwd = session.cwd.as_deref().unwrap_or("未知");
+    let cwd = session.cwd.as_deref().unwrap_or("\u{672a}\u{77e5}");
     let model = match (session.provider.as_deref(), session.model.as_deref()) {
         (Some(provider), Some(model)) => format!("{provider}/{model}"),
         (Some(provider), None) => provider.to_owned(),
         (None, Some(model)) => model.to_owned(),
-        (None, None) => "未知".to_owned(),
+        (None, None) => "\u{672a}\u{77e5}".to_owned(),
     };
-    let created = session.created_at.as_deref().unwrap_or("未知");
+    let created = session.created_at.as_deref().unwrap_or("\u{672a}\u{77e5}");
     let updated = session.updated_at.as_deref().unwrap_or(created);
 
     let mut body = String::new();
     body.push_str(&format!(
-        "【前因】{} 会话 {}。起始 {}；工作目录 {}；模型 {}。",
+        "\u{3010}\u{524d}\u{56e0}\u{3011}{} \u{4f1a}\u{8bdd} {}\u{3002}\u{8d77}\u{59cb} {}\u{ff1b}\u{5de5}\u{4f5c}\u{76ee}\u{5f55} {}\u{ff1b}\u{6a21}\u{578b} {}\u{3002}",
         platform_label(&session.platform),
         short_id(&session.id),
         scrub(created),
@@ -139,31 +139,31 @@ pub fn build_body(session: &Session) -> String {
 
     let first_raw = session.first_user_message.trim();
     let first = truncate_chars(&scrub(first_raw), 600);
-    body.push_str("\n【行为】");
+    body.push_str("\n\u{3010}\u{884c}\u{4e3a}\u{3011}");
     if first.is_empty() {
-        body.push_str("（无用户消息记录）");
+        body.push_str("\u{ff08}\u{65e0}\u{7528}\u{6237}\u{6d88}\u{606f}\u{8bb0}\u{5f55}\u{ff09}");
     } else {
         body.push_str(&first);
     }
     let last_raw = session.last_user_message.trim();
     if !last_raw.is_empty() && last_raw != first_raw {
         body.push_str(&format!(
-            "\n末次请求：{}",
+            "\n\u{672b}\u{6b21}\u{8bf7}\u{6c42}\u{ff1a}{}",
             truncate_chars(&scrub(last_raw), 400)
         ));
     }
 
-    body.push_str(&format!("\n【后果】会话更新于 {}。", scrub(updated)));
+    body.push_str(&format!("\n\u{3010}\u{540e}\u{679c}\u{3011}\u{4f1a}\u{8bdd}\u{66f4}\u{65b0}\u{4e8e} {}\u{3002}", scrub(updated)));
     if let Some(line) = usage_line(&session.usage) {
         body.push(' ');
         body.push_str(&line);
     }
     if let Some(agent) = session.agent.as_deref().filter(|s| !s.is_empty()) {
-        body.push_str(&format!(" 由 `{}` 子代理执行", scrub(agent)));
+        body.push_str(&format!(" \u{7531} `{}` \u{5b50}\u{4ee3}\u{7406}\u{6267}\u{884c}", scrub(agent)));
         if let Some(parent) = session.parent_id.as_deref().filter(|s| !s.is_empty()) {
-            body.push_str(&format!("（父会话 {}）", short_id(parent)));
+            body.push_str(&format!("\u{ff08}\u{7236}\u{4f1a}\u{8bdd} {}\u{ff09}", short_id(parent)));
         }
-        body.push('。');
+        body.push('\u{3002}');
     }
     body
 }
@@ -179,22 +179,22 @@ fn usage_line(usage: &serde_json::Map<String, Value>) -> Option<String> {
         parts.push(format!("tokens {total:.0}"));
     } else {
         if let Some(input) = number("input") {
-            parts.push(format!("输入 {input:.0}"));
+            parts.push(format!("\u{8f93}\u{5165} {input:.0}"));
         }
         if let Some(output) = number("output") {
-            parts.push(format!("输出 {output:.0}"));
+            parts.push(format!("\u{8f93}\u{51fa} {output:.0}"));
         }
     }
     if let Some(cost) = number("cost_total") {
-        parts.push(format!("费用 {cost:.4}"));
+        parts.push(format!("\u{8d39}\u{7528} {cost:.4}"));
     }
     if let Some(count) = number("message_count") {
-        parts.push(format!("消息 {count:.0}"));
+        parts.push(format!("\u{6d88}\u{606f} {count:.0}"));
     }
     if parts.is_empty() {
         None
     } else {
-        Some(format!("{}.", parts.join("；")))
+        Some(format!("{}.", parts.join("\u{ff1b}")))
     }
 }
 
@@ -229,7 +229,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
         text.to_owned()
     } else {
         let mut out: String = text.chars().take(max).collect();
-        out.push('…');
+        out.push('\u{2026}');
         out
     }
 }
@@ -258,7 +258,7 @@ pub fn scrub(text: &str) -> String {
         let lower = line.to_ascii_lowercase();
         if line.contains("-----BEGIN") && lower.contains("private key") {
             in_pem = true;
-            out.push_str("[已隐去私钥]");
+            out.push_str("[\u{5df2}\u{9690}\u{53bb}\u{79c1}\u{94a5}]");
             out.push('\n');
             continue;
         }
@@ -290,11 +290,11 @@ const SECRET_KEYS: [&str; 17] = [
     "bearer",
     "credential",
     "client_secret",
-    "密码",
-    "口令",
-    "密钥",
-    "令牌",
-    "凭证",
+    "\u{5bc6}\u{7801}",
+    "\u{53e3}\u{4ee4}",
+    "\u{5bc6}\u{94a5}",
+    "\u{4ee4}\u{724c}",
+    "\u{51ed}\u{8bc1}",
 ];
 
 fn redact_line(line: &str) -> String {
@@ -319,7 +319,7 @@ fn redact_key_value(line: &str) -> Option<String> {
             let separator = trimmed
                 .chars()
                 .next()
-                .filter(|c| matches!(*c, '=' | ':' | '：'));
+                .filter(|c| matches!(*c, '=' | ':' | '\u{ff1a}'));
             let index = if let Some(separator) = separator {
                 line.len() - (trimmed.len() - separator.len_utf8())
             } else if line[..pos].ends_with("--") {
@@ -450,12 +450,12 @@ mod tests {
     #[test]
     fn builds_entry_with_three_markers_and_metadata() {
         let entry = session_entry(&sample(), &ConvertOptions::default());
-        assert!(entry.content.contains("【前因】"));
-        assert!(entry.content.contains("【行为】"));
-        assert!(entry.content.contains("【后果】"));
+        assert!(entry.content.contains("\u{3010}\u{524d}\u{56e0}\u{3011}"));
+        assert!(entry.content.contains("\u{3010}\u{884c}\u{4e3a}\u{3011}"));
+        assert!(entry.content.contains("\u{3010}\u{540e}\u{679c}\u{3011}"));
         assert_eq!(entry.project, "respire");
         assert_eq!(entry.importance, "important");
-        assert!(entry.title.starts_with("Codex 会话"));
+        assert!(entry.title.starts_with("Codex \u{4f1a}\u{8bdd}"));
         assert_eq!(
             entry.tags,
             vec!["session-import".to_owned(), "codex".to_owned()]
@@ -470,21 +470,21 @@ mod tests {
         assert!(!clean.contains("ghp_ABCDEFGHIJKLMNOP"));
         assert!(!clean.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!clean.contains("MIIabc"));
-        assert!(clean.contains("[已隐去私钥]"));
+        assert!(clean.contains("[\u{5df2}\u{9690}\u{53bb}\u{79c1}\u{94a5}]"));
     }
 
     #[test]
     fn title_falls_back_to_id() {
         let mut s = sample();
         s.first_user_message = String::new();
-        assert_eq!(derive_title(&s), format!("Codex 会话 {}", "0199abcd"));
+        assert_eq!(derive_title(&s), format!("Codex \u{4f1a}\u{8bdd} {}", "0199abcd"));
     }
 
     #[test]
     fn redact_only_when_keyword_adjoins_separator() {
         assert_eq!(
-            scrub("会话更新于 2026-10-01T02:03:00Z"),
-            "会话更新于 2026-10-01T02:03:00Z"
+            scrub("\u{4f1a}\u{8bdd}\u{66f4}\u{65b0}\u{4e8e} 2026-10-01T02:03:00Z"),
+            "\u{4f1a}\u{8bdd}\u{66f4}\u{65b0}\u{4e8e} 2026-10-01T02:03:00Z"
         );
         assert_eq!(
             scrub("fix the token refresh bug: now"),
@@ -492,7 +492,7 @@ mod tests {
         );
         assert!(scrub("token=abcd1234").contains("***"));
         assert!(scrub("api_key: abcd1234").contains("***"));
-        assert!(scrub("密码：hunter2").contains("***"));
+        assert!(scrub("\u{5bc6}\u{7801}\u{ff1a}hunter2").contains("***"));
     }
 
     #[test]
@@ -523,7 +523,7 @@ mod tests {
         let prose = "Let's begin by rotating the private key for the service";
         assert_eq!(scrub(prose), prose);
         let block = "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----";
-        assert!(scrub(block).contains("[已隐去私钥]"));
+        assert!(scrub(block).contains("[\u{5df2}\u{9690}\u{53bb}\u{79c1}\u{94a5}]"));
     }
 
     #[test]

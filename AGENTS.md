@@ -17,9 +17,9 @@ The mandatory workflow in `docs/respire-lite.md` is the default injected policy.
 - Prompt changes require a before/after semantic comparison and existing injection tests, including stale replacement, preservation, idempotence and removal. Validate the actual packaged `prompt` and injection preview in an isolated workspace. Do not add tests unless the user requests them.
 - A future reduction in these constraints requires explicit user authorization for the named rules. Record the reason and behavior impact in the change description. Routine refactoring, translation, formatting, or token reduction is not authorization.
 
-## 中文保留约定
+## Prompt-strength contract
 
-默认注入必须常驻强约束。禁止以精简、翻译、节省 token 或“全文仍有”为由删除或软化首工具查忆、每轮重置、非查忆故障的遇障查忆、两试再查、正常可写模式每轮有界归档、改并挂存、挂点深搜、标题规则、备份复验、认真勤勉周全十二条、反偷懒总则及查存障三闸。只有用户明确授权具体规则的削弱，才可改变其强度。只读/暂停模式及用户授权边界优先，禁止虚构产品能力。
+The default injection must stay a standing hard constraint. No one may delete or soften, on the grounds of trimming, translation, token saving or "the full text still exists elsewhere", the first-tool recall rule, the per-turn reset, recall-before-fix on a non-recall fault, the two-retry rule, the bounded per-turn archive in normal writable mode, update/merge/attach-then-create, deep search from the attach point, the title rule, backup re-verification, the twelve diligent-and-complete items, the anti-laziness general rule or the three gates around recall and store. Rule strength changes only with an explicit user authorization for that specific rule. Read-only/paused modes and the user-authorized boundary take precedence, and inventing product capabilities is forbidden.
 
 ## Reviewed prompt update
 

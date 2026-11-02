@@ -1,57 +1,57 @@
-# 不可解析当前修订的受控恢复（待验收）
+# Controlled recovery from an undecodable current revision (pending acceptance)
 
-## 问题与范围
+## Problem and scope
 
-当前远端修订已 applied、但 payload 无法解析时，pull 记录远端 head 而不推进本地 sync_base；原 take-incoming 又要求二者相等，导致“先完成同步”无法解除阻塞。
+When the current remote revision is already applied but its payload cannot be decoded, pull records the remote head without advancing the local sync_base; the original take-incoming then required the two to be equal, so "finish the sync first" could not clear the block.
 
-本分支只修复客户端恢复出口。以官方 main 的 d5001f8 为基线，分支为 `fix/undecodable-head-recovery`。本次作为待验收草案提交评审；尚未部署，未对真实记忆执行 sync-resolve / sync-restore。Rust 与真实服务验收缺口见下文，不能将源码提交视为恢复成功。
+This branch only fixes the client-side recovery exit. It is based on official main at d5001f8 and lives on `fix/undecodable-head-recovery`. It is submitted as a draft pending acceptance; nothing has been deployed, and sync-resolve / sync-restore have not been run against real memory. The Rust and real-service acceptance gaps are described below, and committing the source must not be read as a successful recovery.
 
-## 行为
+## Behaviour
 
-- epoch、head 检查和操作创建位于同一个 SQLite Immediate 事务。
-- 只有持久 head 带解码错误、当前仍无法读取，且用户明确选择 take-incoming 时，允许替换不可解析 head；merge 继续拒绝。
-- 存在本地 dirty、pending 操作或可继续发送的恢复操作时，拒绝覆盖。
-- 候选仍须经现有解密与字段解析；有效删除候选保留删除意图。候选无效则整体回滚。
-- 仅在操作首次提交事务前，把新操作的 base_rev 设置为用户审阅的 head；sync_base 保留最后真正应用的版本。随后使用既有服务端版本比较与 restore_op_id 协议，不新增服务端接口。
-- 保留原记忆 ID、坏修订和候选历史。新表 sync_recovery_intents 只记录 epoch、候选版本、审阅 head 与 op_id，作为跨重试的幂等键，不含正文或密钥。
-- 同一恢复请求重复调用复用原操作；服务端拒绝后不自动生成新的 op_id。已处理的 take-incoming 重试不再创建版本。
-- sync-reset 会使旧操作失效：旧恢复请求明确报错；重新审阅新 head 后，已失效旧关联不会阻塞新的恢复。不要把 sync-reset 当成此问题的修复步骤。
-- 本地排队、上传 applied 均不等于冲突已解决；processed 仍等待既有服务端 resolution 回执。
+- The epoch check, the head check and op creation happen in one SQLite Immediate transaction.
+- Only when the persisted head carries a decode error, is still unreadable, and the user explicitly chose take-incoming may the undecodable head be replaced; merge keeps rejecting it.
+- The overwrite is refused when local dirty state, pending ops or a recovery op that can still be sent exist.
+- A candidate must still pass the existing decryption and field parsing; a valid deletion candidate keeps its delete intent. An invalid candidate rolls the whole thing back.
+- Only before the op's first committed transaction is the new op's base_rev set to the head the user reviewed; sync_base keeps the last genuinely applied revision. The existing server-side revision comparison and the restore_op_id protocol are then used, with no new server endpoint.
+- The original memory ID, the bad revision and the candidate history are preserved. The new table sync_recovery_intents stores only the epoch, the candidate revision, the reviewed head and the op_id as a cross-retry idempotency key -- never the body or keys.
+- Repeated calls for the same recovery request reuse the original op; a server rejection never mints a new op_id automatically. A retried take-incoming that was already processed creates no further revision.
+- sync-reset invalidates old ops: an old recovery request fails explicitly, and after the new head is reviewed a stale association no longer blocks a new recovery. Do not treat sync-reset as the fix for this problem.
+- Local queueing or an applied upload is not a resolved conflict; processed still waits for the existing server-side resolution receipt.
 
-## 验证状态
+## Verification status
 
-已完成：
+Done:
 
-- 修改文件的 Rust 语法/格式检查、Git 补丁空白检查。
-- 使用源码中的 SQL 和内存 SQLite 验证：初始化可重复执行；dirty 保护；新操作改基线但保留 sync_base 与历史；事务回滚；失败幂等键保留；重复键拒绝；reset 旧操作不复用。
-- 独立代码复核；修正 reset 后幂等早退误报成功的问题。
+- Rust syntax/format checks on the changed files and a whitespace check on the git patch.
+- Validated with the SQL from the source and an in-memory SQLite: initialisation is repeatable; dirty protection; a new op changes the baseline while keeping sync_base and history; transaction rollback; the idempotency key survives failure; a duplicate key is rejected; a reset old op is not reused.
+- An independent code review, which fixed a false success report from the idempotent early return after reset.
 
-原提交添加的 Rust 回归用例（维护验收已实际执行）：
+The Rust regression cases the original commit added (actually executed during maintainer acceptance):
 
-1. 坏 head + 好候选恢复及同请求重复排队。
-2. 内容 applied 后仍待 resolution 回执，完整回执后幂等重试。
-3. head、epoch 改变及 merge 拒绝。
-4. pending 与仅 dirty 的本地修改保护。
-5. 可读但尚未应用的 head 仍要求先同步。
-6. 坏候选导致事务回滚。
-7. 模拟服务端并发冲突，保留未解决状态且重复请求不增加冲突。
-8. 同 epoch reset 后旧恢复重试显式失效，不创建额外操作；覆盖 pending、已 applied 和已 conflict_saved 的内容回执。旧的未完成 resolution 关联失效，操作历史保留，新 head 可发起新的显式恢复。
-9. 新客户端没有已应用基线时仍可显式恢复。
+1. Bad head plus a good candidate recovers, and a repeat of the same request queues idempotently.
+2. Content applied but still awaiting the resolution receipt, then an idempotent retry after the full receipt.
+3. Head and epoch changes, and merge rejection.
+4. Protection of pending and dirty-only local changes.
+5. A readable but not yet applied head still requires a sync first.
+6. A bad candidate rolls the transaction back.
+7. A simulated server-side concurrent conflict keeps the unresolved state and does not add a conflict on a repeated request.
+8. After a same-epoch reset an old recovery retry is explicitly invalidated and creates no extra op; covers pending, applied and already conflict_saved content receipts. The old incomplete resolution association is invalidated, the op history is kept, and the new head can start a new explicit recovery.
+9. A new client with no applied baseline can still recover explicitly.
 
-执行入口（需先按仓库说明配置匹配的 Core SDK 和 Windows 构建工具）：
+Entry points (requires a matching Core SDK and the Windows build tools configured per the repo docs):
 
 ```text
 cargo test --locked -p respire_storage transport::local::conflicts::tests -- --test-threads=1
 cargo test --locked -p respire_storage transport::local::sync::tests -- --test-threads=1
 ```
 
-原提交阶段没有匹配 SDK 与完整依赖缓存，因此当时未能运行 Rust 测试。维护验收使用已验证的官方 SDK `1.0.2-dev.12`（源 `77fc566e47c6c283c0bde9192528debad23d6248`）和离线依赖，在隔离 HOME/库目录、无凭据环境运行全部 storage 测试：53 项通过，包括上述 9 项恢复回归。扩展的 reset 负向用例在修复前实际失败，修复后通过。
+At the original commit stage there was no matching SDK and no complete dependency cache, so the Rust tests could not run then. Maintainer acceptance used the verified official SDK `1.0.2-dev.12` (source `77fc566e47c6c283c0bde9192528debad23d6248`) with offline dependencies and ran the whole storage suite in an isolated HOME/db directory with no credentials: 53 passed, including the 9 recovery regressions above. The extended negative reset case really failed before the fix and passes after it.
 
-reset 的修复只取消与恢复意图绑定、尚未完成的 resolution outbox 关联；不删除操作、候选、坏版本或已处理的 resolution 历史。不能把这里的回执模拟或本地 Rust 通过当成真实服务端并发验收。
+The reset fix only cancels incomplete resolution outbox associations bound to a recovery intent; it deletes no ops, candidates, bad revisions or already processed resolution history. Neither the receipt simulation here nor a local Rust pass is acceptance of real server-side concurrency.
 
-## 后续验收与未解决项
+## Follow-up acceptance and open items
 
-- 在具有官方匹配 SDK 的环境完成上述 Rust 测试，再在隔离账号验证真实服务端 CAS、回执丢失重试及并发更新。
-- 通过前不替换当前 Runtime；实际恢复需独立备份与用户确认。当前旧 Runtime 不会因为源码分支存在而自动获得修复。
-- 初始 head 的解析失败根因仍未知。本次未读取原始密文、未更改 payload 兼容规则。
-- 安全解析诊断的阶段、类型、字段定位属于后续 crypto 层改进；本分支仅区分恢复前置条件错误，不新增可能泄露正文/密钥的底层错误输出。
+- Complete the Rust tests above in an environment with the official matching SDK, then verify real server-side CAS, receipt-loss retries and concurrent updates on an isolated account.
+- Do not replace the current Runtime before that passes; an actual recovery needs an independent backup and user confirmation. The current old Runtime does not acquire this fix merely because the source branch exists.
+- The root cause of the initial head decode failure is still unknown. This change read no original ciphertext and changed no payload compatibility rule.
+- Staged parsing diagnostics (stage, type, field location) belong to a later crypto-layer improvement; this branch only distinguishes recovery precondition errors and adds no low-level error output that could leak bodies or keys.

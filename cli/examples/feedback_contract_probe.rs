@@ -187,7 +187,7 @@ fn main() -> Result<()> {
             "Python exception handling",
             "Python raises and catches exceptions using try and except",
         ),
-        ("中文记忆检索", "中文记忆检索和数据同步使用明确的库边界"),
+        ("\u{4e2d}\u{6587}\u{8bb0}\u{5fc6}\u{68c0}\u{7d22}", "\u{4e2d}\u{6587}\u{8bb0}\u{5fc6}\u{68c0}\u{7d22}\u{548c}\u{6570}\u{636e}\u{540c}\u{6b65}\u{4f7f}\u{7528}\u{660e}\u{786e}\u{7684}\u{5e93}\u{8fb9}\u{754c}"),
     ]
     .iter()
     .enumerate()

@@ -62,7 +62,7 @@ impl Form {
         }
         let query = self.query.text.trim().to_owned();
         if query.is_empty() {
-            self.result = vec![fail_line(t("请输入测试查询", "Enter a query to test"))];
+            self.result = vec![fail_line(t("\u{8bf7}\u{8f93}\u{5165}\u{6d4b}\u{8bd5}\u{67e5}\u{8be2}", "Enter a query to test"))];
             return;
         }
         let mode = self.mode;
@@ -90,12 +90,12 @@ impl Form {
         let result = match receiver.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err(t("测试线程中断", "Test worker disconnected")),
+            Err(TryRecvError::Disconnected) => Err(t("\u{6d4b}\u{8bd5}\u{7ebf}\u{7a0b}\u{4e2d}\u{65ad}", "Test worker disconnected")),
         };
         let elapsed = started.elapsed().as_secs_f32();
         self.pending = None;
         self.result
-            .push(line(format!("{}: {elapsed:.2}s", t("耗时", "Elapsed"))));
+            .push(line(format!("{}: {elapsed:.2}s", t("\u{8017}\u{65f6}", "Elapsed"))));
         match result {
             Err(error) => self.result.push(fail_line(error)),
             Ok(value) => {
@@ -110,27 +110,27 @@ impl Form {
                     self.result.push(warn_line(format!(
                         "{}: {reason}",
                         t(
-                            "高质量失败，以下为快速结果",
+                            "\u{9ad8}\u{8d28}\u{91cf}\u{5931}\u{8d25}\u{ff0c}\u{4ee5}\u{4e0b}\u{4e3a}\u{5feb}\u{901f}\u{7ed3}\u{679c}",
                             "Quality failed; showing local results"
                         )
                     )));
                 } else if count == 0 {
                     self.result.push(warn_line(if self.mode == "quality" {
                         t(
-                            "未召回结果；本次未验证高质量 API",
+                            "\u{672a}\u{53ec}\u{56de}\u{7ed3}\u{679c}\u{ff1b}\u{672c}\u{6b21}\u{672a}\u{9a8c}\u{8bc1}\u{9ad8}\u{8d28}\u{91cf} API",
                             "No results; quality API was not exercised",
                         )
                     } else {
                         t(
-                            "未召回结果，请换一个查询",
+                            "\u{672a}\u{53ec}\u{56de}\u{7ed3}\u{679c}\u{ff0c}\u{8bf7}\u{6362}\u{4e00}\u{4e2a}\u{67e5}\u{8be2}",
                             "No results; try a different query",
                         )
                     }));
                 } else {
                     self.result.push(ok_line(format!(
-                        "{} · {count} {}",
-                        t("测试成功", "Test passed"),
-                        t("条结果", "results")
+                        "{} \u{b7} {count} {}",
+                        t("\u{6d4b}\u{8bd5}\u{6210}\u{529f}", "Test passed"),
+                        t("\u{6761}\u{7ed3}\u{679c}", "results")
                     )));
                 }
                 if let Some(items) = value["items"].as_array() {
@@ -159,11 +159,11 @@ impl Form {
 
     pub fn draw(&self, frame: &mut Frame, area: Rect) {
         let title = if self.mode == "benchmark" {
-            t("推理 / Recall Benchmark", "Inference / Recall Benchmark")
+            t("\u{63a8}\u{7406} / Recall Benchmark", "Inference / Recall Benchmark")
         } else if self.mode == "quality" {
-            t("测试高质量召回", "Test high-quality recall")
+            t("\u{6d4b}\u{8bd5}\u{9ad8}\u{8d28}\u{91cf}\u{53ec}\u{56de}", "Test high-quality recall")
         } else {
-            t("测试快速召回", "Test fast recall")
+            t("\u{6d4b}\u{8bd5}\u{5feb}\u{901f}\u{53ec}\u{56de}", "Test fast recall")
         };
         let block = Block::default().borders(Borders::ALL).title(title);
         let inner = block.inner(area);
@@ -183,17 +183,17 @@ impl Form {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(t("查询", "Query")),
+                    .title(t("\u{67e5}\u{8be2}", "Query")),
             ),
             regions[0],
         );
         let note = if self.mode == "benchmark" {
-            t("回车：首轮 + 8 轮推理验证及快速 Recall。包含 RPC 等待；只访问本地 runtime。", "Enter: first call + 8 inference checks and fast recalls. RPC waits included; local runtime only.")
+            t("\u{56de}\u{8f66}\u{ff1a}\u{9996}\u{8f6e} + 8 \u{8f6e}\u{63a8}\u{7406}\u{9a8c}\u{8bc1}\u{53ca}\u{5feb}\u{901f} Recall\u{3002}\u{5305}\u{542b} RPC \u{7b49}\u{5f85}\u{ff1b}\u{53ea}\u{8bbf}\u{95ee}\u{672c}\u{5730} runtime\u{3002}", "Enter: first call + 8 inference checks and fast recalls. RPC waits included; local runtime only.")
         } else if self.mode == "quality" {
-            t("回车测试：查询与候选标题会发往已配置 API；不改变默认模式。", "Enter tests: query and candidate titles go to the configured API; saved mode is unchanged.")
+            t("\u{56de}\u{8f66}\u{6d4b}\u{8bd5}\u{ff1a}\u{67e5}\u{8be2}\u{4e0e}\u{5019}\u{9009}\u{6807}\u{9898}\u{4f1a}\u{53d1}\u{5f80}\u{5df2}\u{914d}\u{7f6e} API\u{ff1b}\u{4e0d}\u{6539}\u{53d8}\u{9ed8}\u{8ba4}\u{6a21}\u{5f0f}\u{3002}", "Enter tests: query and candidate titles go to the configured API; saved mode is unchanged.")
         } else {
             t(
-                "回车测试：仅使用本地召回；不改变默认模式。",
+                "\u{56de}\u{8f66}\u{6d4b}\u{8bd5}\u{ff1a}\u{4ec5}\u{4f7f}\u{7528}\u{672c}\u{5730}\u{53ec}\u{56de}\u{ff1b}\u{4e0d}\u{6539}\u{53d8}\u{9ed8}\u{8ba4}\u{6a21}\u{5f0f}\u{3002}",
                 "Enter tests local recall; saved mode is unchanged.",
             )
         };
@@ -202,11 +202,11 @@ impl Form {
             vec![
                 line(format!(
                     "{} {}s",
-                    t("正在测试", "Testing"),
+                    t("\u{6b63}\u{5728}\u{6d4b}\u{8bd5}", "Testing"),
                     started.elapsed().as_secs()
                 )),
                 line(t(
-                    "Esc 返回；已发出的请求完成后停止后续轮次。",
+                    "Esc \u{8fd4}\u{56de}\u{ff1b}\u{5df2}\u{53d1}\u{51fa}\u{7684}\u{8bf7}\u{6c42}\u{5b8c}\u{6210}\u{540e}\u{505c}\u{6b62}\u{540e}\u{7eed}\u{8f6e}\u{6b21}\u{3002}",
                     "Esc returns; the submitted request finishes, then further rounds stop.",
                 )),
             ]
@@ -242,7 +242,7 @@ fn run_benchmark(query: &str, cancel: &AtomicBool) -> Result<Value, String> {
     let mut first_probe = 0.0;
     let mut first_recall = 0.0;
     for round in 0..=ROUNDS {
-        if cancel.load(Ordering::Acquire) { return Err(t("Benchmark 已停止", "Benchmark stopped")); }
+        if cancel.load(Ordering::Acquire) { return Err(t("Benchmark \u{5df2}\u{505c}\u{6b62}", "Benchmark stopped")); }
         let probe_text = format!("{query} [benchmark {round}]");
         let started = Instant::now();
         let probe = retrieval_action(&["model", "probe", "--text", &probe_text])
@@ -255,12 +255,12 @@ fn run_benchmark(query: &str, cancel: &AtomicBool) -> Result<Value, String> {
         let engine = summary["selected"].as_str()
             .ok_or_else(|| "Benchmark: missing selected engine".to_owned())?;
         if !selected.is_empty() && selected != engine {
-            return Err(t("推理引擎在测试期间发生变化，请重新测试", "Inference engine changed during the benchmark; run again"));
+            return Err(t("\u{63a8}\u{7406}\u{5f15}\u{64ce}\u{5728}\u{6d4b}\u{8bd5}\u{671f}\u{95f4}\u{53d1}\u{751f}\u{53d8}\u{5316}\u{ff0c}\u{8bf7}\u{91cd}\u{65b0}\u{6d4b}\u{8bd5}", "Inference engine changed during the benchmark; run again"));
         }
         selected = engine.to_owned();
         if round == 0 { first_probe = wall; }
         else { inference.push(elapsed); probe_wall.push(wall); }
-        if cancel.load(Ordering::Acquire) { return Err(t("Benchmark 已停止", "Benchmark stopped")); }
+        if cancel.load(Ordering::Acquire) { return Err(t("Benchmark \u{5df2}\u{505c}\u{6b62}", "Benchmark stopped")); }
         let started = Instant::now();
         let recalled = retrieval_action(&["recall", query, "--mode", "fast", "--titles", "--limit", "20"])
             .map_err(|error| format!("Benchmark recall {round}: {error}"))?;
@@ -276,21 +276,21 @@ fn run_benchmark(query: &str, cancel: &AtomicBool) -> Result<Value, String> {
         if round == 0 { first_recall = wall; } else { recall_wall.push(wall); }
     }
     let mut rows = vec![
-        format!("{}: {selected}; {ROUNDS} {}", t("实际引擎", "Selected engine"), t("重复轮次", "repeated rounds")),
-        format!("{}: {first_probe:.1} ms / {first_recall:.1} ms", t("首轮推理请求 / Recall", "First probe request / Recall")),
-        benchmark_row(&t("推理报告耗时", "Reported probe time"), &inference)?,
-        benchmark_row(&t("推理请求完整耗时", "Probe RPC wall time"), &probe_wall)?,
-        benchmark_row(&t("快速 Recall 完整耗时", "Fast Recall RPC wall time"), &recall_wall)?,
-        format!("{}: {indexed_min}–{indexed_max}; {}: {pending_max}", t("有效候选数", "Indexed candidates"), t("最多待索引数", "Maximum pending index")),
-        t("首轮不等于冷启动；重复 Recall 可复用查询缓存。", "First call is not a cold start; repeated Recall may reuse query caches."),
-        t("SDK 上报耗时与完整请求不同；完整 Recall 含排队、RPC 和检索。", "SDK-reported times differ from full requests; full Recall includes queues, RPC and retrieval."),
-        t("Recall 会更新常规查询日志与命中统计；不修改记忆正文或默认模式。", "Recall updates normal query logs and hit statistics; content and saved mode are unchanged."),
+        format!("{}: {selected}; {ROUNDS} {}", t("\u{5b9e}\u{9645}\u{5f15}\u{64ce}", "Selected engine"), t("\u{91cd}\u{590d}\u{8f6e}\u{6b21}", "repeated rounds")),
+        format!("{}: {first_probe:.1} ms / {first_recall:.1} ms", t("\u{9996}\u{8f6e}\u{63a8}\u{7406}\u{8bf7}\u{6c42} / Recall", "First probe request / Recall")),
+        benchmark_row(&t("\u{63a8}\u{7406}\u{62a5}\u{544a}\u{8017}\u{65f6}", "Reported probe time"), &inference)?,
+        benchmark_row(&t("\u{63a8}\u{7406}\u{8bf7}\u{6c42}\u{5b8c}\u{6574}\u{8017}\u{65f6}", "Probe RPC wall time"), &probe_wall)?,
+        benchmark_row(&t("\u{5feb}\u{901f} Recall \u{5b8c}\u{6574}\u{8017}\u{65f6}", "Fast Recall RPC wall time"), &recall_wall)?,
+        format!("{}: {indexed_min}\u{2013}{indexed_max}; {}: {pending_max}", t("\u{6709}\u{6548}\u{5019}\u{9009}\u{6570}", "Indexed candidates"), t("\u{6700}\u{591a}\u{5f85}\u{7d22}\u{5f15}\u{6570}", "Maximum pending index")),
+        t("\u{9996}\u{8f6e}\u{4e0d}\u{7b49}\u{4e8e}\u{51b7}\u{542f}\u{52a8}\u{ff1b}\u{91cd}\u{590d} Recall \u{53ef}\u{590d}\u{7528}\u{67e5}\u{8be2}\u{7f13}\u{5b58}\u{3002}", "First call is not a cold start; repeated Recall may reuse query caches."),
+        t("SDK \u{4e0a}\u{62a5}\u{8017}\u{65f6}\u{4e0e}\u{5b8c}\u{6574}\u{8bf7}\u{6c42}\u{4e0d}\u{540c}\u{ff1b}\u{5b8c}\u{6574} Recall \u{542b}\u{6392}\u{961f}\u{3001}RPC \u{548c}\u{68c0}\u{7d22}\u{3002}", "SDK-reported times differ from full requests; full Recall includes queues, RPC and retrieval."),
+        t("Recall \u{4f1a}\u{66f4}\u{65b0}\u{5e38}\u{89c4}\u{67e5}\u{8be2}\u{65e5}\u{5fd7}\u{4e0e}\u{547d}\u{4e2d}\u{7edf}\u{8ba1}\u{ff1b}\u{4e0d}\u{4fee}\u{6539}\u{8bb0}\u{5fc6}\u{6b63}\u{6587}\u{6216}\u{9ed8}\u{8ba4}\u{6a21}\u{5f0f}\u{3002}", "Recall updates normal query logs and hit statistics; content and saved mode are unchanged."),
     ];
     if indexed_min == 0 {
-        rows.push(t("没有有效候选：结果仅代表空候选查询，不代表完整记忆库速度。", "No indexed candidates: timings cover empty-candidate queries, not a populated library."));
+        rows.push(t("\u{6ca1}\u{6709}\u{6709}\u{6548}\u{5019}\u{9009}\u{ff1a}\u{7ed3}\u{679c}\u{4ec5}\u{4ee3}\u{8868}\u{7a7a}\u{5019}\u{9009}\u{67e5}\u{8be2}\u{ff0c}\u{4e0d}\u{4ee3}\u{8868}\u{5b8c}\u{6574}\u{8bb0}\u{5fc6}\u{5e93}\u{901f}\u{5ea6}\u{3002}", "No indexed candidates: timings cover empty-candidate queries, not a populated library."));
     }
     if indexed_min != indexed_max || pending_max > 0 {
-        rows.push(t("索引仍有变化：本次为当前负载结果，不适合直接比较引擎。", "Index is changing: these timings reflect current load; avoid direct engine comparisons."));
+        rows.push(t("\u{7d22}\u{5f15}\u{4ecd}\u{6709}\u{53d8}\u{5316}\u{ff1a}\u{672c}\u{6b21}\u{4e3a}\u{5f53}\u{524d}\u{8d1f}\u{8f7d}\u{7ed3}\u{679c}\u{ff0c}\u{4e0d}\u{9002}\u{5408}\u{76f4}\u{63a5}\u{6bd4}\u{8f83}\u{5f15}\u{64ce}\u{3002}", "Index is changing: these timings reflect current load; avoid direct engine comparisons."));
     }
     Ok(serde_json::json!({"rows": rows}))
 }
