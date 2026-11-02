@@ -312,6 +312,7 @@ fn process() -> Result<Arc<Process>> {
         "RSRS_DATA_DIR",
         "RSRS_M3_DIR",
         "RSRS_ENGINE",
+        "RSRS_MODEL_VARIANT",
         "RSRS_ORT_PROFILE",
         #[cfg(feature = "cpu-owned-ort-experiment")]
         "RSRS_CPU_OWNED_ORT_EXPERIMENT",
@@ -442,6 +443,12 @@ fn process() -> Result<Arc<Process>> {
     Ok(process)
 }
 
+fn unconfirmed_model_load(operation: &str, error: anyhow::Error) -> anyhow::Error {
+    if operation == "host_load_selection" {
+        error.context("load outcome unconfirmed; settings may already be saved; previous model recovery unconfirmed; request was not replayed; inspect runtime state and follow host recovery guidance")
+    } else { error }
+}
+
 pub(crate) fn execute(
     operation: &str,
     payload: &Value,
@@ -473,12 +480,13 @@ pub(crate) fn execute(
     })
     {
         let _ = process.retire(&format!("IPC write failed: {error:#}"));
-        return Err(error);
+        return Err(unconfirmed_model_load(operation, error));
     }
     loop {
         let mut frame = receiver
             .recv()
-            .context("Core worker reply unavailable; command was not replayed")?;
+            .context("Core worker reply unavailable; command was not replayed")
+            .map_err(|error| unconfirmed_model_load(operation, error))?;
         if let Some(request) = frame.get("callback") {
             #[cfg(feature = "native-fault-tests")]
             if TEST_RETIRE_QUEUED_CALLBACK.swap(false, Ordering::AcqRel) {
@@ -501,16 +509,20 @@ pub(crate) fn execute(
                 return Err(error);
             }
         } else if let Some(error) = frame["error"].as_str() {
-            bail!("{error}");
+            let error = anyhow::anyhow!("{error}");
+            return Err(if process.retired.load(Ordering::Acquire) {
+                unconfirmed_model_load(operation, error)
+            } else { error });
         } else {
-            anyhow::ensure!(
-                !process.retired.load(Ordering::Acquire) && process.generation == generation(),
-                "Core worker generation changed; late response discarded; command was not replayed"
-            );
+            if process.retired.load(Ordering::Acquire) || process.generation != generation() {
+                return Err(unconfirmed_model_load(operation, anyhow::anyhow!(
+                    "Core worker generation changed; late response discarded; command was not replayed")));
+            }
             return frame
                 .get_mut("result")
                 .map(Value::take)
-                .context("Core worker result missing");
+                .context("Core worker result missing")
+                .map_err(|error| unconfirmed_model_load(operation, error));
         }
     }
 }
@@ -640,8 +652,6 @@ pub fn run() -> Result<()> {
                     let operation = operation_value
                         .as_str()
                         .context("Core worker operation missing")?;
-                    let reset_model_cache = operation == "engine_control"
-                        && frame["payload"]["action"] == "reset";
                     #[cfg(feature = "native-fault-tests")]
                     if operation == "test_worker_hold" {
                         loop {
@@ -685,9 +695,6 @@ pub fn run() -> Result<()> {
                     } else {
                         crate::business::execute::<Value>(operation, payload)
                     }?;
-                    if reset_model_cache {
-                        crate::host::reset_model_cache()?;
-                    }
                     Ok(result)
                 })();
                 let body = match &result {
@@ -757,6 +764,17 @@ pub fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn interrupted_load_reports_uncertainty_without_replaying_or_claiming_rollback() {
+        let load = super::unconfirmed_model_load("host_load_selection", anyhow::anyhow!("IPC closed"));
+        let message = format!("{load:#}");
+        assert!(message.contains("load outcome unconfirmed"));
+        assert!(message.contains("settings may already be saved"));
+        assert!(message.contains("previous model recovery unconfirmed"));
+        assert!(message.contains("request was not replayed"));
+        let other = super::unconfirmed_model_load("model_probe", anyhow::anyhow!("IPC closed"));
+        assert_eq!(other.to_string(), "IPC closed");
+    }
     use super::*;
     #[test]
     fn borrowed_frames_keep_the_existing_wire_contract() -> Result<()> {

@@ -32,6 +32,7 @@ struct Progress {
     updated: Instant,
     idle_timeout: bool,
     cancelled: bool,
+    cancellable: bool,
 }
 
 pub struct Operation;
@@ -75,6 +76,12 @@ impl Operation {
         Self::try_begin_with_idle_timeout("verify", true)?
             .ok_or_else(|| anyhow!("another model operation is running"))
     }
+    /// Loading crosses a native replacement boundary and commits inside the
+    /// isolated SDK worker. Do not acknowledge a cancellation it cannot honor.
+    pub fn begin_load() -> Result<Self> {
+        Self::try_begin_inner("verify", false, false)?
+            .ok_or_else(|| anyhow!("another model operation is running"))
+    }
     pub fn begin(phase: &str) -> Result<Self> {
         Self::try_begin(phase)?.ok_or_else(|| anyhow!("another model operation is running"))
     }
@@ -90,6 +97,9 @@ impl Operation {
     }
 
     fn try_begin_with_idle_timeout(phase: &str, idle_timeout: bool) -> Result<Option<Self>> {
+        Self::try_begin_inner(phase, idle_timeout, true)
+    }
+    fn try_begin_inner(phase: &str, idle_timeout: bool, cancellable: bool) -> Result<Option<Self>> {
         let mut slot = CURRENT
             .lock()
             .map_err(|_| anyhow!("model progress lock poisoned"))?;
@@ -108,6 +118,7 @@ impl Operation {
             updated: Instant::now(),
             idle_timeout,
             cancelled: false,
+            cancellable,
         });
         TRACKED.set(true);
         Ok(Some(Self))
@@ -122,6 +133,7 @@ pub fn status() -> Result<Value> {
             "item": progress.item, "done": progress.done, "total": progress.total,
             "elapsed": progress.started.elapsed().as_secs(),
             "idle": progress.updated.elapsed().as_secs(), "cancelled": progress.cancelled,
+            "cancellable": progress.cancellable,
         }),
         None => json!({"active": false}),
     })
@@ -189,6 +201,8 @@ pub fn control(task_id: &str, cancel: bool) -> Result<Value> {
         return Ok(json!({"active":true,"stale":true}));
     }
     if cancel {
+        anyhow::ensure!(p.cancellable,
+            "model loading cannot be cancelled; cancellation was not accepted; wait for the load result");
         p.cancelled = true;
     }
     Ok(json!({
@@ -201,6 +215,7 @@ pub fn control(task_id: &str, cancel: bool) -> Result<Value> {
         "elapsed": p.started.elapsed().as_secs(),
         "idle": p.updated.elapsed().as_secs(),
         "cancelled": p.cancelled,
+        "cancellable": p.cancellable,
     }))
 }
 
@@ -208,6 +223,24 @@ pub fn control(task_id: &str, cancel: bool) -> Result<Value> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn loading_rejects_cancel_without_acknowledgement_at_validation_and_native_phases() -> Result<()> {
+        let _serial=crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+        let _scope=TaskScope::new(Some("synthetic-uncancellable-load".into()));
+        let _operation=Operation::begin_load()?;
+        for phase in ["verify", "load"] {
+            update(phase,"int8",0,None)?;
+            let before=control("synthetic-uncancellable-load",false)?;
+            assert_eq!(before["cancellable"],false);
+            assert_eq!(before["cancelled"],false);
+            let error=control("synthetic-uncancellable-load",true).unwrap_err();
+            assert!(error.to_string().contains("cancellation was not accepted"));
+            assert_eq!(control("synthetic-uncancellable-load",false)?["cancelled"],false);
+            check()?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn cancellation_acknowledgement_is_serialized_with_durable_commit() -> Result<()> {
@@ -240,7 +273,7 @@ mod tests {
     fn long_operation(idle_timeout: bool, idle: u64) -> Progress {
         Progress { id: "fixture".to_owned(), phase: "index".to_owned(), item: "m3".to_owned(),
             done: 100, total: Some(4000), started: Instant::now() - Duration::from_secs(3600),
-            updated: Instant::now() - Duration::from_secs(idle), idle_timeout, cancelled: false }
+            updated: Instant::now() - Duration::from_secs(idle), idle_timeout, cancelled: false, cancellable: true }
     }
 
     #[test]

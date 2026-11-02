@@ -93,6 +93,8 @@ fn execute_index_batches(payload: &mut Value,
 
 fn execute_inner<T: DeserializeOwned>(operation: &str, payload: &mut Value,
     transport: Option<&mut dyn FnMut(&Value) -> Result<Value>>) -> Result<T> {
+    let reset = operation == "engine_control" && payload["action"] == "reset";
+    let _gate = crate::model_selection::gate(operation == "host_load_selection" || reset)?;
     crate::resident::apply_scope(operation, payload);
     if crate::worker::enabled() {
         if matches!(operation, "query" | "query_business" | "related_business" | "remember_candidates" | "candidate_report" | "analyze_duplicates" | "tree_cure" | "deepen_plan" | "tree_float") {
@@ -100,6 +102,11 @@ fn execute_inner<T: DeserializeOwned>(operation: &str, payload: &mut Value,
         }
         return serde_json::from_value(crate::worker::execute(operation, payload, transport)?)
             .context("invalid isolated Core business response");
+    }
+    if operation == "host_load_selection" {
+        let engine = onnx::Engine::parse(payload["engine"].as_str().context("missing engine")?)?;
+        let variant = onnx::parse_variant(payload["variant"].as_str().context("missing variant")?)?;
+        return serde_json::from_value(crate::model_selection::load(engine, variant)?).map_err(Into::into);
     }
     if operation == "index_status" && payload.as_object().is_some_and(|fields|
         fields.len() == 1 && fields.get("artifacts").and_then(Value::as_array)
@@ -134,6 +141,7 @@ fn execute_inner<T: DeserializeOwned>(operation: &str, payload: &mut Value,
             Some(transport) => core.call_with_transport(operation, payload, transport)?,
             None => core.call(operation, payload)?,
         };
+        if reset { crate::host::reset_model_cache()?; }
         if operation == "prepare" { crate::host::persist_prepared(&mut result)?; }
         serde_json::from_value(result).context("invalid Core business response")
     })
@@ -471,6 +479,7 @@ pub mod onnx {
         }).transpose()
     }
     pub fn configured_engine() -> Result<Engine> {
+        if let Some((engine, _)) = crate::model_selection::selection() { return Ok(engine); }
         let (_, value) = read_inference_json()?;
         if value["force_cpu"].as_bool() == Some(true) { return Ok(Engine::Cpu); }
         if let Ok(value) = crate::env::var("RSRS_ENGINE") { return Engine::parse(&value); }
@@ -480,12 +489,14 @@ pub mod onnx {
     }
     /// Selected onnx variant; falls back to the engine default when unset.
     pub fn configured_variant(engine: Engine) -> Result<ModelVariant> {
+        if let Some((_, variant)) = crate::model_selection::selection() { return Ok(variant); }
         if let Ok(value) = crate::env::var("RSRS_MODEL_VARIANT") { return parse_variant(&value); }
         let (_, value) = read_inference_json()?;
         stored_variant(&value)?.map_or_else(|| parse_variant(default_variant(engine)), Ok)
     }
     /// Whether the operator picked a variant (setting or env), not the engine default.
     pub fn explicit_model_selection() -> Result<bool> {
+        if crate::model_selection::selection().is_some() { return Ok(true); }
         if crate::env::var("RSRS_MODEL_VARIANT").is_ok() { return Ok(true); }
         let (_, value) = read_inference_json()?;
         Ok(stored_variant(&value)?.is_some())
@@ -497,25 +508,51 @@ pub mod onnx {
         if !diagnostics.is_empty() { status["provider_registration_errors"] = json!(diagnostics); }
         Ok(status)
     }
-    fn write_engine(engine: Engine, force_cpu: bool) -> Result<()> {
+    pub(crate) fn engine_settings(engine: Engine, force_cpu: bool, model: Option<&str>) -> Result<(std::path::PathBuf, Value)> {
         let directory = settings_dir();
-        std::fs::create_dir_all(&directory)?;
-        let path = directory.join("inference.json");
-        // Preserve an explicitly selected model variant across engine changes,
-        // including settings read through the legacy-directory fallback.
         let (_, existing) = read_inference_json()?;
-        let model = stored_variant(&existing)?.map(|variant| variant.name);
+        let selected = match model {
+            Some(model) => Some(parse_variant(model)?),
+            None => stored_variant(&existing)?,
+        };
         let mut value = json!({"engine":engine,"force_cpu":force_cpu});
-        if let Some(model) = model { value["model"] = json!(model); }
-        std::fs::write(path, serde_json::to_vec_pretty(&value)?)?;
+        if let Some(model) = selected { value["model"] = json!(model.name); }
+        Ok((directory.join("inference.json"), value))
+    }
+    fn commit_engine_settings(path: &std::path::Path, value: &Value, reset: impl FnOnce() -> Result<()>) -> Result<()> {
+        // Never persist half of an engine/variant selection when retiring the
+        // previous native session fails. The runtime serializes these requests.
+        reset()?;
+        if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+        std::fs::write(path, serde_json::to_vec_pretty(value)?)?;
         Ok(())
     }
-    pub fn save_engine(engine: Engine) -> Result<()> {
-        reset_sessions()?;
-        write_engine(engine, false)
+    /// Thread-local draft for host preparation; does not change settings or sessions.
+    pub fn with_selection<T>(engine: Engine, variant: &str, action: impl FnOnce() -> Result<T>) -> Result<T> {
+        crate::model_selection::scoped(engine, parse_variant(variant)?, action)
+    }
+    /// Verify installed pinned files and the selected host path without loading or downloading.
+    pub fn validate_selection(engine: Engine, variant: &str) -> Result<()> {
+        let variant = parse_variant(variant)?;
+        crate::model_selection::check_overrides(engine, variant)?;
+        crate::model_selection::scoped(engine, variant, || crate::model_selection::validate(engine, variant))
+    }
+    /// Validate, load, infer and persist without ever downloading assets.
+    pub fn load_selection(engine: Engine, variant: &str) -> Result<Value> {
+        let _gate = crate::model_selection::gate(true)?;
+        let variant = parse_variant(variant)?;
+        crate::model_selection::check_overrides(engine, variant)?;
+        execute("host_load_selection", json!({"engine":engine,"variant":variant.name}))
+    }
+    pub fn save_engine(engine: Engine) -> Result<()> { save_engine_with_variant(engine, None) }
+    pub fn save_engine_with_variant(engine: Engine, model: Option<&str>) -> Result<()> {
+        let _gate = crate::model_selection::gate(true)?;
+        let (path, value) = engine_settings(engine, false, model)?;
+        commit_engine_settings(&path, &value, reset_sessions)
     }
     /// Persist an explicit model variant selection without touching the engine.
     pub fn save_model_variant(model: &str) -> Result<()> {
+        let _gate = crate::model_selection::gate(true)?;
         let (path, mut value) = read_inference_json()?;
         if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
         value["model"] = json!(parse_variant(model)?.name);
@@ -524,10 +561,15 @@ pub mod onnx {
         Ok(())
     }
     pub fn reset_sessions() -> Result<()> {
+        let _gate = crate::model_selection::gate(true)?;
         execute::<()>("engine_control", json!({"action":"reset"}))?;
         crate::host::reset_model_cache()
     }
-    pub fn reset_cpu_config() -> Result<()> { write_engine(Engine::Cpu, true) }
+    pub fn reset_cpu_config() -> Result<()> {
+        let _gate = crate::model_selection::gate(true)?;
+        let (path, value) = engine_settings(Engine::Cpu, true, None)?;
+        commit_engine_settings(&path, &value, || Ok(()))
+    }
     pub fn accelerator_catalog_path() -> Result<Option<std::path::PathBuf>> {
         #[cfg(windows)] {
             let directory = settings_dir().join("engines/winml-2.4.89");
@@ -555,6 +597,22 @@ pub mod onnx {
     #[cfg(test)]
     mod variant_settings_tests {
         use super::*;
+        #[test]
+        fn failed_session_reset_does_not_persist_a_partial_selection() -> Result<()> {
+            let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+            let directory = std::env::temp_dir().join(format!("respire-engine-commit-{}-{nonce}",std::process::id()));
+            std::fs::create_dir(&directory)?;
+            let path = directory.join("inference.json");
+            let previous = br#"{"engine":"cpu","model":"quantized"}"#;
+            std::fs::write(&path, previous)?;
+            let selected = json!({"engine":"gpu","model":"fp16","force_cpu":false});
+            assert!(commit_engine_settings(&path, &selected, || anyhow::bail!("native reset failed")).is_err());
+            assert_eq!(std::fs::read(&path)?, previous);
+            commit_engine_settings(&path, &selected, || Ok(()))?;
+            assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&path)?)?, selected);
+            std::fs::remove_dir_all(directory)?;
+            Ok(())
+        }
         #[test]
         fn missing_legacy_selection_is_distinct_from_malformed_selection() -> Result<()> {
             assert_eq!(stored_variant(&json!({"engine":"gpu"}))?, None);

@@ -17,6 +17,33 @@ flowchart LR
 | NPU | Windows, Apple Silicon | Explicit selection and compatible provider/hardware/model |
 
 Choose an engine in the TUI or run `rsrs model engine cpu|gpu|npu`.
+On the Models page, open **Choose engine and model weights** to draft CPU/GPU/NPU
+and one of `quantized`, `fp16`, `int8`, `uint8`, `q4`, or `q4f16`.
+
+- **Download selected weights (keep current model)** prefetches the selected
+  variant and its dependencies after a size-labelled confirmation. Repeat to
+  prefetch multiple variants. Downloading does not change configuration or the
+  current session. Verified files are reused.
+- **Validate and load selected weights** never downloads. It checks pinned sizes
+  and SHA-256 identities for the selected BGE-M3 weights, tokenizer and required
+  CPU container, then loads and runs real trial inference. Only success saves
+  the selection and checks runtime read-back. Missing, corrupt or unsupported
+  weights are rejected. A failure after replacement attempts to reload and trial
+  the previous model; failure to recover is explicitly reported.
+- Escape/Back discards the draft; both confirmations default to cancel. Once a
+  load starts it cannot be cancelled, and RPC cancellation explicitly rejects
+  the request instead of acknowledging a cancellation it cannot honor. Downloads
+  remain cancellable. File
+  presence in the picker is metadata only, with checksums verified on loading.
+
+GPU/NPU require compatible OS, hardware and providers. A listed variant is not a
+compatibility guarantee; trial inference must succeed. No node-placement or
+performance guarantee is implied. The commands are
+`rsrs model install --model VARIANT --for-engine cpu|gpu|npu` for prefetch and
+`rsrs model load cpu|gpu|npu --model VARIANT` for validated loading.
+`rsrs model engine cpu|gpu|npu --model VARIANT` remains a settings-only CLI command;
+TUI engine changes use the validated load path.
+
 `RSRS_ENGINE` overrides the saved selection. Automatic selection is unsupported.
 Missing hardware and inference failures are reported without switching engines.
 Provider names do not prove execution of every operation on the requested device.

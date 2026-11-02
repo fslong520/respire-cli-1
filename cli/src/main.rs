@@ -578,6 +578,9 @@ enum ModelAction {
         /// Also fetch this onnx variant (quantized, fp16, int8, uint8, q4, q4f16).
         #[arg(long)]
         model: Option<String>,
+        /// Predownload dependencies for this engine without changing the active selection.
+        #[arg(long, value_parser = ["npu", "gpu", "cpu"])]
+        for_engine: Option<String>,
     },
     /// Build a resumable index generation and activate it after complete validation.
     Activate {
@@ -593,6 +596,13 @@ enum ModelAction {
         /// Onnx model variant to pin (quantized, fp16, int8, uint8, q4, q4f16).
         #[arg(long)]
         model: Option<String>,
+    },
+    /// Validate installed weights, load and trial inference, then save selection. Never downloads.
+    Load {
+        #[arg(value_parser = ["npu", "gpu", "cpu"])]
+        engine: String,
+        #[arg(long)]
+        model: String,
     },
     /// Install compatible NPU execution providers through Windows ML.
     InstallEngines,
@@ -7312,13 +7322,21 @@ fn run_local_inner(args: Cli) -> Result<()> {
         }
         Some(Command::Model { action }) => {
             return match action {
-                ModelAction::InstallM3 { mirror, model } => {
+                ModelAction::InstallM3 { mirror, model, for_engine } => {
                     let mirror_env = respire::model_install::mirror_from_env();
                     let resolved = mirror.as_deref().or(mirror_env.as_deref());
-                    let report = respire::model_install::install_m3(resolved)?;
-                    if let Some(variant) = model.as_deref() {
-                        respire::model_install::install_variant(variant, resolved)?;
-                    }
+                    let prepare = || -> Result<_> {
+                        // Reject bad variants before downloading the baseline.
+                        if let Some(variant) = model.as_deref() { respire::memory::onnx::parse_variant(variant)?; }
+                        let report = respire::model_install::install_m3(resolved)?;
+                        if let Some(variant) = model.as_deref() { respire::model_install::install_variant(variant, resolved)?; }
+                        Ok(report)
+                    };
+                    let report = if let Some(engine) = for_engine {
+                        let engine = respire::memory::onnx::Engine::parse(engine)?;
+                        respire::memory::onnx::with_selection(engine,
+                            model.as_deref().unwrap_or(respire::memory::onnx::default_variant(engine)), prepare)?
+                    } else { prepare()? };
                     emit_result(ResultEnvelope::new(
                         "model install-m3",
                         OutputStatus::Ok,
@@ -7366,24 +7384,35 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 }
                 ModelAction::Engine { engine, model } => {
                     use respire::memory::onnx;
-                    if let Some(model) = model.as_deref() {
-                        onnx::parse_variant(model)?;
-                        onnx::save_model_variant(model)?;
-                    }
                     if let Some(engine) = engine {
-                        onnx::save_engine(onnx::Engine::parse(engine)?)?;
+                        onnx::save_engine_with_variant(onnx::Engine::parse(engine)?, model.as_deref())?;
                         *EMBEDDER_SLOT
                             .lock()
                             .map_err(|_| anyhow!("embedder cache poisoned"))? = None;
+                    } else if let Some(model) = model.as_deref() {
+                        onnx::save_model_variant(model)?;
+                        *EMBEDDER_SLOT.lock().map_err(|_| anyhow!("embedder cache poisoned"))? = None;
                     }
                     let engine = onnx::configured_engine()?;
                     emit_result(ResultEnvelope::new(
                         "model",
                         OutputStatus::Ok,
                         serde_json::json!({"engine":engine,
-                            "model":onnx::configured_variant(engine)?.name}),
+                            "model":onnx::configured_variant(engine)?.name,
+                            "variants":respire::model_install::variant_inventory()?}),
                         vec![],
                     ))?;
+                    Ok(())
+                }
+                ModelAction::Load { engine, model } => {
+                    let _operation = respire::model_progress::Operation::begin_load()?;
+                    let engine = respire::memory::onnx::Engine::parse(engine)?;
+                    respire::model_progress::update("verify", model, 0, None)?;
+                    respire::memory::onnx::validate_selection(engine, model)?;
+                    respire::model_progress::update("load", model, 0, None)?;
+                    let result = respire::memory::onnx::load_selection(engine, model)?;
+                    *EMBEDDER_SLOT.lock().map_err(|_| anyhow!("embedder cache poisoned"))? = None;
+                    emit_result(ResultEnvelope::new("model load", OutputStatus::Ok, result, vec![]))?;
                     Ok(())
                 }
                 ModelAction::InstallEngines => {
