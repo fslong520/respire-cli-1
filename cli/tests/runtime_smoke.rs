@@ -231,7 +231,7 @@ fn runtime_serves_status_and_stops() -> Result<(), Box<dyn std::error::Error>> {
     let down = run(dir.path(), port, &["--runtime-internal", "--status"])?;
     let down_text = String::from_utf8(down.stdout)?;
     if down.status.code() != Some(2)
-        && !down_text.contains("没有在运行")
+        && !down_text.contains("\u{6ca1}\u{6709}\u{5728}\u{8fd0}\u{884c}")
         && !down_text.contains("not running")
     {
         return Err(format!("runtime still up: {down_text}").into());

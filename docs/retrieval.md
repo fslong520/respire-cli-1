@@ -339,8 +339,8 @@ Recall associations are documented in [associations](associations.md). Use `--no
 
 ## How-to routing and procedure run history (CLI)
 
-When a recall query reads like a procedural question (怎么 / 如何 / 报错 / 步骤 / 命令 /
-how to ...) the CLI sets `intent=howto` and runs a second Core query filtered to
+When a recall query reads like a procedural question (the built-in CJK how-to, error,
+step and command markers, or an English `how to ...`) the CLI sets `intent=howto` and runs a second Core query filtered to
 `kind=skill`. The two result sets are unioned by id, ordered with Core's scores,
 and the best-scored procedure is moved into the third slot when no procedure is
 already in the top three. Facts keep their Core order and Core scores; only

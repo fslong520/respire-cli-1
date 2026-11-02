@@ -244,7 +244,7 @@ class Smoke:
                     "inject_readonly_contract_missing")
             else:
                 require(all(value in text for value in (
-                    "Credential references", "Task conditions", "【触发】", "confirmed",
+                    "Credential references", "Task conditions", "\u3010Trigger\u3011", "confirmed",
                     "prerequisite", "time zone", "private keys", "important", "trivial")),
                     "inject_agent_rules_missing_" + edition)
                 require("not an automatic CLI scanner" in text

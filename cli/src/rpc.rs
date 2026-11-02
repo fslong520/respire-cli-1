@@ -1068,7 +1068,7 @@ pub(crate) fn restart_runtime(timeout: Duration) -> Result<Value> {
     crate::runtime_policy::require_host("runtime restart")?;
     let _takeover = crate::runtime_policy::takeover_lock()?;
     let mut maintenance = crate::autostart::restart_maintenance_locked()?;
-    crate::progress::phase("检查 runtime 进程", "Checking runtime process");
+    crate::progress::phase("\u{68c0}\u{67e5} runtime \u{8fdb}\u{7a0b}", "Checking runtime process");
     crate::autostart::restart_stage("restart_probe");
     let health = match probe_runtime() {
         Ok(health) => health,
@@ -1105,7 +1105,7 @@ pub(crate) fn restart_runtime(timeout: Duration) -> Result<Value> {
         if health.is_none() {
             anyhow::ensure!(endpoint_pid() == Some(pid), "unresponsive process does not match this runtime endpoint");
         }
-        crate::progress::phase("请求优雅退出；等待进程释放", "Requesting graceful shutdown; waiting for process exit");
+        crate::progress::phase("\u{8bf7}\u{6c42}\u{4f18}\u{96c5}\u{9000}\u{51fa}\u{ff1b}\u{7b49}\u{5f85}\u{8fdb}\u{7a0b}\u{91ca}\u{653e}", "Requesting graceful shutdown; waiting for process exit");
         crate::autostart::restart_stage("restart_stop");
         let deadline = Instant::now() + timeout;
         if crate::net_rpc::port_is_open() {
@@ -1122,7 +1122,7 @@ pub(crate) fn restart_runtime(timeout: Duration) -> Result<Value> {
         if crate::net_rpc::process_is_running(pid)? {
             let owner = crate::net_rpc::pid_listening_on(crate::net_rpc::rpc_port());
             anyhow::ensure!(owner.is_none() || owner == Some(pid), "runtime port owner changed before recovery");
-            crate::progress::phase("退出超时；终止 runtime 进程", "Shutdown timed out; terminating runtime process");
+            crate::progress::phase("\u{9000}\u{51fa}\u{8d85}\u{65f6}\u{ff1b}\u{7ec8}\u{6b62} runtime \u{8fdb}\u{7a0b}", "Shutdown timed out; terminating runtime process");
             crate::net_rpc::kill_runtime(pid, &identity)?;
             forced = true;
         }
@@ -1130,7 +1130,7 @@ pub(crate) fn restart_runtime(timeout: Duration) -> Result<Value> {
         crate::net_rpc::wait_until_down()?;
         let data_dir = health.as_ref().map(|health| PathBuf::from(&health.data_dir))
             .unwrap_or_else(respire::service::data_dir);
-        crate::progress::phase("等待数据库锁释放", "Waiting for database lock release");
+        crate::progress::phase("\u{7b49}\u{5f85}\u{6570}\u{636e}\u{5e93}\u{9501}\u{91ca}\u{653e}", "Waiting for database lock release");
         let released = respire::lock::LibraryLock::acquire(&data_dir, Duration::from_secs(15))?;
         drop(released);
         if endpoint_pid() == Some(pid) && endpoint_path().exists() {
@@ -1139,7 +1139,7 @@ pub(crate) fn restart_runtime(timeout: Duration) -> Result<Value> {
     } else {
         anyhow::ensure!(!crate::net_rpc::port_is_open(), "cannot identify the process occupying the runtime port");
     }
-    crate::progress::phase("启动 runtime；等待就绪", "Starting runtime; waiting for readiness");
+    crate::progress::phase("\u{542f}\u{52a8} runtime\u{ff1b}\u{7b49}\u{5f85}\u{5c31}\u{7eea}", "Starting runtime; waiting for readiness");
     crate::autostart::restart_stage("restart_start");
     ensure_daemon_locked()?;
     let ready = crate::net_rpc::health()?;
@@ -1191,7 +1191,7 @@ pub fn change_profile_with_rollback(change: impl FnOnce() -> Result<()>, rollbac
 }
 
 pub fn change_profile_with_verification(change: impl FnOnce() -> Result<()>, rollback: impl FnOnce() -> Result<()>, verify: impl FnOnce() -> Result<()>) -> Result<()> {
-    crate::progress::phase("协调账户操作；等待当前 runtime 释放", "Coordinating account operation; waiting for current runtime to release");
+    crate::progress::phase("\u{534f}\u{8c03}\u{8d26}\u{6237}\u{64cd}\u{4f5c}\u{ff1b}\u{7b49}\u{5f85}\u{5f53}\u{524d} runtime \u{91ca}\u{653e}", "Coordinating account operation; waiting for current runtime to release");
     let _takeover = crate::runtime_policy::takeover_lock()?;
     let mut maintenance = crate::autostart::begin_maintenance_locked()?;
     let config_path = respire::service::client_config_path();
@@ -1215,7 +1215,7 @@ pub fn change_profile_with_verification(change: impl FnOnce() -> Result<()>, rol
         stop_occupant(health.pid)?;
     }
     let changed = change().and_then(|_| {
-        crate::progress::phase("启动 runtime；核对账户和路径", "Starting runtime; verifying account and path");
+        crate::progress::phase("\u{542f}\u{52a8} runtime\u{ff1b}\u{6838}\u{5bf9}\u{8d26}\u{6237}\u{548c}\u{8def}\u{5f84}", "Starting runtime; verifying account and path");
         ensure_daemon_locked()
     }).and_then(|_| verify());
     if let Err(error) = changed {
@@ -2642,7 +2642,7 @@ pub(crate) fn ensure_daemon_locked() -> Result<()> {
         }
         if health.inference_stalled() {
             anyhow::ensure!(crate::net_rpc::pid_is_respire(health.pid), "cannot verify the unresponsive runtime process; no lifecycle action taken");
-            crate::progress::phase("推理无响应；宿主正在恢复 runtime", "Inference unresponsive; host recovering runtime");
+            crate::progress::phase("\u{63a8}\u{7406}\u{65e0}\u{54cd}\u{5e94}\u{ff1b}\u{5bbf}\u{4e3b}\u{6b63}\u{5728}\u{6062}\u{590d} runtime", "Inference unresponsive; host recovering runtime");
         }
         stop_occupant(health.pid)?;
     }
@@ -2944,7 +2944,7 @@ mod tests {
         assert_eq!(unknown.code.as_deref(), Some("protocol_version_mismatch"));
         assert!(unknown.error.unwrap_or_default().contains("unknown method"));
         let scope = crate::progress::Scope::start(Some("foreground-one".into()), false, false);
-        crate::progress::phase("等待服务器", "Waiting for server");
+        crate::progress::phase("\u{7b49}\u{5f85}\u{670d}\u{52a1}\u{5668}", "Waiting for server");
         let mut request = req("cli.progress", "progress-one");
         request.args = vec!["foreground-one".into()];
         let response = dispatch(request, &tx);

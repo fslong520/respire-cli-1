@@ -26,7 +26,7 @@ pub fn require_metadata(brief: bool, min_score: Option<f32>) -> Result<()> {
 
 pub fn brief_layout(limit: usize) -> Result<RenderBudget> {
     anyhow::ensure!(limit <= 200, "brief recall limit must be at most 200");
-    let mut prefixes = vec!["【respire · brief】\n".to_owned(); limit + 1];
+    let mut prefixes = vec!["\u{3010}respire \u{b7} brief\u{3011}\n".to_owned(); limit + 1];
     prefixes[0] = String::new();
     Ok(RenderBudget {
         budget_chars: 1500,
@@ -55,7 +55,7 @@ struct MetadataResult {
 
 fn full_text(entry: &respire::MemoryEntry) -> Result<String> {
     let mut text = format!(
-        "- {}（{}; kind={}）\n{}",
+        "- {}\u{ff08}{}; kind={}\u{ff09}\n{}",
         entry.title,
         entry.id,
         entry.kind.as_str(),
@@ -99,9 +99,9 @@ fn brief_request(
         // is qualified merely because a summary/title happens to exist.
         items.push(json!({"id":entry.id,"record_revision":revision,"representation":"full","complete":true,"rendered_text":full_text(entry)?}));
         if let Some(summary) = &entry.metadata.summary {
-            items.push(json!({"id":entry.id,"record_revision":revision,"representation":"summary","complete":false,"rendered_text":format!("- {}（{}）\n{}",entry.title,entry.id,summary)}));
+            items.push(json!({"id":entry.id,"record_revision":revision,"representation":"summary","complete":false,"rendered_text":format!("- {}\u{ff08}{}\u{ff09}\n{}",entry.title,entry.id,summary)}));
         }
-        items.push(json!({"id":entry.id,"record_revision":revision,"representation":"title","complete":false,"rendered_text":format!("- {}（{}）",entry.title,entry.id)}));
+        items.push(json!({"id":entry.id,"record_revision":revision,"representation":"title","complete":false,"rendered_text":format!("- {}\u{ff08}{}\u{ff09}",entry.title,entry.id)}));
     }
     Ok(
         json!({"mode":"brief","budget_chars":layout.budget_chars,"prefix_by_count":layout.prefix_by_count,
@@ -363,10 +363,10 @@ mod brief_receipt_tests {
 
     fn entry() -> Result<respire::MemoryEntry> {
         serde_json::from_value(json!({
-            "id":"fixture","kind":"Context","tags":[],"title":"原题","content":"原文🧪e\u{301}",
+            "id":"fixture","kind":"Context","tags":[],"title":"\u{539f}\u{9898}","content":"\u{539f}\u{6587}🧪e\u{301}",
             "user":"test","computer":"fixture","project":"p","created_at":"2026-11-01T00:00:00.000Z",
             "updated_at":"2026-11-01T00:00:00.000Z","emotion":-1,"parent_id":"",
-            "memory_contract":1,"summary":"摘要",
+            "memory_contract":1,"summary":"\u{6458}\u{8981}",
             "source_refs":[{"id":"source","revision":format!("sha256:{}","a".repeat(64)),"required":false}],
             "artifact":{"path":"fixture.rs"}
         })).map_err(Into::into)
@@ -379,7 +379,7 @@ mod brief_receipt_tests {
         for value in [&entry.title, &entry.content, &entry.user, &entry.project] {
             assert!(rendered.contains(value));
         }
-        assert!(rendered.contains("Stored summary: 摘要"));
+        assert!(rendered.contains("Stored summary: \u{6458}\u{8981}"));
         assert!(rendered.contains("Sources:"));
         assert!(rendered.contains("Artifact:"));
         assert!(brief_layout(201).is_err());

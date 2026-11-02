@@ -104,9 +104,9 @@ pub fn recall_with_mode<E: respire::memory::search::Embedder>(
             let entry = respire::memory::engine::MemoryEngine::open(keys, memory)
                 .context("decrypt title for render budget")?;
             let title = if entry.title.is_empty() { "(untitled)" } else { &entry.title };
-            let state = if superseded.contains_key(&entry.id) { " →superseded" } else { "" };
+            let state = if superseded.contains_key(&entry.id) { " \u{2192}superseded" } else { "" };
             Ok(RenderItem { id: entry.id.clone(), representation: RecallRepresentation::Title,
-                rendered_text: format!("- {title}（{}）{state}", entry.id) })
+                rendered_text: format!("- {title}\u{ff08}{}\u{ff09}{state}", entry.id) })
         }).collect::<Result<Vec<_>>>()?;
         Ok(budget)
     }).transpose()?;

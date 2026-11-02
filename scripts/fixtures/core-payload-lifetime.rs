@@ -29,7 +29,7 @@ mod ffi {
             anyhow::ensure!(request["schema_version"] == 1);
             anyhow::ensure!(request["payload"]["blob"].as_str().is_some_and(|s|
                 s.len() == 1024 * 1024 && s.bytes().all(|byte| byte == b'A')));
-            anyhow::ensure!(request["payload"]["nested"] == json!([null, true, "你好\n\"\\", {"k": 42}]));
+            anyhow::ensure!(request["payload"]["nested"] == json!([null, true, "\u{4f60}\u{597d}\n\"\\", {"k": 42}]));
             Ok(request)
         }
         fn response(request: &Value) -> Result<(i32, Vec<u8>)> {
@@ -67,7 +67,7 @@ mod tests {
         WATCH.store(blob.as_ptr() as usize, Ordering::SeqCst);
         let mut fields = serde_json::Map::new();
         fields.insert("blob".into(), Value::String(blob));
-        fields.insert("nested".into(), json!([null, true, "你好\n\"\\", {"k":42}]));
+        fields.insert("nested".into(), json!([null, true, "\u{4f60}\u{597d}\n\"\\", {"k":42}]));
         Value::Object(fields)
     }
     fn serial() -> Result<std::sync::MutexGuard<'static, ()>> { SERIAL.lock().map_err(|_| anyhow::anyhow!("test mutex poisoned")) }

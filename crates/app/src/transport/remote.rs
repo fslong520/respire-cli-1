@@ -24,7 +24,7 @@ fn mark_session_revoked_readonly() {
         return; // Read-only members already carry the marker.
     }
     if let Err(e) = write_agent_config_key("readonly", &json!(true)) {
-        eprintln!("warning: session invalid, but failed to switch local library to read-only ({e}) — run rsrs space use <other> by hand");
+        eprintln!("warning: session invalid, but failed to switch local library to read-only ({e}) \u{2014} run rsrs space use <other> by hand");
     }
 }
 
@@ -126,7 +126,7 @@ impl RemoteTransport {
                 // Auto switch local to read-only: otherwise a kicked member can keep writing locally forever and never reach the cloud
                 // (gap measured 2026-09-21). After the flag, the local gate blocks writes and the user sees a clear reason.
                 mark_session_revoked_readonly();
-                bail!("unauthorized: token rejected (session revoked by the server — possibly kicked by the space owner; local library is read-only, recall only)")
+                bail!("unauthorized: token rejected (session revoked by the server \u{2014} possibly kicked by the space owner; local library is read-only, recall only)")
             }
             Err(ureq::Error::Status(code, resp)) => {
                 let text = resp.into_string().unwrap_or_default();
@@ -255,10 +255,10 @@ impl MemoryTransport for RemoteTransport {
             Err(code) => bail!("remote request failed ({code})"),
         };
         let reply: BatchPushReply =
-            serde_json::from_str(&text).with_context(|| format!("批量推送响应解析失败: {text}"))?;
+            serde_json::from_str(&text).with_context(|| format!("\u{6279}\u{91cf}\u{63a8}\u{9001}\u{54cd}\u{5e94}\u{89e3}\u{6790}\u{5931}\u{8d25}: {text}"))?;
         if reply.replaced.len() != memories.len() {
             anyhow::bail!(
-                "批量推送响应长度不符：发 {} 回 {}",
+                "\u{6279}\u{91cf}\u{63a8}\u{9001}\u{54cd}\u{5e94}\u{957f}\u{5ea6}\u{4e0d}\u{7b26}\u{ff1a}\u{53d1} {} \u{56de} {}",
                 memories.len(),
                 reply.replaced.len()
             );

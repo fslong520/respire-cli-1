@@ -28,7 +28,7 @@ impl Scope {
         if id.is_none() && !display { return None; }
         let entry = Arc::new(Entry {
             id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-            phase: Mutex::new(text("正在准备命令", "Preparing command")),
+            phase: Mutex::new(text("\u{6b63}\u{5728}\u{51c6}\u{5907}\u{547d}\u{4ee4}", "Preparing command")),
             remote: AtomicBool::new(false),
             finished: AtomicBool::new(false),
         });
@@ -38,7 +38,7 @@ impl Scope {
         CURRENT.with(|current| *current.borrow_mut() = Some(entry.clone()));
         let (stop, receiver) = mpsc::channel();
         if display && immediate {
-            print(&text("正在准备命令", "Preparing command"), 0, stderr_is_terminal());
+            print(&text("\u{6b63}\u{5728}\u{51c6}\u{5907}\u{547d}\u{4ee4}", "Preparing command"), 0, stderr_is_terminal());
         }
         let worker = if display {
             let entry = entry.clone();
@@ -54,15 +54,15 @@ impl Scope {
                         match crate::rpc::foreground_progress(&entry.id) {
                             Ok(value) => {
                                 if let Some(current) = value["phase"].as_str() { phase = current.to_owned(); }
-                                else { phase = text("等待 runtime 执行命令", "Waiting for runtime to execute command"); }
+                                else { phase = text("\u{7b49}\u{5f85} runtime \u{6267}\u{884c}\u{547d}\u{4ee4}", "Waiting for runtime to execute command"); }
                                 if value["model_operation"]["active"] == true {
                                     phase = crate::output::model_task_text(&value["model_operation"]);
                                 }
                                 if let Some(inference) = inference_progress_text(&value["inference"]) {
-                                    phase = format!("{phase} · {inference}");
+                                    phase = format!("{phase} \u{b7} {inference}");
                                 }
                             }
-                            Err(_) => phase = text("等待 runtime 响应", "Waiting for runtime response"),
+                            Err(_) => phase = text("\u{7b49}\u{5f85} runtime \u{54cd}\u{5e94}", "Waiting for runtime response"),
                         }
                     }
                     if phase != last || shown.elapsed() >= Duration::from_secs(5) {
@@ -97,28 +97,28 @@ fn text(zh: &str, en: &str) -> String {
 
 pub(crate) fn inference_progress_text(status: &serde_json::Value) -> Option<String> {
     if status["host_recovery_required"] == true {
-        return Some(text("推理无响应，需要宿主恢复", "Inference unresponsive; host recovery required"));
+        return Some(text("\u{63a8}\u{7406}\u{65e0}\u{54cd}\u{5e94}\u{ff0c}\u{9700}\u{8981}\u{5bbf}\u{4e3b}\u{6062}\u{590d}", "Inference unresponsive; host recovery required"));
     }
     let queued = status["queued"].as_u64()?;
     if status["phase"] == "loading" {
-        return Some(text("推理状态：正在加载前后台模型", "Inference status: loading foreground and background models"));
+        return Some(text("\u{63a8}\u{7406}\u{72b6}\u{6001}\u{ff1a}\u{6b63}\u{5728}\u{52a0}\u{8f7d}\u{524d}\u{540e}\u{53f0}\u{6a21}\u{578b}", "Inference status: loading foreground and background models"));
     }
     if status["foreground"].is_object() && status["background"].is_object()
         && (status["active"] == true || queued > 0) {
         let lane = |name: &str, zh: &str, en: &str| {
             let active = status[name]["active"] == true;
             let waiting = status[name]["queued"].as_u64().unwrap_or(0);
-            let state = if active { text("运行中", "active") } else { text("空闲", "idle") };
-            format!("{} {state}; {} {waiting}", text(zh, en), text("等待", "queued"))
+            let state = if active { text("\u{8fd0}\u{884c}\u{4e2d}", "active") } else { text("\u{7a7a}\u{95f2}", "idle") };
+            format!("{} {state}; {} {waiting}", text(zh, en), text("\u{7b49}\u{5f85}", "queued"))
         };
-        return Some(format!("{}: {}; {}", text("推理状态", "Inference status"),
-            lane("foreground", "前台", "foreground"), lane("background", "后台", "background")));
+        return Some(format!("{}: {}; {}", text("\u{63a8}\u{7406}\u{72b6}\u{6001}", "Inference status"),
+            lane("foreground", "\u{524d}\u{53f0}", "foreground"), lane("background", "\u{540e}\u{53f0}", "background")));
     }
     if status["active"] == true || queued > 0 {
         let label = if status["phase"] == "loading" {
-            text("推理服务（全局）：加载模型；等待任务", "Inference service (global): loading; queued")
+            text("\u{63a8}\u{7406}\u{670d}\u{52a1}\u{ff08}\u{5168}\u{5c40}\u{ff09}\u{ff1a}\u{52a0}\u{8f7d}\u{6a21}\u{578b}\u{ff1b}\u{7b49}\u{5f85}\u{4efb}\u{52a1}", "Inference service (global): loading; queued")
         } else {
-            text("推理服务（全局）：运行中；等待任务", "Inference service (global): active; queued")
+            text("\u{63a8}\u{7406}\u{670d}\u{52a1}\u{ff08}\u{5168}\u{5c40}\u{ff09}\u{ff1a}\u{8fd0}\u{884c}\u{4e2d}\u{ff1b}\u{7b49}\u{5f85}\u{4efb}\u{52a1}", "Inference service (global): active; queued")
         };
         return Some(format!("{label} {queued}"));
     }
@@ -144,7 +144,7 @@ pub fn phase_count(zh: &str, en: &str, done: usize, total: usize) {
 
 pub fn remote_id() -> Option<String> {
     CURRENT.with(|current| current.borrow().as_ref().map(|entry| {
-        phase("连接 runtime；等待命令结果", "Connecting to runtime; waiting for command result");
+        phase("\u{8fde}\u{63a5} runtime\u{ff1b}\u{7b49}\u{5f85}\u{547d}\u{4ee4}\u{7ed3}\u{679c}", "Connecting to runtime; waiting for command result");
         entry.remote.store(true, Ordering::Release);
         entry.id.clone()
     }))

@@ -311,11 +311,11 @@ fn tools() -> Vec<(&'static str, &'static str, serde_json::Value)> {
         ),
         (
             "memory_extract",
-            "Import local coding-agent sessions (Codex, OpenCode, Claude Code, …) into rsrs memories. Batch write: imports up to `limit` newest sessions per source, seals each, then auto-syncs; pass confirm=true to write, or dry_run=true to preview",
+            "Import local coding-agent sessions (Codex, OpenCode, Claude Code, \u{2026}) into rsrs memories. Batch write: imports up to `limit` newest sessions per source, seals each, then auto-syncs; pass confirm=true to write, or dry_run=true to preview",
             serde_json::json!({
                 "type":"object",
                 "properties":{
-                    "id":{"type":"string","description":"One platform (codex/opencode/claude/…); omit for all detected"},
+                    "id":{"type":"string","description":"One platform (codex/opencode/claude/\u{2026}); omit for all detected"},
                     "dry_run":{"type":"boolean","description":"Scan and summarize without writing"},
                     "limit":{"type":"integer","minimum":0,"description":"Maximum sessions to import per source (newest first)"},
                     "since":{"type":"string","description":"today|yesterday|7d|YYYY-MM-DD"},

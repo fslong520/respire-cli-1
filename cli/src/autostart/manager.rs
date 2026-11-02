@@ -1211,7 +1211,7 @@ mod tests {
     #[test]
     fn encoded_control_preserves_unicode_and_stages_never_echo_arbitrary_output() -> Result<()> {
         use base64::Engine as _;
-        let script = "[Console]::WriteLine('你好 \" $ \\');";
+        let script = "[Console]::WriteLine('\u{4f60}\u{597d} \" $ \\');";
         let bytes = base64::engine::general_purpose::STANDARD.decode(encoded_powershell(script))?;
         let words: Vec<u16> = bytes
             .chunks_exact(2)

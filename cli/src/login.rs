@@ -132,7 +132,7 @@ pub(crate) fn run(addr: Option<&str>, user: Option<&str>, pass: Option<&str>, su
     } else {
         match super_password {
             Some(value) if !value.is_empty() => value.to_owned(),
-            _ if respire::prompt::interactive() => respire::prompt::ask_secret("super password (A3-…): ")?,
+            _ if respire::prompt::interactive() => respire::prompt::ask_secret("super password (A3-\u{2026}): ")?,
             _ => anyhow::bail!("authorization succeeded; enter the super password in an interactive terminal or supply --super; original account was preserved"),
         }
     };

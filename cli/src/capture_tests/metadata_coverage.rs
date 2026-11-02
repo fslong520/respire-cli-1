@@ -44,7 +44,7 @@ fn metadata_lifecycle_preserves_revisions_and_merge_invariants() -> Result<()> {
         crate::rpc::set_worker_active(true);
         let ownership = respire::lock::LibraryLock::acquire(root, std::time::Duration::from_secs(1))?;
         let first = command(&["remember", "candidate body", "--title", "candidate",
-            "--importance", "important", "--force", "--summary", "候选摘要", "--source-refs", "[]",
+            "--importance", "important", "--force", "--summary", "\u{5019}\u{9009}\u{6458}\u{8981}", "--source-refs", "[]",
             "--valid-until", "2026-12-01T00:00:00.000Z", "--review-at", "2026-11-15T00:00:00.000Z",
             "--artifact", r#"{"path":"a.rs","repo":"fixture","commit":"abc","purpose":"candidate"}"#], 0)?;
         let id = first.summary["id"].as_str().context("candidate id")?;
@@ -148,7 +148,7 @@ fn metadata_parser_rejects_invalid_semantics_without_writes() -> Result<()> {
         let duplicate = json!([{"id":uuid,"revision":revision,"required":true},
             {"id":uuid,"revision":revision,"required":false}]).to_string();
         let missing = json!([{"id":uuid,"revision":revision}]).to_string();
-        let oversized = "候".repeat(121);
+        let oversized = "\u{5019}".repeat(121);
         let cases: Vec<Vec<&str>> = vec![
             vec!["--summary", &oversized], vec!["--type", "unknown"],
             vec!["--source-refs", "not-json"], vec!["--source-refs", &missing],

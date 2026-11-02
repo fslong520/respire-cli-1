@@ -224,14 +224,14 @@ pub fn keygen() -> Result<(PathBuf, String)> {
     let (super_pass, _urk, kdf_salt, wrapped_urk, urk_nonce) = new_vault_v4()?;
     crate::keystore::save_super("local", &super_pass).map_err(|e| {
         anyhow!(
-            "local keyring write failed ({e}) — offline mode stores the key only here; \
+            "local keyring write failed ({e}) \u{2014} offline mode stores the key only here; \
              a failed write builds a library that cannot be opened. \
              Install a keyring (gnome-keyring / KWallet) and retry, \
              or set RSRS_SUPER on later commands as a bypass"
         )
     })?;
     if crate::keystore::load_super("local").is_none() {
-        anyhow::bail!("keyring write did not round-trip — offline mode cannot continue; check the keyring service and retry");
+        anyhow::bail!("keyring write did not round-trip \u{2014} offline mode cannot continue; check the keyring service and retry");
     }
     let path = write_session_json(&serde_json::json!({
         "kdf_salt": kdf_salt,
@@ -261,8 +261,8 @@ pub(crate) fn unlock_session_keys(
                 .or_else(|| data["secret_key"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_owned()))
                 .ok_or_else(|| {
                     anyhow!(
-                        "super password required: --super <super-password> (A3-…, system-generated recovery code). \
-                         none in the local keyring — on a new machine export from the old device with `rsrs keys-export` and retry"
+                        "super password required: --super <super-password> (A3-\u{2026}, system-generated recovery code). \
+                         none in the local keyring \u{2014} on a new machine export from the old device with `rsrs keys-export` and retry"
                     )
                 })?;
             crate::memory::SessionKeys::unlock_v4(&super_pass, salt, wrapped, nonce)
@@ -353,8 +353,8 @@ fn existing_super(data: &serde_json::Value, passed: &str, user: &str) -> Result<
         .map(ToOwned::to_owned)
         .ok_or_else(|| {
             anyhow!(
-                "super password required: --super <super-password> (A3-…, system-generated recovery code). \
-                 none in the local keyring — on a new machine export from the old device with `rsrs keys-export` and retry"
+                "super password required: --super <super-password> (A3-\u{2026}, system-generated recovery code). \
+                 none in the local keyring \u{2014} on a new machine export from the old device with `rsrs keys-export` and retry"
             )
         })
 }
@@ -389,7 +389,7 @@ pub fn register(addr: &str, user: &str, pass: &str, super_pass_arg: &str) -> Res
         Ok(r) => r,
         Err(ureq::Error::Status(code, _r)) if code == 409 => {
             return Err(anyhow::anyhow!(
-                "user \"{user}\" is already registered on this server — use rsrs login --interactive --user {user} --pass <password>",
+                "user \"{user}\" is already registered on this server \u{2014} use rsrs login --interactive --user {user} --pass <password>",
             ));
         }
         Err(e) => return Err(anyhow::anyhow!("register request failed: {e}")),
@@ -475,7 +475,7 @@ pub fn login(
         Some(vault) if has_wrap && vault_matches(&vault, &data) => {
             // Ordinary login verifies the existing key without migrating it.
             unlock_session_keys(&data, pass, super_pass, user).context(
-                "local key unlock failed — the keyring code does not match this account: pass the correct code with --super, or export from the old machine with keys-export",
+                "local key unlock failed \u{2014} the keyring code does not match this account: pass the correct code with --super, or export from the old machine with keys-export",
             )?;
             // On unlock success, write back to the keyring: this branch never did that before —
             // a machine with full local material but an empty keyring had to pass --super/env every time
@@ -513,9 +513,9 @@ pub fn login(
             let count = fetch_count(addr, &token)?;
             if count > 0 && !reset_vault {
                 anyhow::bail!(
-                    "server already has {count} encrypted memories but no key wrap — they were encrypted on an earlier device with another key. \
+                    "server already has {count} encrypted memories but no key wrap \u{2014} they were encrypted on an earlier device with another key. \
                      export the key from the old device then login: old machine `rsrs keys-export`, this machine \
-                     login --super <super-password> --secret-key <A3-…>. \
+                     login --super <super-password> --secret-key <A3-\u{2026}>. \
                      to drop the old data and start from this machine, add --reset-vault"
                 );
             }
@@ -543,11 +543,11 @@ fn obtain_super(user: &str, super_arg: Option<&str>) -> Result<String> {
         return Ok(s.to_owned());
     }
     if crate::prompt::interactive() {
-        return crate::prompt::ask_secret("super password (A3-…, used to decrypt memories; if missing, export first on the old machine with rsrs keys-export): ");
+        return crate::prompt::ask_secret("super password (A3-\u{2026}, used to decrypt memories; if missing, export first on the old machine with rsrs keys-export): ");
     }
     crate::keystore::load_super(user).ok_or_else(|| {
         anyhow!(
-            "super password required: --super <A3-…> (system-generated recovery code; the login password only authenticates to the server and cannot unwrap memories). \
+            "super password required: --super <A3-\u{2026}> (system-generated recovery code; the login password only authenticates to the server and cannot unwrap memories). \
              no super password? export from the old machine with `rsrs keys-export`; a headless server can set RSRS_SUPER"
         )
     })
@@ -577,14 +577,14 @@ fn unlock_cloud_vault(
                 Ok(None)
             }
             Err(e) if crate::prompt::interactive() => {
-                eprintln!("warning: this code cannot unwrap cloud memories ({e:#}) — re-enter");
+                eprintln!("warning: this code cannot unwrap cloud memories ({e:#}) \u{2014} re-enter");
                 let retry = crate::prompt::ask_secret("super password: ")?;
                 crate::memory::SessionKeys::unlock_v4(&retry, salt, wrapped, nonce)?;
                 apply_vault_v4(data, user, &retry, salt.to_owned(), wrapped.to_owned(), nonce.to_owned())?;
                 write_session_json(data)?;
                 Ok(None)
             }
-            Err(e) => Err(anyhow!("super password cannot unwrap cloud memories ({e:#}) — verify with keys-export on the old machine and retry")),
+            Err(e) => Err(anyhow!("super password cannot unwrap cloud memories ({e:#}) \u{2014} verify with keys-export on the old machine and retry")),
         }
     } else if version == 3 {
         // Read v3 without replacing its passphrase with its Secret Key.
@@ -594,12 +594,12 @@ fn unlock_cloud_vault(
             .or_else(|| data["secret_key"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_owned()))
             .ok_or_else(|| {
                 anyhow!(
-                    "this account is still v3 two-factor: need --super <old passphrase> --secret-key <A3-…>. \
+                    "this account is still v3 two-factor: need --super <old passphrase> --secret-key <A3-\u{2026}>. \
                      export the original material with `rsrs keys-export`; migrate explicitly to change the format"
                 )
             })?;
         crate::memory::SessionKeys::unlock_vault(super_pass, &legacy_secret, salt, wrapped, nonce)
-            .map_err(|e| anyhow!("v3 key unlock failed ({e}) — retry with material from keys-export on the old machine"))?;
+            .map_err(|e| anyhow!("v3 key unlock failed ({e}) \u{2014} retry with material from keys-export on the old machine"))?;
         data["kdf_salt"] = serde_json::json!(salt);
         data["wrapped_urk"] = serde_json::json!(wrapped);
         data["urk_nonce"] = serde_json::json!(nonce);
@@ -628,13 +628,13 @@ pub fn super_reset(addr: Option<&str>, super_arg: Option<&str>) -> Result<String
     let mut data = read_session_json()?;
     let user = data["user"].as_str().unwrap_or("").to_owned();
     let token = data["token"].as_str().unwrap_or("").to_owned();
-    anyhow::ensure!(!token.is_empty(), "not logged in — run rsrs login before resetting the super password");
+    anyhow::ensure!(!token.is_empty(), "not logged in \u{2014} run rsrs login before resetting the super password");
     let addr = match addr.map(|s| s.trim()).filter(|s| !s.is_empty()) {
         Some(a) => a.to_owned(),
         None => data["addr"].as_str().unwrap_or(crate::service::DEFAULT_SERVER_ADDR).to_owned(),
     };
     let keys = unlock_session_keys(&data, data["pass"].as_str().unwrap_or(""), super_arg, &user)
-        .context("unlock failed — current super password required (or one stored in the local keyring)")?;
+        .context("unlock failed \u{2014} current super password required (or one stored in the local keyring)")?;
     let new_super = crypto::generate_secret_key();
     let (kdf_salt, wrapped_urk, urk_nonce) = if data["wrapped_urk"].as_str().is_some_and(|value| value.starts_with(crypto::RSRS_PREFIX))
         || data["crypto_namespace"].as_str() == Some(crypto::RSRS_PREFIX) {
@@ -780,7 +780,7 @@ pub fn fivekeys_login(
         }
     } else {
         crate::memory::SessionKeys::unlock(pass, secret, kdf_salt, wrapped_urk, urk_nonce)
-            .context("five-piece kit verification failed — each item must match keygen/register output from the first device")?;
+            .context("five-piece kit verification failed \u{2014} each item must match keygen/register output from the first device")?;
         serde_json::json!({
             "pass": pass,
             "secret": secret,

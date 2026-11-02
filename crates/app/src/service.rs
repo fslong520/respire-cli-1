@@ -26,11 +26,11 @@ pub use merge::{merge_entries, merge_entries_with_metadata, merge_entries_with_m
 /// Shared candidate receipt contract for agent and client consumers.
 pub fn write_decision_actions() -> &'static [&'static str] {
     &[
-        "① duplicate (bool): do both texts state the same fact with no new detail? If so, merge with merge-ids; inspect descendants and back up first.",
-        "② contradiction (bool): are they mutually exclusive at the same point in time? If so, merge, keep the newer text and record why the old one was dropped.",
-        "③ obsolete (bool): does the new text clearly supersede the old one? If so, update the old entry, append a note on the supersession and do not delete it.",
-        "④ linkable (bool): would linking them help later recall? If so, attach the cause with --parent.",
-        "⑤ representation (keep_separate|merge|promote|uncertain): keep them apart, merge, promote or defer? Keep separate / write one synthesized entry / promote a repeated event into a principle / defer while uncertain.",
+        "\u{2460} duplicate (bool): do both texts state the same fact with no new detail? If so, merge with merge-ids; inspect descendants and back up first.",
+        "\u{2461} contradiction (bool): are they mutually exclusive at the same point in time? If so, merge, keep the newer text and record why the old one was dropped.",
+        "\u{2462} obsolete (bool): does the new text clearly supersede the old one? If so, update the old entry, append a note on the supersession and do not delete it.",
+        "\u{2463} linkable (bool): would linking them help later recall? If so, attach the cause with --parent.",
+        "\u{2464} representation (keep_separate|merge|promote|uncertain): keep them apart, merge, promote or defer? Keep separate / write one synthesized entry / promote a repeated event into a principle / defer while uncertain.",
         "Choose update > merge > parent > create, or explicitly defer. Candidate/pending is not saved; verify returned IDs/content. For unknown outcomes inspect receipts read-only before any replay.",
     ]
 }
@@ -150,7 +150,7 @@ impl App {
     /// Unlock the local session → open the store → load BGE. Missing model is an error (no fallback).
     pub fn open() -> Result<Self> {
         let keys = auth::load_local_session()
-            .map_err(|e| anyhow!("session not unlocked ({e}) — register/login or keygen first"))?;
+            .map_err(|e| anyhow!("session not unlocked ({e}) \u{2014} register/login or keygen first"))?;
         let store = open_store()?;
         let embedder = BgeEmbedder::load_model(&store.retrieval_model()?)?;
         notify_index();
@@ -540,7 +540,7 @@ impl App {
             .find(|m| m.id == full)
             .ok_or_else(|| anyhow!("not found #{id}"))?;
         if me.deleted || me.local_parent_id.is_empty() {
-            anyhow::bail!("already a root (no parent) or deleted — nothing to promote");
+            anyhow::bail!("already a root (no parent) or deleted \u{2014} nothing to promote");
         }
         let parent_id = me.local_parent_id.clone();
         let grandparent = all
@@ -990,7 +990,7 @@ pub fn set_data_dir(dir: &str) -> Result<()> {
             || dir.starts_with("~/")
             || (dir.len() >= 2 && dir.as_bytes()[1] == b':'))
         {
-            anyhow::bail!("data dir must be an absolute path (/… or ~/…)");
+            anyhow::bail!("data dir must be an absolute path (/\u{2026} or ~/\u{2026})");
         }
         data["data_dir"] = serde_json::json!(dir);
     }
@@ -1073,9 +1073,9 @@ pub fn account_use(name: &str) -> Result<serde_json::Value> {
     set_data_dir(&dir.to_string_lossy())?;
     let user = session_user_of_dir(&dir);
     let hint = if user.is_empty() {
-        "this profile has no account yet — run rsrs login (existing account) or rsrs register (new account)"
+        "this profile has no account yet \u{2014} run rsrs login (existing account) or rsrs register (new account)"
     } else {
-        "switched to this profile — local library/keys/session follow the profile and do not mix"
+        "switched to this profile \u{2014} local library/keys/session follow the profile and do not mix"
     };
     Ok(serde_json::json!({
         "name": if is_main { "main" } else { name },
@@ -1093,7 +1093,7 @@ pub fn account_remove(name: &str) -> Result<()> {
         return Err(crate::input_error::InputError(format!("no such account profile: {}", dir.display())).into());
     }
     if data_dir() == dir {
-        return Err(crate::input_error::InputError("this profile is in use — run rsrs account use <other> before deleting".into()).into());
+        return Err(crate::input_error::InputError("this profile is in use \u{2014} run rsrs account use <other> before deleting".into()).into());
     }
     std::fs::remove_dir_all(&dir)?;
     Ok(())
@@ -1331,7 +1331,7 @@ pub fn workspace_mode() -> &'static str {
 /// Existing team permissions remain effective even when the device returns to normal.
 pub fn set_workspace_mode(mode: &str) -> Result<()> {
     if !matches!(mode, "normal" | "readonly" | "off") {
-        return Err(crate::input_error::InputError(format!("unknown mode `{mode}` — choose: normal | readonly | off")).into());
+        return Err(crate::input_error::InputError(format!("unknown mode `{mode}` \u{2014} choose: normal | readonly | off")).into());
     }
     let mut config = read_client_config().unwrap_or_else(|| serde_json::json!({}));
     anyhow::ensure!(config.is_object(), "client config must be an object");
@@ -1348,7 +1348,7 @@ pub fn ensure_writable() -> Result<()> {
             "restore normal service on this device with `agent-config --set workspace_mode=normal`."
         };
         return Err(anyhow!(
-            "this space is read-only — recall/list/show/diary/tree are allowed; write/edit/delete are not.\n  {hint}"
+            "this space is read-only \u{2014} recall/list/show/diary/tree are allowed; write/edit/delete are not.\n  {hint}"
         ));
     }
     Ok(())
@@ -2056,7 +2056,7 @@ pub fn import_json_text(text: &str) -> Result<ImportReport> {
 /// Do not load BGE: share export only decrypts, never searches; loading the model for seconds is waste (2026-09-21).
 pub fn export_subtree_payload(root_prefix: &str) -> Result<(crate::share::SharePayload, String)> {
     let keys = auth::load_local_session()
-        .map_err(|e| anyhow!("session not unlocked ({e}) — register/login or keygen first"))?;
+        .map_err(|e| anyhow!("session not unlocked ({e}) \u{2014} register/login or keygen first"))?;
     let store = open_store()?;
     let all = store.all(false)?;
     let root_id = resolve_prefix(&all, root_prefix)?;
@@ -2124,7 +2124,7 @@ pub fn export_subtree_payload(root_prefix: &str) -> Result<(crate::share::ShareP
         .unwrap_or_else(|| short_id(&root_id));
     let items = crate::share::items_from(&root_id, &order, &lookup, &members);
     if items.is_empty() {
-        anyhow::bail!("no shareable memories in this subtree ({root_id}) — empty subtree or entries cannot be decrypted");
+        anyhow::bail!("no shareable memories in this subtree ({root_id}) \u{2014} empty subtree or entries cannot be decrypted");
     }
     let payload = crate::share::SharePayload {
         v: 1,
@@ -2155,7 +2155,7 @@ pub fn share_candidates_with(
     embedder: &BgeEmbedder,
 ) -> Result<serde_json::Value> {
     let keys = auth::load_local_session()
-        .map_err(|e| anyhow!("session not unlocked ({e}) — register/login or keygen first"))?;
+        .map_err(|e| anyhow!("session not unlocked ({e}) \u{2014} register/login or keygen first"))?;
     let store = open_store()?;
     let all = store.all(false)?;
     let query = crate::share::mount_query(payload);
@@ -2188,8 +2188,8 @@ pub fn share_candidates_with(
         "chars": payload.total_chars(),
         "from": payload.device,
         "candidates": out,
-        "hint": "if a close candidate exists → share-import <file> --parent <short_id> --go to attach under it; \
-                 if none → share-import <file> --go creates a same-titled root",
+        "hint": "if a close candidate exists \u{2192} share-import <file> --parent <short_id> --go to attach under it; \
+                 if none \u{2192} share-import <file> --go creates a same-titled root",
     }))
 }
 
@@ -2204,7 +2204,7 @@ pub fn import_share_payload(
     embedder: &BgeEmbedder,
 ) -> Result<ImportReport> {
     let keys = auth::load_local_session()
-        .map_err(|e| anyhow!("session not unlocked ({e}) — register/login or keygen first"))?;
+        .map_err(|e| anyhow!("session not unlocked ({e}) \u{2014} register/login or keygen first"))?;
     let store = open_store()?;
     // Resolve the attach point first (prefix ok); fail loudly, do not silently become a root
     let parent = if attach_parent.trim().is_empty() {
@@ -2255,7 +2255,7 @@ pub fn import_share_payload(
                 .iter()
                 .map(|c| {
                     format!(
-                        "  {:.2}  `{}` ≈ existing [{}] {}",
+                        "  {:.2}  `{}` \u{2248} existing [{}] {}",
                         c["score"].as_f64().unwrap_or(0.0),
                         c["incoming"].as_str().unwrap_or(""),
                         c["existing_short"].as_str().unwrap_or(""),
@@ -2622,7 +2622,7 @@ pub fn deepen_plan(
     // Core's deepen contract requires at least 15 children and a mostly flat root.
     if direct.len() < 15 || descendants.len() * 3 > direct.len() * 2 {
         return Err(crate::input_error::InputError(format!(
-            "this root is not flat ({} direct children, {} in the grandchild chain) — hierarchy already exists or too few entries to deepen",
+            "this root is not flat ({} direct children, {} in the grandchild chain) \u{2014} hierarchy already exists or too few entries to deepen",
             direct.len(), descendants.len(),
         )).into());
     }
@@ -2647,7 +2647,7 @@ pub fn deepen_apply<E: crate::memory::search::Embedder>(
 ) -> Result<(usize, usize)> {
     if titles.len() != plan.sub_roots.len() {
         anyhow::bail!(
-            "title count {} != sub-root count {} — supply them in plan order",
+            "title count {} != sub-root count {} \u{2014} supply them in plan order",
             titles.len(),
             plan.sub_roots.len()
         );
@@ -2678,11 +2678,11 @@ pub fn deepen_apply<E: crate::memory::search::Embedder>(
                 kind: Kind::Context,
                 tags: {
                     let mut t = root.local_tags.split(',').map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned).collect::<Vec<_>>();
-                    t.push("子纲".to_owned());
+                    t.push("\u{5b50}\u{7eb2}".to_owned());
                     t
                 },
                 title: title.clone(),
-                content: format!("sub-outline of `{}` — absorbs {} same-topic entries (auto-outline from tree-deepen 2026-09-06).", root.local_title, sub.member_ids.len()),
+                content: format!("sub-outline of `{}` \u{2014} absorbs {} same-topic entries (auto-outline from tree-deepen 2026-09-06).", root.local_title, sub.member_ids.len()),
                 user: user.clone(),
                 computer: root.local_computer.clone(),
                 device: device_tag(),
@@ -2760,7 +2760,7 @@ pub struct SplitOp {
 }
 
 fn default_split_parent() -> String {
-    "纲".to_owned()
+    "\u{7eb2}".to_owned()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2785,14 +2785,14 @@ pub fn split_exec<E: crate::memory::search::Embedder>(
     }
     if spec.summary.is_none() && spec.items.len() == 1 {
         return Err(crate::input_error::InputError(
-            "a single child without keeping the outline is a rewrite — edit instead of split".into()
+            "a single child without keeping the outline is a rewrite \u{2014} edit instead of split".into()
         ).into());
     }
     crate::metadata_gate::ensure_write(store, entry)?;
     let user = entry.user.clone();
     let all = store.all(true)?;
     for (i, op) in spec.items.iter().enumerate() {
-        let parent_id = if op.parent.is_empty() || op.parent == "纲" {
+        let parent_id = if op.parent.is_empty() || op.parent == "\u{7eb2}" {
             entry.id.clone()
         } else {
             resolve_prefix(&all, &op.parent)?
@@ -2808,7 +2808,7 @@ pub fn split_exec<E: crate::memory::search::Embedder>(
             kind: Kind::try_from_str(&op.kind.trim().to_lowercase()).ok_or_else(|| anyhow!("unsupported_metadata: unknown memory kind"))?,
             tags: {
                 let mut t = op.tags.clone();
-                t.push("拆分".to_owned());
+                t.push("\u{62c6}\u{5206}".to_owned());
                 t
             },
             title: op.title.clone(),
@@ -2917,12 +2917,12 @@ pub fn home_dir() -> Result<PathBuf> {
 pub fn derive_title(content: &str) -> String {
     let mut t = content.trim();
     for p in [
-        "【日记】",
-        "【流水】",
-        "【经验】",
-        "【坑】",
-        "【教训】",
-        "【技能】",
+        "\u{3010}\u{65e5}\u{8bb0}\u{3011}",
+        "\u{3010}\u{6d41}\u{6c34}\u{3011}",
+        "\u{3010}\u{7ecf}\u{9a8c}\u{3011}",
+        "\u{3010}\u{5751}\u{3011}",
+        "\u{3010}\u{6559}\u{8bad}\u{3011}",
+        "\u{3010}\u{6280}\u{80fd}\u{3011}",
     ] {
         if let Some(rest) = t.strip_prefix(p) {
             t = rest.trim_start();
@@ -2941,7 +2941,7 @@ pub fn derive_title(content: &str) -> String {
     };
     // First sentence (up to period/semicolon/newline), 40 chars — no more hard 20-char cut that made duplicate titles
     let sent: String = s
-        .split(['。', '；', '\n'])
+        .split(['\u{3002}', '\u{ff1b}', '\n'])
         .next()
         .unwrap_or(&s)
         .trim()
@@ -3018,7 +3018,7 @@ fn mask_secret(s: &str) -> String {
     } else {
         let head: String = chars[..4].iter().collect();
         let tail: String = chars[chars.len() - 4..].iter().collect();
-        format!("{head}…{tail}")
+        format!("{head}\u{2026}{tail}")
     }
 }
 
@@ -3209,7 +3209,7 @@ mod tests {
 
     #[test]
     fn mask_secret_shape() {
-        assert_eq!(mask_secret("abcdefghijkl"), "abcd…ijkl");
+        assert_eq!(mask_secret("abcdefghijkl"), "abcd\u{2026}ijkl");
         assert_eq!(mask_secret("short"), "****");
     }
 
@@ -3389,13 +3389,13 @@ mod tests {
     fn resolve_prefix_rules() -> anyhow::Result<()> {
         let mut a =
             crate::memory::model::StoredMemory::new_pending("11111111-aaaa".into(), "u".into());
-        a.local_title = "甲".into();
+        a.local_title = "\u{7532}".into();
         let mut b =
             crate::memory::model::StoredMemory::new_pending("11111111-bbbb".into(), "u".into());
-        b.local_title = "乙".into();
+        b.local_title = "\u{4e59}".into();
         let mut c =
             crate::memory::model::StoredMemory::new_pending("22222222-cccc".into(), "u".into());
-        c.local_title = "丙".into();
+        c.local_title = "\u{4e19}".into();
         c.deleted = true;
         let all = vec![a, b, c];
         assert!(resolve_prefix(&all, "11111111").is_err()); // many hits
@@ -3412,7 +3412,7 @@ mod tests {
             "04a7be06-5ebd-4ba5-9da3-eb9a066ed2d5".into(),
             "u".into(),
         );
-        p.local_title = "因".into();
+        p.local_title = "\u{56e0}".into();
         let all = vec![p];
         // Unique prefix hit → full id
         assert_eq!(
@@ -3436,7 +3436,7 @@ mod tests {
             id: "test-1".into(),
             kind: Kind::Context,
             tags: vec![],
-            title: "测条".into(),
+            title: "\u{6d4b}\u{6761}".into(),
             content: content.into(),
             user: "u".into(),
             computer: String::new(),
@@ -3479,26 +3479,26 @@ mod tests {
         let store = LocalStore::open(&dir.path().join("t.db"))?;
         let keys = crate::memory::SessionKeys::from_urk([7u8; 32])?;
         let embedder = crate::memory::search::HashingEmbedder::default();
-        let mut entry = test_entry("一大坨混装内容");
+        let mut entry = test_entry("\u{4e00}\u{5927}\u{5768}\u{6df7}\u{88c5}\u{5185}\u{5bb9}");
         entry.id = "11111111-parent".into();
         let stored0 = MemoryEngine::seal(&keys, &embedder, &entry, "u")?;
         store.put(&stored0)?;
         let spec = SplitSpec {
-            summary: Some("本回合审计了 backend（纲：详情拆见子果）".into()),
+            summary: Some("\u{672c}\u{56de}\u{5408}\u{5ba1}\u{8ba1}\u{4e86} backend\u{ff08}\u{7eb2}\u{ff1a}\u{8be6}\u{60c5}\u{62c6}\u{89c1}\u{5b50}\u{679c}\u{ff09}".into()),
             items: vec![
                 SplitOp {
-                    title: "①classes.py 假 import".into(),
-                    content: "【前因】审计发现【行为】classes.py 重 import 不存在模块【后果】POST 必五百，删除该段即愈。".into(),
+                    title: "\u{2460}classes.py \u{5047} import".into(),
+                    content: "\u{3010}\u{524d}\u{56e0}\u{3011}\u{5ba1}\u{8ba1}\u{53d1}\u{73b0}\u{3010}\u{884c}\u{4e3a}\u{3011}classes.py \u{91cd} import \u{4e0d}\u{5b58}\u{5728}\u{6a21}\u{5757}\u{3010}\u{540e}\u{679c}\u{3011}POST \u{5fc5}\u{4e94}\u{767e}\u{ff0c}\u{5220}\u{9664}\u{8be5}\u{6bb5}\u{5373}\u{6108}\u{3002}".into(),
                     kind: "skill".into(),
                     tags: vec!["audit".into()],
-                    parent: "纲".into(),
+                    parent: "\u{7eb2}".into(),
                 },
                 SplitOp {
-                    title: "②admin 豁免缺失".into(),
-                    content: "【行为】assignments.py update/archive 无豁免【后果】管理员能看不能改，补齐一致性。".into(),
+                    title: "\u{2461}admin \u{8c41}\u{514d}\u{7f3a}\u{5931}".into(),
+                    content: "\u{3010}\u{884c}\u{4e3a}\u{3011}assignments.py update/archive \u{65e0}\u{8c41}\u{514d}\u{3010}\u{540e}\u{679c}\u{3011}\u{7ba1}\u{7406}\u{5458}\u{80fd}\u{770b}\u{4e0d}\u{80fd}\u{6539}\u{ff0c}\u{8865}\u{9f50}\u{4e00}\u{81f4}\u{6027}\u{3002}".into(),
                     kind: "decision".into(),
                     tags: vec![],
-                    parent: "纲".into(),
+                    parent: "\u{7eb2}".into(),
                 },
             ],
         };
@@ -3514,18 +3514,18 @@ mod tests {
             .find(|m| m.id == "11111111-parent")
             .ok_or_else(|| anyhow!("not found"))?;
         assert!(
-            upd.local_content_head.contains("纲：详情拆见"),
+            upd.local_content_head.contains("\u{7eb2}\u{ff1a}\u{8be6}\u{60c5}\u{62c6}\u{89c1}"),
             "original should become an outline"
         );
         // summary=original body: become an outline without changing content (keep-original path)
         let spec2 = SplitSpec {
-            summary: Some("一大坨混装内容".into()),
+            summary: Some("\u{4e00}\u{5927}\u{5768}\u{6df7}\u{88c5}\u{5185}\u{5bb9}".into()),
             items: vec![SplitOp {
-                title: "③第三果".into(),
-                content: "【教训】再补一果验证原条保留路径不被误转。".into(),
+                title: "\u{2462}\u{7b2c}\u{4e09}\u{679c}".into(),
+                content: "\u{3010}\u{6559}\u{8bad}\u{3011}\u{518d}\u{8865}\u{4e00}\u{679c}\u{9a8c}\u{8bc1}\u{539f}\u{6761}\u{4fdd}\u{7559}\u{8def}\u{5f84}\u{4e0d}\u{88ab}\u{8bef}\u{8f6c}\u{3002}".into(),
                 kind: "skill".into(),
                 tags: vec![],
-                parent: "纲".into(),
+                parent: "\u{7eb2}".into(),
             }],
         };
         assert!(split_exec(&keys, &embedder, &store, &entry, &spec2).is_ok());
@@ -3543,18 +3543,18 @@ mod tests {
         let store = LocalStore::open(&dir.path().join("t.db"))?;
         let keys = crate::memory::SessionKeys::from_urk([7u8; 32])?;
         let embedder = crate::memory::search::HashingEmbedder::default();
-        let mut entry = test_entry("内容");
+        let mut entry = test_entry("\u{5185}\u{5bb9}");
         entry.id = "22222222-single".into();
         let stored0 = MemoryEngine::seal(&keys, &embedder, &entry, "u")?;
         store.put(&stored0)?;
         let spec = SplitSpec {
             summary: None,
             items: vec![SplitOp {
-                title: "一果".into(),
-                content: "唯一一果等同改写。".into(),
+                title: "\u{4e00}\u{679c}".into(),
+                content: "\u{552f}\u{4e00}\u{4e00}\u{679c}\u{7b49}\u{540c}\u{6539}\u{5199}\u{3002}".into(),
                 kind: "context".into(),
                 tags: vec![],
-                parent: "纲".into(),
+                parent: "\u{7eb2}".into(),
             }],
         };
         assert!(split_exec(&keys, &embedder, &store, &entry, &spec).is_err());
@@ -3805,7 +3805,7 @@ mod tests {
         let _isolate = crate::test_lock::Isolate::new()?;
         let info = status_light()?;
         assert_eq!(info.local_total, 0);
-        assert_eq!(derive_title("【经验】first line\nsecond"), "first line");
+        assert_eq!(derive_title("\u{3010}\u{7ecf}\u{9a8c}\u{3011}first line\nsecond"), "first line");
         assert_eq!(derive_title(""), "(untitled)");
         assert!(diary_mode() == "concise" || diary_mode() == "verbose");
         let saved_super = std::env::var_os("RSRS_SUPER");

@@ -95,7 +95,7 @@ fn main() -> Result<()> {
     let mut b = LocalStore::open(&b_path)?;
     let mut entry: MemoryEntry = serde_json::from_value(json!({
         "id":uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL,format!("activity-track/{user}/2026-10-27").as_bytes()).to_string(),
-        "kind":"Context","tags":[],"title":"活动轨迹 2026-10-27","content":"【09:00】synthetic common event",
+        "kind":"Context","tags":[],"title":"\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-27","content":"\u{3010}09:00\u{3011}synthetic common event",
         "user":user,"computer":"synthetic-device-a","project":"sync-probe",
         "created_at":"2026-10-27T09:00:00.000Z","updated_at":"2026-10-27T09:00:00.000Z",
         "modified_by":"synthetic-device-a","importance":"trivial","parent_id":"","emotion":-1.0
@@ -120,13 +120,13 @@ fn main() -> Result<()> {
     eprintln!("diary sync probe: real M3 background artifact prepared; overlapping two-device writes and HTTP sync");
     entry
         .content
-        .push_str("\n【09:16】synthetic-confirmed-local-append");
+        .push_str("\n\u{3010}09:16\u{3011}synthetic-confirmed-local-append");
     entry.updated_at = "2026-10-27T09:16:00.000Z".into();
     entry.modified_by = "synthetic-device-b".into();
     b.put(&MemoryEngine::seal(&keys, &provider, &entry, &user)?)?;
     let confirmed = read(&b, &keys, &entry.id)?;
     let mut earlier = entry.clone();
-    earlier.content = "【09:00】synthetic common event\n【09:09】synthetic-remote-append".into();
+    earlier.content = "\u{3010}09:00\u{3011}synthetic common event\n\u{3010}09:09\u{3011}synthetic-remote-append".into();
     earlier.updated_at = "2026-10-27T09:09:00.000Z".into();
     earlier.modified_by = "synthetic-device-a".into();
     a.put(&MemoryEngine::seal(&keys, &provider, &earlier, &user)?)?;
@@ -183,7 +183,7 @@ fn main() -> Result<()> {
         .find(|c| c["status"] == "conflict_saved")
         .context("conflict history missing")?;
     let conflict_rev = conflict["rev"].as_i64().context("conflict revision")?;
-    let merged = format!("{}\n【09:09】synthetic-remote-append", confirmed.content);
+    let merged = format!("{}\n\u{3010}09:09\u{3011}synthetic-remote-append", confirmed.content);
     b.queue_conflict_resolution(
         &keys,
         &epoch,

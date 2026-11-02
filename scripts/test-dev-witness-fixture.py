@@ -28,19 +28,19 @@ class WitnessFixtureTests(unittest.TestCase):
         register_witness_functions(self.db)
 
     def insert(self):
-        values = ["synthetic-id", "synthetic-user", "密文\n\"\\", "nonce", None,
-                  "2026-10-25T00:00:00Z", 0, "important", "[]", "标题", "", "", "", "", "", "", "", ""]
+        values = ["synthetic-id", "synthetic-user", "\u5bc6\u6587\n\"\\", "nonce", None,
+                  "2026-10-25T00:00:00Z", 0, "important", "[]", "\u6807\u9898", "", "", "", "", "", "", "", ""]
         self.db.execute("INSERT INTO memories(" + FIELDS + ") VALUES(" + ",".join("?" * 18) + ")", values)
         return values
 
     def test_canonical_utf8_optional_fields_and_domain(self):
-        fields = ["用户\n\"\\/", None] + [""] * 16
-        literal = '["用户\\n\\"\\\\/",null,' + ','.join(['""'] * 16) + ']'
+        fields = ["\u7528\u6237\n\"\\/", None] + [""] * 16
+        literal = '["\u7528\u6237\\n\\"\\\\/",null,' + ','.join(['""'] * 16) + ']'
         expected = hashlib.sha256(b"rsrs:witness:source:v1\0" + literal.encode()).hexdigest()
         self.assertEqual(source_digest(*fields), expected)
         self.assertNotEqual(source_digest(*fields), source_digest(*([None] * 18)))
-        args = ("库", 9007199254740993, "stamp", "update", "id", "old", None, "digest", "0" * 64)
-        literal = '[1,"库",9007199254740993,"stamp","update","id","old",null,"digest","' + "0" * 64 + '"]'
+        args = ("\u5e93", 9007199254740993, "stamp", "update", "id", "old", None, "digest", "0" * 64)
+        literal = '[1,"\u5e93",9007199254740993,"stamp","update","id","old",null,"digest","' + "0" * 64 + '"]'
         self.assertEqual(event_digest(*args), hashlib.sha256(b"rsrs:witness:event:v1\0" + literal.encode()).hexdigest())
 
     def test_real_create_update_delete_triggers_and_source_binding(self):

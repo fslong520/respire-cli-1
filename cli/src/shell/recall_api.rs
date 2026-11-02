@@ -108,7 +108,7 @@ impl Form {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return false,
             Err(TryRecvError::Disconnected) => Err(t(
-                "配置保存线程中断",
+                "\u{914d}\u{7f6e}\u{4fdd}\u{5b58}\u{7ebf}\u{7a0b}\u{4e2d}\u{65ad}",
                 "Configuration save worker disconnected",
             )),
         };
@@ -136,20 +136,20 @@ impl Form {
                 && !base.contains(['?', '#']),
             "{}",
             t(
-                "请输入有效的 http(s) API 地址，不要在地址中放密钥",
+                "\u{8bf7}\u{8f93}\u{5165}\u{6709}\u{6548}\u{7684} http(s) API \u{5730}\u{5740}\u{ff0c}\u{4e0d}\u{8981}\u{5728}\u{5730}\u{5740}\u{4e2d}\u{653e}\u{5bc6}\u{94a5}",
                 "Enter an http(s) API base without credentials, query or fragment"
             )
         );
         anyhow::ensure!(
             !model.is_empty(),
             "{}",
-            t("模型名不能为空", "Model name is required")
+            t("\u{6a21}\u{578b}\u{540d}\u{4e0d}\u{80fd}\u{4e3a}\u{7a7a}", "Model name is required")
         );
         anyhow::ensure!(
             !key.is_empty() || key_for(base).is_some(),
             "{}",
             t(
-                "请输入此地址的 API Key",
+                "\u{8bf7}\u{8f93}\u{5165}\u{6b64}\u{5730}\u{5740}\u{7684} API Key",
                 "API key is required for this endpoint"
             )
         );
@@ -168,7 +168,7 @@ impl Form {
 
     pub(super) fn draw(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default().borders(Borders::ALL).title(t(
-            "高质量召回 API（OpenAI 兼容）",
+            "\u{9ad8}\u{8d28}\u{91cf}\u{53ec}\u{56de} API\u{ff08}OpenAI \u{517c}\u{5bb9}\u{ff09}",
             "High-quality recall API (OpenAI compatible)",
         ));
         let inner = block.inner(area);
@@ -202,18 +202,18 @@ impl Form {
         }
         let mut lines: Vec<Line<'static>> = vec![choice(
             self.field == 3,
-            t("[ 保存配置 ]", "[ Save configuration ]"),
+            t("[ \u{4fdd}\u{5b58}\u{914d}\u{7f6e} ]", "[ Save configuration ]"),
         )];
         lines.push(line(t(
-            "密钥留空保留该地址已有密钥；新密钥存入系统凭据库。",
+            "\u{5bc6}\u{94a5}\u{7559}\u{7a7a}\u{4fdd}\u{7559}\u{8be5}\u{5730}\u{5740}\u{5df2}\u{6709}\u{5bc6}\u{94a5}\u{ff1b}\u{65b0}\u{5bc6}\u{94a5}\u{5b58}\u{5165}\u{7cfb}\u{7edf}\u{51ed}\u{636e}\u{5e93}\u{3002}",
             "Leave key blank to retain this endpoint's key; new keys use the OS keyring.",
         )));
         lines.push(line(t(
-            "查询和候选标题会发送到此服务。保存后仍需选择高质量模式。",
+            "\u{67e5}\u{8be2}\u{548c}\u{5019}\u{9009}\u{6807}\u{9898}\u{4f1a}\u{53d1}\u{9001}\u{5230}\u{6b64}\u{670d}\u{52a1}\u{3002}\u{4fdd}\u{5b58}\u{540e}\u{4ecd}\u{9700}\u{9009}\u{62e9}\u{9ad8}\u{8d28}\u{91cf}\u{6a21}\u{5f0f}\u{3002}",
             "Queries and candidate titles go to this service. Select High quality after saving.",
         )));
         lines.push(line(t(
-            "Ctrl+A 全选，Ctrl+U 清空，Ctrl+S 保存；测试入口在模型页。",
+            "Ctrl+A \u{5168}\u{9009}\u{ff0c}Ctrl+U \u{6e05}\u{7a7a}\u{ff0c}Ctrl+S \u{4fdd}\u{5b58}\u{ff1b}\u{6d4b}\u{8bd5}\u{5165}\u{53e3}\u{5728}\u{6a21}\u{578b}\u{9875}\u{3002}",
             "Ctrl+A selects all, Ctrl+U clears, Ctrl+S saves; test recall from the model page.",
         )));
         if !self.error.is_empty() {
@@ -222,7 +222,7 @@ impl Form {
         if let Some((started, _)) = &self.saving {
             lines.push(line(format!(
                 "{} {}s",
-                t("正在保存配置", "Saving configuration"),
+                t("\u{6b63}\u{5728}\u{4fdd}\u{5b58}\u{914d}\u{7f6e}", "Saving configuration"),
                 started.elapsed().as_secs()
             )));
         }

@@ -14,7 +14,7 @@ pub fn run(exe: &std::path::Path) -> Result<Value> {
     let store = respire::transport::local::LocalStore::open(&root.path().join("rsrs.db"))?;
     let embedder = respire::memory::bge::BgeEmbedder::load_model("m3")?;
     anyhow::ensure!(embedder.dims() == 1024, "real model dimensions");
-    let body = "Today I repaired a bicycle wheel and replaced its damaged tyre. 中文骑车日记 🧠";
+    let body = "Today I repaired a bicycle wheel and replaced its damaged tyre. \u{4e2d}\u{6587}\u{9a91}\u{8f66}\u{65e5}\u{8bb0} 🧠";
     let mut diary = MemoryEntry {
         metadata: Default::default(),
         unknown_fields: Default::default(),

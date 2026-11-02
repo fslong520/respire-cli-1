@@ -1,46 +1,46 @@
-# 独立日记片段检索
+# Standalone diary fragment retrieval
 
-日记可能包含提议、失败尝试与未确认结论。本入口只提供可定位的历史参考，不改变普通 `recall`，不自动提升日记、不改写主记忆，也不根据正文中的“验证通过”等字样认定事实可信。
+A diary can hold proposals, failed attempts and unconfirmed conclusions. This entry point only offers locatable historical references: it does not change normal `recall`, never promotes a diary automatically, never rewrites main memory, and never treats wording such as "verified" in the body as proof that a fact is trustworthy.
 
-## 命令与返回
+## Command and response
 
 ```text
-rsrs --client-only --json diary-search "物联网接入" --mode hybrid --limit 5 --max-chars 4000
-rsrs --client-only --json diary-search "港珠澳" --mode lexical --limit 5 --max-chars 4000
+rsrs --client-only --json diary-search "IoT integration" --mode hybrid --limit 5 --max-chars 4000
+rsrs --client-only --json diary-search "bridge" --mode lexical --limit 5 --max-chars 4000
 rsrs --client-only --json diary-fragment <source-id> <fragment-id> --neighbors 1 --max-chars 4000
 ```
 
-MCP 对应 `memory_diary_search`（query、mode、limit、max_chars）及 `memory_diary_fragment`（source_id、fragment_id、neighbors、max_chars）。只读模式允许读取，暂停模式仍拒绝读取；既有授权策略不变。旧 Runtime 不识别新命令时会报错，调用方应明确提示能力尚未安装，不应把旧的整日输出包装成片段语义检索。
+The MCP equivalents are `memory_diary_search` (query, mode, limit, max_chars) and `memory_diary_fragment` (source_id, fragment_id, neighbors, max_chars). Read-only mode allows reading while paused mode still refuses it; the existing authorization policy is unchanged. An older Runtime that does not know the new commands errors out, and the caller should state plainly that the capability is not installed rather than wrapping the old whole-day output as fragment-level semantic retrieval.
 
-JSON 信封中的 `details.items` 是结果。每项包含：
+`details.items` in the JSON envelope is the result. Each item carries:
 
-- `source_kind=diary`、`evidence_state=reference`：来源和保守的参考状态，不是验证凭据。
-- `source_id`、`fragment_id`、`source_version`：原记忆 ID、片段定位 ID、当前加密记录的 SHA-256 版本指纹。
-- `date`、`title`、`project`：本地日期与有限长度的出处信息。
-- `start`、`end`：原文 Unicode 标量的半开区间；不是 UTF-8 字节或 JavaScript UTF-16 下标。
-- `text`、`truncated`、`score`：有界正文、是否截断和排序分数。分数只表示相关性，不表示可信度。
+- `source_kind=diary`, `evidence_state=reference`: the origin and the conservative reference state, not a verification credential.
+- `source_id`, `fragment_id`, `source_version`: the original memory ID, the fragment locator ID and the SHA-256 version fingerprint of the current encrypted record.
+- `date`, `title`, `project`: the local date and bounded-length provenance.
+- `start`, `end`: a half-open range of original-text Unicode scalars, not UTF-8 bytes or JavaScript UTF-16 indices.
+- `text`, `truncated`, `score`: the bounded body, whether it was truncated, and the ranking score. A score means relevance only, never trustworthiness.
 
-`details.semantic_ready` 和 `pending_fragments` 区分语义索引完整或待建立；索引缺失时仍可返回词面命中，并通知既有后台索引器。查询不在前台为整年日记生成全部向量。读取片段最多包含前后各一段，先为目标片段分配预算，再按剩余预算读取邻段；输出恢复原文顺序，省略或截断邻段时标记 `truncated=true`。公开定位 ID 绑定来源版本及 Unicode 范围；任何原文或元数据更新（包括尾部追加）都会使旧定位失效，须重新搜索。内部索引键另行绑定片段内容与检索元数据，允许未变片段复用派生工件。邻段按来源中紧邻的前一开始位置和后一结束位置选取，包含 80 字符重叠；动态词面窗口也以此规则补充左右上下文，不跳过相邻重叠片。
+`details.semantic_ready` and `pending_fragments` distinguish a complete semantic index from one still to be built; when the index is missing, lexical hits are still returned and the existing background indexer is notified. Queries never generate all vectors for a whole year of diaries in the foreground. A fragment read includes at most one neighbour on each side: the target fragment gets its budget first and neighbours take the remainder; output restores original order, and an omitted or truncated neighbour sets `truncated=true`. A public locator ID is bound to the source version and the Unicode range; any change to the original text or metadata (including an append at the tail) invalidates the old locator and requires a new search. Internal index keys are bound separately to fragment content and retrieval metadata so unchanged fragments can reuse derived artifacts. Neighbours are the immediately adjacent earlier start position and later end position in the source, including the 80-character overlap; the dynamic lexical window also extends left and right by the same rule and never skips an adjacent overlap fragment.
 
-`limit` 为 1–20，`max_chars` 为 512–12000，默认分别 5、4000。预算约束紧凑序列化后的 `details` 字符数，包含片段元数据和 JSON 转义；外层标准信封另有固定开销。这是字符预算，不是精确 token 数。预算不足时可能无可容纳的结果，`truncated=true`。非 JSON 模式直接输出相同的紧凑有界结果。
+`limit` is 1-20 and `max_chars` is 512-12000, defaulting to 5 and 4000. The budget bounds the character count of the compact-serialised `details`, including fragment metadata and JSON escaping; the outer standard envelope has its own fixed overhead. This is a character budget, not an exact token count. With too small a budget there may be no result that fits, and `truncated=true`. Non-JSON mode prints the same compact bounded result directly.
 
-## 检索与派生索引
+## Retrieval and the derived index
 
-独立检索仅扫描当前账号中有效的 `trivial` 日记，不读取删除记录。词面检索先对权威全文匹配所有查询词，再将命中位置映射到原文 Unicode 标量并选取有界窗口；不会因索引分片边界漏掉长关键词，也不会只检查前 500 字符。多个词可在同一来源的标题、项目或正文中匹配，预算内的片段不保证显示全文的所有命中。长记录按最多 800 个 Unicode 标量切分，优先换行，保留 80 字符重叠。词面查询仍会在本地扫描全部日记，磁盘和本地计算成本与数据量有关；完整日记不会因此返回给对话模型。
+Standalone retrieval scans only the valid `trivial` diaries of the current account and never reads deleted records. Lexical retrieval first matches every query word against the authoritative full text, then maps hit positions to original-text Unicode scalars and selects a bounded window; it never misses a long keyword at an index shard boundary and never checks only the first 500 characters. Multiple words may match in the title, project or body of the same source, and fragments within budget do not guarantee every hit of the full text. A long record is split at most every 800 Unicode scalars, preferring line breaks, keeping an 80-character overlap. A lexical query still scans every diary locally, so disk and local compute cost grows with the data; the full diary is never returned to the chat model.
 
-语义路径调用公开 Core SDK 的 BGE-M3 `prepare`、`query` 与索引状态接口。后台索引器在既有取消、账号切换与前台让路机制下更新派生缓存。当前账号数据目录中的 `diary-fragments-v1.db` 只保存来源版本与 Core 不透明索引定位，不保存额外的日记明文。Core 派生工件继续由其现有本地索引机制管理。新增/修改/删除、模型代际变化和失效工件会触发重建；最后一条日记被删除或升格后可不加载模型清理空源缓存。词面模式不打开派生缓存；混合模式遇缺失或损坏缓存明确返回 semantic_ready=false 和待准备数量。损坏的已识别派生库在受控后台提交中移到诊断副本并重建；符号链接、硬链接和无关数据库拒绝改写。模型准备在锁外进行，持久提交由运行时写门、生命周期所有权、取消确认锁及主库版本事务共同校验，不改变原记忆、同步历史或日记父节点。
+The semantic path calls the public Core SDK's BGE-M3 `prepare`, `query` and index-status interfaces. The background indexer updates the derived cache under the existing cancellation, account-switch and foreground-yield mechanisms. `diary-fragments-v1.db` in the current account's data directory stores only source versions and opaque Core index locators, never extra diary plaintext. Core derived artifacts stay managed by its existing local index mechanism. Add/modify/delete, model generation changes and invalidated artifacts trigger a rebuild; after the last diary is deleted or promoted the empty source cache can be cleared without loading the model. Lexical mode never opens the derived cache; hybrid mode returns `semantic_ready=false` and the pending count when the cache is missing or corrupt. A corrupt recognised derived database is moved to a diagnostic copy and rebuilt in a controlled background commit; symlinks, hard links and unrelated databases are refused. Model preparation happens outside the lock, and the durable commit is validated by the runtime write gate, lifecycle ownership, cancellation-confirmation lock and main-database revision transaction together, without touching original memory, sync history or diary parents.
 
-已有 `diary --contains` 是全库时间链（包含主记忆与日记），与上述仅日记入口不同。它现改为解密全文过滤，并返回命中附近最多 500 字符摘要；原有日期、排序与数量语义保持。
+The existing `diary --contains` is a whole-store time chain (main memory plus diaries) and differs from the diary-only entry above. It now decrypts and filters the full text and returns up to 500 characters of summary around a hit; the existing date, ordering and count semantics are unchanged.
 
-## 当前验证边界
+## Current verification boundary
 
-公开源码可以修改分段、CLI/MCP、返回边界、缓存和 SDK 调用编排；不可编辑闭源 Core 内部的向量算法与模型实现。构建必须提供仓库锁定的匹配 SDK，不能绕过 manifest 校验。
+Open source can change segmentation, CLI/MCP, response bounds, caching and SDK call orchestration; it cannot edit the closed Core's internal vector algorithms or model implementation. A build must provide the matching SDK pinned by the repo and cannot bypass manifest validation.
 
-仓库内 `crates/app/src/diary_tests.rs`、MCP 工具测试和运行时路由测试覆盖全文匹配、Unicode 位置、JSON 预算、来源失效、缓存损坏/重建及取消提交边界。词面与提交故障测试使用显式测试 provider，不能冒充真实语义检索成绩。匹配 SDK 的真实 BGE-M3、CLI/Runtime/MCP 往返、后台并发/重启和跨账号隔离须另外执行；完整发布还保留已有自启、真实模型、升级与迁移门禁。规模测量采用脱敏合成日记，只说明对应夹具的耗时与内存，不代表真实用户年度库性能或检索收益。
+`crates/app/src/diary_tests.rs`, the MCP tool tests and the runtime routing tests cover full-text matching, Unicode positions, the JSON budget, source invalidation, cache corruption/rebuild and the cancellation-commit boundary. Lexical and commit-failure tests use explicit test providers and cannot stand in for real semantic retrieval results. The matching SDK's real BGE-M3, CLI/Runtime/MCP round trips, background concurrency/restart and cross-account isolation must be run separately; a full release also keeps the existing autostart, real-model, upgrade and migration gates. Scale measurements use sanitised synthetic diaries and describe only the timing and memory of that fixture, not a real user's year-long store or retrieval benefit.
 
-## 可复跑验收
+## Re-runnable acceptance
 
-在已按锁文件准备匹配 SDK 和已校验 CPU 模型的隔离测试环境中，构建当前 `rsrs` 与探针，运行真实模型用例（不设置 `RSRS_CORE_TEST_MODE`）：
+In an isolated test environment with the matching SDK prepared per the lock file and a verified CPU model, build the current `rsrs` and the probes and run the real-model cases (without setting `RSRS_CORE_TEST_MODE`):
 
 ```sh
 cargo build --locked -p respire --bin rsrs --example feedback_contract_probe --example ablation_bench
@@ -48,14 +48,14 @@ RSRS_ENGINE=cpu RSRS_M3_DIR=/path/to/verified/model \
   target/debug/examples/feedback_contract_probe --diary-only
 ```
 
-探针拒绝测试 provider，复用 CPU 模型大小和 SHA-256 校验，使用临时库、合成会话和合成日记，覆盖缺索引词面回退、无词面命中的语义查询、CLI/runtime/MCP stdio 往返、重启、readonly 读取、off 拒绝、追加后旧定位失效和删除清理。完整 `feedback_contract_probe` 在已有反馈及两种 benchmark 路径验收后也运行这些日记检查，因此现有四平台无令牌模型验收会覆盖新增入口。单个同义句命中只是功能检查，不代表日记检索题集收益；较宽泛的 `cycling equipment maintenance` 在当前合成夹具和既有 Core 阈值下没有返回候选，此结果未通过降低阈值掩盖。
+The probe refuses test providers, reuses the CPU model size and SHA-256 verification, and uses a temporary store, synthetic sessions and synthetic diaries to cover the missing-index lexical fallback, a semantic query with no lexical hit, CLI/runtime/MCP stdio round trips, restart, read-only reads, refusal in off mode, locator invalidation after an append and cleanup after deletion. The full `feedback_contract_probe` also runs these diary checks after the existing feedback and both benchmark paths, so the existing four-platform token-free model acceptance covers the new entry points. A single paraphrase hit is a functional check only and says nothing about diary retrieval set benefit; the broader `cycling equipment maintenance` returned no candidate under the current synthetic fixture and existing Core thresholds, and that result was not hidden by lowering a threshold.
 
-`diary_scale_probe <每篇字符数> <篇数>` 使用显式合成测试 provider，只测词面扫描，不包含建模质量。2026-10-27 云端 debug 构建的单次测量如下，耗时是建库后的连续三次搜索总和，RSS 为整个夹具进程的峰值：
+`diary_scale_probe <chars-per-diary> <count>` uses an explicit synthetic test provider and measures lexical scanning only, not modelling quality. The 2026-10-27 cloud debug build measurements below are one run each: the time is the sum of three consecutive searches after the store was built and RSS is the peak of the whole fixture process.
 
-| 合成规模 | 原 PR `611b4da`：耗时 / RSS | 修复版：耗时 / RSS |
+| Synthetic scale | Original PR `611b4da`: time / RSS | Fixed build: time / RSS |
 | --- | --- | --- |
-| 单篇 10 万字符 | 194.7 ms / 15,120 KiB | 195.6 ms / 15,300 KiB |
-| 单篇 100 万字符 | 2,078.7 ms / 31,212 KiB | 1,881.9 ms / 31,084 KiB |
-| 365 篇，各 5,000 字符 | 4,028.2 ms / 21,196 KiB | 3,748.5 ms / 19,212 KiB |
+| One 100k-character diary | 194.7 ms / 15,120 KiB | 195.6 ms / 15,300 KiB |
+| One 1M-character diary | 2,078.7 ms / 31,212 KiB | 1,881.9 ms / 31,084 KiB |
+| 365 diaries of 5,000 characters | 4,028.2 ms / 21,196 KiB | 3,748.5 ms / 19,212 KiB |
 
-测试机有并行任务，尚无多轮置信区间；两版边界/去重/预算结果也有变化（多日夹具原版返回 4 条，修复版 5 条）。这些数据只证明对应规模已实际运行，不能据此宣称稳定提速，更不是原科研题集复现。修复版仍须全文解密和线性扫描；避免逐片克隆全年正文、逐篇重复读取全库不等于消除了全部大库成本。
+The test machine had parallel work, so there is no multi-run confidence interval; the two builds also differ in boundary/dedup/budget results (the multi-day fixture returned 4 items originally and 5 in the fixed build). These numbers only show that the given scale really ran; they do not claim a stable speed-up and certainly are not a reproduction of the original research set. The fixed build still decrypts the full text and scans linearly; avoiding per-fragment cloning of a whole year's bodies and repeated whole-store reads is not the same as eliminating all large-store cost.
