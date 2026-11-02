@@ -18,8 +18,9 @@ export function canonicalEntry(target,input){
 export function cacheKey(target,entry){return `core-sdk-native-v1-${target}-${createHash('sha256').update(JSON.stringify(canonicalEntry(target,entry))).digest('hex')}`;}
 export function planCaches(lock,crateLock){
  required(lock.schema_version===1&&crateLock.schema_version===1&&lock.targets&&crateLock.targets,'Invalid SDK lock schema');
- required(Object.keys(lock.targets).length===TARGETS.length&&Object.keys(crateLock.targets).length===TARGETS.length&&Object.keys(lock.targets).every(t=>TARGETS.includes(t))&&Object.keys(crateLock.targets).every(t=>TARGETS.includes(t)),'Require exact seven-target locks');
- const include=TARGETS.map(target=>{const entry=canonicalEntry(target,lock.targets[target]);required(JSON.stringify(entry)===JSON.stringify(canonicalEntry(target,crateLock.targets[target])),'SDK lock copies differ');return {target,entry,key:cacheKey(target,entry)};});
+ const targets=TARGETS.filter(t=>Object.hasOwn(lock.targets,t));
+ required((targets.length===TARGETS.length||(targets.length===TARGETS.length-1&&!targets.includes('x86_64-apple-darwin')))&&Object.keys(lock.targets).length===targets.length&&Object.keys(crateLock.targets).length===targets.length&&targets.every(t=>Object.hasOwn(crateLock.targets,t)),'Require exact current or pre-Intel SDK locks');
+ const include=targets.map(target=>{const entry=canonicalEntry(target,lock.targets[target]);required(JSON.stringify(entry)===JSON.stringify(canonicalEntry(target,crateLock.targets[target])),'SDK lock copies differ');return {target,entry,key:cacheKey(target,entry)};});
  required(new Set(include.map(x=>x.entry.sdk_version)).size===1,'Mixed private SDK versions');return {include};
 }
 export function auditSdkDirectory(directory,target,entry){
