@@ -673,7 +673,7 @@ fn finish_workbuddy_injection(
         path, false, Some(expected), content, Some(WORKBUDDY_MAX_CHARS)
     ).map_err(|error| {
         let state = if entity_changed { "partially completed: shared policy was updated" } else { "incomplete: shared policy was unchanged" };
-        anyhow!("WorkBuddy injection {state} at {}; MEMORY.md update failed at {}. Inspect both current files, preserve concurrent user edits and preview again before retrying; no automatic rollback was attempted: {error}", entity.display(), path.display())
+        anyhow!("WorkBuddy injection {state} at {}; MEMORY.md update failed at {}. Inspect both current files, preserve concurrent user edits and rerun rsrs inject --id workbuddy only after review to repeat validation; no automatic rollback was attempted: {error}", entity.display(), path.display())
     })?;
     Ok(entity_changed || memory_changed)
 }
@@ -798,7 +798,7 @@ fn apply_block_with_limit(
         if let Some(limit) = max_chars { check_document_budget(&preview, limit)?; }
     }
     if expected.is_some_and(|value| value != preview.revision) {
-        anyhow::bail!("target file changed; preview again before applying");
+        anyhow::bail!("target file changed; inspect and validate its current contents again before applying");
     }
     if !preview.changed {
         return Ok(false);
@@ -1094,7 +1094,7 @@ mod tests {
             let error = finish_workbuddy_injection(&path, &entity, &content, &preview.revision, true).unwrap_err().to_string();
             assert!(error.contains("partially completed: shared policy was updated"));
             assert!(error.contains("no automatic rollback"));
-            assert!(error.contains("preview again"));
+            assert!(error.contains("rerun rsrs inject --id workbuddy only after review"));
             assert_eq!(std::fs::read(&path)?, concurrent.as_bytes());
             assert_eq!(std::fs::read_to_string(&entity)?, instructions_md());
         }
