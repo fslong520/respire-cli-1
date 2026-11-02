@@ -641,7 +641,8 @@ fn write_block(path: std::path::PathBuf) -> Result<bool> {
     apply_block(&path, false, None)
 }
 
-/// Custom block content (workbuddy uses a reference block, not the full text).
+/// Exercise the same WorkBuddy budgeted writer independently in boundary tests.
+#[cfg(test)]
 fn write_block_with(path: &std::path::Path, content: &str) -> Result<bool> {
     apply_block_with_limit(path, false, None, content, Some(WORKBUDDY_MAX_CHARS))
 }
@@ -653,9 +654,28 @@ fn inject_workbuddy() -> Result<bool> {
     // Check the entire resulting document before touching either target.
     let preview = block_preview_with(&path, false, &ref_md)?;
     check_document_budget(&preview, WORKBUDDY_MAX_CHARS)?;
-    let mut changed = write_cover(entity_path()?)?;
-    changed |= write_block_with(&path, &ref_md)?;
-    Ok(changed)
+    let entity = entity_path()?;
+    let entity_changed = write_cover(entity.clone()).map_err(|error| anyhow!(
+        "WorkBuddy shared policy update failed at {}; inspect its current contents before retrying; MEMORY.md update was not started: {error}", entity.display()
+    ))?;
+    finish_workbuddy_injection(&path, &entity, &ref_md, &preview.revision, entity_changed)
+}
+
+/// These files are not a transaction. Never roll back over concurrent edits.
+fn finish_workbuddy_injection(
+    path: &std::path::Path,
+    entity: &std::path::Path,
+    content: &str,
+    expected: &str,
+    entity_changed: bool,
+) -> Result<bool> {
+    let memory_changed = apply_block_with_limit(
+        path, false, Some(expected), content, Some(WORKBUDDY_MAX_CHARS)
+    ).map_err(|error| {
+        let state = if entity_changed { "partially completed: shared policy was updated" } else { "incomplete: shared policy was unchanged" };
+        anyhow!("WorkBuddy injection {state} at {}; MEMORY.md update failed at {}. Inspect both current files, preserve concurrent user edits and preview again before retrying; no automatic rollback was attempted: {error}", entity.display(), path.display())
+    })?;
+    Ok(entity_changed || memory_changed)
 }
 
 #[derive(Debug, Serialize)]
@@ -1053,6 +1073,57 @@ mod tests {
         std::fs::write(&path, owned.as_bytes())?;
         assert!(write_block_with(&path, &content).is_err());
         assert_eq!(std::fs::read(&path)?, owned.as_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn workbuddy_midflight_user_changes_are_preserved_and_partial_state_is_reported() -> Result<()> {
+        let _iso = crate::test_lock::Isolate::new()?;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("MEMORY.md");
+        let entity = dir.path().join("policy.md");
+        let content = wb_ref_md("/isolated/policy.md");
+        for concurrent in ["NEW USER CONTENT\r\n".to_owned(), "界".repeat(4001)] {
+            std::fs::write(&path, "ORIGINAL USER CONTENT\r\n")?;
+            let preview = block_preview_with(&path, false, &content)?;
+            check_document_budget(&preview, WORKBUDDY_MAX_CHARS)?;
+            std::fs::write(&entity, "OLD POLICY")?;
+            assert!(write_cover(entity.clone())?);
+            // The user edits after the first target has been updated.
+            std::fs::write(&path, concurrent.as_bytes())?;
+            let error = finish_workbuddy_injection(&path, &entity, &content, &preview.revision, true).unwrap_err().to_string();
+            assert!(error.contains("partially completed: shared policy was updated"));
+            assert!(error.contains("no automatic rollback"));
+            assert!(error.contains("preview again"));
+            assert_eq!(std::fs::read(&path)?, concurrent.as_bytes());
+            assert_eq!(std::fs::read_to_string(&entity)?, instructions_md());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn workbuddy_second_target_io_failure_reports_partial_completion_without_rollback() -> Result<()> {
+        let _iso = crate::test_lock::Isolate::new()?;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("MEMORY.md");
+        let moved = dir.path().join("user-moved-memory.md");
+        let entity = dir.path().join("policy.md");
+        let content = wb_ref_md("/isolated/policy.md");
+        let owned = b"USER FILE\r\n";
+        std::fs::write(&path, owned)?;
+        let preview = block_preview_with(&path, false, &content)?;
+        check_document_budget(&preview, WORKBUDDY_MAX_CHARS)?;
+        assert!(write_cover(entity.clone())?);
+        // An actual filesystem read failure in the second target, after cover.
+        std::fs::rename(&path, &moved)?;
+        std::fs::create_dir(&path)?;
+        let error = finish_workbuddy_injection(&path, &entity, &content, &preview.revision, true).unwrap_err().to_string();
+        assert!(error.contains("partially completed: shared policy was updated"));
+        assert!(error.contains("failed to read"));
+        assert!(error.contains("Inspect both current files"));
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read(&moved)?, owned);
+        assert_eq!(std::fs::read_to_string(entity)?, instructions_md());
         Ok(())
     }
 
