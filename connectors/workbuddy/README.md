@@ -8,7 +8,7 @@ WorkBuddy's default sandbox cannot run the npm-wrapped `rsrs` CLI against `~/.rs
 
 - `connector-meta.json` — `type: mcp`
 - `mcp.json` — stdio `rsrs mcp` with `runtime.node`
-- `cli.json` — `preAuth` install/status only (`npm i -g @rsrsai/cli && rsrs doctor`)
+- `cli.json` — `preAuth` install/status only (`npm i -g rsrs-cli && rsrs doctor`)
 - `skills/respire/SKILL.md` — never Bash the CLI in the sandbox
 - `icon.svg`
 
