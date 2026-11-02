@@ -234,7 +234,7 @@ test('all Actions uploads, including both handshake receipts, retain evidence fo
     }
   }
   // Keep the validated parent publication tarballs alongside the existing evidence.
-  assert.equal(uploads, 50, 'preserve active evidence, registered consumer, verified platform copies, import proof and release dependency cache');
+  assert.equal(uploads, 51, 'preserve active evidence, registered consumer, verified platform copies, import proof and release dependency cache');
   const crates = readFileSync(new URL('publish-crates.yml', root), 'utf8');
   assert.match(crates, /name: protocol-package-verification/);
   assert.doesNotMatch(crates, /name: sdk-package-verification/);
