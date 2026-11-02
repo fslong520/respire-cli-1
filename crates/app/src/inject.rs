@@ -117,8 +117,10 @@ fn expand(p: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(p)
 }
 
-/// WorkBuddy injects a short mode-specific reference block under its 4000-char cap.
-/// The entity is available for details; reading it is not a mandatory per-turn ritual.
+/// Existing total WorkBuddy document budget, including preserved user content.
+const WORKBUDDY_MAX_CHARS: usize = 4000;
+
+/// Build the mode-specific reference; the full document is checked before writing.
 fn wb_ref_md(entity: &str) -> String {
     if crate::service::off_mode() {
         return format!("{}\nPolicy reference: `{entity}`.\n", INSTRUCTIONS_OFF_MD.trim_end());
@@ -289,6 +291,9 @@ fn check_state(path: std::path::PathBuf, mode: &str) -> &'static str {
             }
             // Block: no markers → not injected; markers present → compare inner content
             _ => {
+                if mode == "ref-block" && text.chars().count() > WORKBUDDY_MAX_CHARS {
+                    return "stale";
+                }
                 if text.contains(LEGACY_BLOCK_BEGIN) || text.contains(LEGACY_BLOCK_END) {
                     return "stale";
                 }
@@ -540,7 +545,7 @@ fn patch_prompt_append(path: &std::path::Path, add: bool) -> Result<bool> {
     // source stays ASCII: migrate it on add and strip it on remove.
     let legacy = format!("- \u{8bb0}\u{5fc6}\u{94c1}\u{5f8b}\u{ff08}respire\u{ff09}\u{ff1a}{abs}");
     let mut changed = 0usize;
-    walk_prompt_append(&mut cfg, add, &line, &legacy, &abs, &mut changed);
+    walk_prompt_append(&mut cfg, add, &line, &legacy, &mut changed);
     if changed == 0 {
         return Ok(false);
     }
@@ -552,58 +557,78 @@ fn patch_prompt_append(path: &std::path::Path, add: bool) -> Result<bool> {
     Ok(true)
 }
 
+/// Only complete managed lines outside fenced examples are ours. Preserve all
+/// other prompt text and its line endings verbatim, even if it quotes our path.
+fn rewrite_prompt_reference(text: &str, add: bool, line: &str, legacy: &str) -> String {
+    let mut out = String::new();
+    let mut seen = false;
+    let mut fence: Option<(u8, usize)> = None;
+    for piece in text.split_inclusive('\n') {
+        let (body, ending) = if let Some(body) = piece.strip_suffix("\r\n") {
+            (body, "\r\n")
+        } else if let Some(body) = piece.strip_suffix('\n') {
+            (body, "\n")
+        } else {
+            (piece, "")
+        };
+        let trimmed = body.trim_start_matches(' ');
+        let indent = body.len() - trimmed.len();
+        let bytes = trimmed.as_bytes();
+        if indent <= 3 && bytes.first().is_some_and(|c| *c == b'`' || *c == b'~') {
+            let ch = bytes[0];
+            let count = bytes.iter().take_while(|c| **c == ch).count();
+            if count >= 3 {
+                match fence {
+                    None => fence = Some((ch, count)),
+                    Some((open, length)) if ch == open && count >= length && trimmed[count..].trim().is_empty() => fence = None,
+                    _ => {}
+                }
+                out.push_str(piece);
+                continue;
+            }
+        }
+        if fence.is_none() && (body == line || body == legacy) {
+            if add && !seen {
+                out.push_str(line);
+                out.push_str(ending);
+                seen = true;
+            }
+        } else {
+            out.push_str(piece);
+        }
+    }
+    if add && !seen && fence.is_none() {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str(if text.contains("\r\n") { "\r\n" } else { "\n" });
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 fn walk_prompt_append(
     v: &mut serde_json::Value,
     add: bool,
     line: &str,
     legacy: &str,
-    path_ref: &str,
     changed: &mut usize,
 ) {
     match v {
         serde_json::Value::Object(map) => {
             if let Some(serde_json::Value::String(s)) = map.get_mut("prompt_append") {
-                if s.contains(legacy) {
-                    *s = s.replace(legacy, line);
-                    *changed += 1;
-                }
-                if s.lines().filter(|l| *l == line).count() > 1 {
-                    // Both the legacy and the new line were present: keep one.
-                    let mut seen = false;
-                    let kept: Vec<&str> = s
-                        .lines()
-                        .filter(|l| {
-                            if *l == line {
-                                if seen {
-                                    return false;
-                                }
-                                seen = true;
-                            }
-                            true
-                        })
-                        .collect();
-                    *s = kept.join("\n");
-                    *changed += 1;
-                }
-                if add && !s.contains(&path_ref) {
-                    if !s.is_empty() && !s.ends_with('\n') {
-                        s.push('\n');
-                    }
-                    s.push_str(line);
-                    *changed += 1;
-                } else if !add && s.lines().any(|l| l == line) {
-                    let kept: Vec<&str> = s.lines().filter(|l| *l != line).collect();
-                    *s = kept.join("\n");
+                let rewritten = rewrite_prompt_reference(s, add, line, legacy);
+                if rewritten != *s {
+                    *s = rewritten;
                     *changed += 1;
                 }
             }
             for (_, child) in map.iter_mut() {
-                walk_prompt_append(child, add, line, legacy, path_ref, changed);
+                walk_prompt_append(child, add, line, legacy, changed);
             }
         }
         serde_json::Value::Array(arr) => {
             for child in arr.iter_mut() {
-                walk_prompt_append(child, add, line, legacy, path_ref, changed);
+                walk_prompt_append(child, add, line, legacy, changed);
             }
         }
         _ => {}
@@ -618,14 +643,18 @@ fn write_block(path: std::path::PathBuf) -> Result<bool> {
 
 /// Custom block content (workbuddy uses a reference block, not the full text).
 fn write_block_with(path: &std::path::Path, content: &str) -> Result<bool> {
-    apply_block_with(path, false, None, content)
+    apply_block_with_limit(path, false, None, content, Some(WORKBUDDY_MAX_CHARS))
 }
 
 /// workbuddy reference mode: entity file (shared with opencode) + MEMORY.md reference block.
 fn inject_workbuddy() -> Result<bool> {
-    let mut changed = write_cover(entity_path()?)?;
     let ref_md = wb_ref_md(&entity_abs()?);
-    changed |= write_block_with(&expand("~/.workbuddy/MEMORY.md"), &ref_md)?;
+    let path = expand("~/.workbuddy/MEMORY.md");
+    // Check the entire resulting document before touching either target.
+    let preview = block_preview_with(&path, false, &ref_md)?;
+    check_document_budget(&preview, WORKBUDDY_MAX_CHARS)?;
+    let mut changed = write_cover(entity_path()?)?;
+    changed |= write_block_with(&path, &ref_md)?;
     Ok(changed)
 }
 
@@ -727,7 +756,27 @@ fn apply_block_with(
     expected: Option<&str>,
     content: &str,
 ) -> Result<bool> {
+    apply_block_with_limit(path, remove, expected, content, None)
+}
+
+fn check_document_budget(preview: &BlockPreview, max_chars: usize) -> Result<()> {
+    let count = preview.after.chars().count();
+    anyhow::ensure!(count <= max_chars,
+        "WorkBuddy MEMORY.md would contain {count} characters (maximum {max_chars}); review existing content before retrying; target was not written");
+    Ok(())
+}
+
+fn apply_block_with_limit(
+    path: &std::path::Path,
+    remove: bool,
+    expected: Option<&str>,
+    content: &str,
+    max_chars: Option<usize>,
+) -> Result<bool> {
     let preview = block_preview_with(path, remove, content)?;
+    if !remove {
+        if let Some(limit) = max_chars { check_document_budget(&preview, limit)?; }
+    }
     if expected.is_some_and(|value| value != preview.revision) {
         anyhow::bail!("target file changed; preview again before applying");
     }
@@ -965,8 +1014,75 @@ mod tests {
         assert!(!patch_prompt_append(&path, true)?);
         assert!(patch_prompt_append(&path, false)?);
         let cfg = read()?;
-        assert_eq!(cfg["agents"][0]["prompt_append"], "OWNED_KEEP");
+        assert_eq!(cfg["agents"][0]["prompt_append"], "OWNED_KEEP\n");
         assert_eq!(cfg["model"], "owned-model");
+        Ok(())
+    }
+
+    #[test]
+    fn workbuddy_budget_counts_entire_document_and_refuses_without_mutation() -> Result<()> {
+        let _iso = crate::test_lock::Isolate::new()?;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("MEMORY.md");
+        let content = wb_ref_md("/isolated/policy.md");
+        let overhead = format!("\n\n{BLOCK_BEGIN}\n{}\n{BLOCK_END}\n", content.trim_end()).chars().count();
+        for total in [3999, 4000, 4001] {
+            // Multibyte owned text verifies this is a character, not byte, budget.
+            let owned = format!("{}\n\n", "界".repeat(total - overhead));
+            std::fs::write(&path, &owned)?;
+            let preview = block_preview_with(&path, false, &content)?;
+            assert_eq!(preview.after.chars().count(), total);
+            if total <= WORKBUDDY_MAX_CHARS {
+                assert!(write_block_with(&path, &content)?);
+                assert!(std::fs::read_to_string(&path)?.starts_with(&owned));
+                assert!(!write_block_with(&path, &content)?);
+            } else {
+                assert!(write_block_with(&path, &content).unwrap_err().to_string().contains("maximum 4000"));
+                assert_eq!(std::fs::read(&path)?, owned.as_bytes());
+                // Removal remains possible for an already over-budget document.
+                std::fs::write(&path, &preview.after)?;
+                assert_eq!(check_state(path.clone(), "ref-block"), "stale");
+                assert!(remove_block(path.clone())?);
+                assert!(std::fs::read_to_string(&path)?.starts_with(&owned));
+            }
+        }
+        let new_path = dir.path().join("not-created/MEMORY.md");
+        assert!(write_block_with(&new_path, &"x".repeat(4000)).is_err());
+        assert!(!new_path.exists() && !new_path.parent().unwrap().exists());
+        let owned = "OWNED\r\n".repeat(700);
+        std::fs::write(&path, owned.as_bytes())?;
+        assert!(write_block_with(&path, &content).is_err());
+        assert_eq!(std::fs::read(&path)?, owned.as_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn prompt_reference_migration_matches_whole_lines_and_preserves_examples_crlf() {
+        let current = "- Memory rules (respire): /policy.md";
+        let legacy = "- 记忆铁律（respire）：/policy.md";
+        let owned = format!("USER\r\nExample: {legacy}\r\n> {legacy}\r\n`{legacy}`\r\n{legacy} suffix\r\n```text\r\n{legacy}\r\n{current}\r\n```\r\n~~~\r\n{legacy}\r\n~~~\r\n");
+        let source = format!("{owned}{legacy}\r\n{current}\r\nTAIL\r\n");
+        let migrated = rewrite_prompt_reference(&source, true, current, legacy);
+        assert_eq!(migrated, format!("{owned}{current}\r\nTAIL\r\n"));
+        assert_eq!(rewrite_prompt_reference(&migrated, true, current, legacy), migrated);
+        assert_eq!(rewrite_prompt_reference(&migrated, false, current, legacy), format!("{owned}TAIL\r\n"));
+        assert_eq!(rewrite_prompt_reference(&owned, false, current, legacy), owned);
+        let quoted = format!("quoted \"{legacy}\"\r\n");
+        assert_eq!(rewrite_prompt_reference(&quoted, true, current, legacy), format!("{quoted}{current}"));
+        let unclosed = format!("```example\r\n{legacy}\r\n");
+        assert_eq!(rewrite_prompt_reference(&unclosed, true, current, legacy), unclosed);
+    }
+
+    #[test]
+    fn prompt_reference_remove_with_only_user_quotes_does_not_write_config() -> Result<()> {
+        let _iso = crate::test_lock::Isolate::new()?;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("agent.json");
+        let legacy = format!("- 记忆铁律（respire）：{}", entity_abs()?);
+        let original = format!("{{\r\n  \"prompt_append\": {}\r\n}}\r\n", serde_json::to_string(&format!("Example: {legacy}\r\n`{legacy}`\r\n"))?);
+        std::fs::write(&path, original.as_bytes())?;
+        assert!(!patch_prompt_append(&path, false)?);
+        assert_eq!(std::fs::read(&path)?, original.as_bytes());
         Ok(())
     }
 
