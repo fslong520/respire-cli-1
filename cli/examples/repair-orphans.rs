@@ -29,9 +29,9 @@ fn main() -> Result<()> {
         .filter(|s| !all.iter().any(|p| p.id == s.local_parent_id && !p.deleted))
         .collect();
 
-    println!("🌐 孤儿对账：活跃父缺失 {} 条{}", orphans.len(), if dry { "（dry 只看不动）" } else { "" });
+    println!("🌐 \u{5b64}\u{513f}\u{5bf9}\u{8d26}\u{ff1a}\u{6d3b}\u{8dc3}\u{7236}\u{7f3a}\u{5931} {} \u{6761}{}", orphans.len(), if dry { "\u{ff08}dry \u{53ea}\u{770b}\u{4e0d}\u{52a8}\u{ff09}" } else { "" });
     if orphans.is_empty() {
-        println!("✓ 无孤儿——因果树健全");
+        println!("\u{2713} \u{65e0}\u{5b64}\u{513f}\u{2014}\u{2014}\u{56e0}\u{679c}\u{6811}\u{5065}\u{5168}");
         return Ok(());
     }
 
@@ -48,7 +48,7 @@ fn main() -> Result<()> {
         };
         match decide {
             ("reattach", full) => {
-                println!("  🔗 {} {}  假父 {} → 真父 {}", &s.id[..8], title, &s.local_parent_id[..8], &full[..8]);
+                println!("  🔗 {} {}  \u{5047}\u{7236} {} \u{2192} \u{771f}\u{7236} {}", &s.id[..8], title, &s.local_parent_id[..8], &full[..8]);
                 if !dry {
                     let mut e = entry;
                     e.parent_id = full;
@@ -60,7 +60,7 @@ fn main() -> Result<()> {
                 reattached += 1;
             }
             _ => {
-                println!("  ⬆️ {} {}  父 {} 真不存在 → 升根（自为因）", &s.id[..8], title, &s.local_parent_id[..8]);
+                println!("  \u{2b06}\u{fe0f} {} {}  \u{7236} {} \u{771f}\u{4e0d}\u{5b58}\u{5728} \u{2192} \u{5347}\u{6839}\u{ff08}\u{81ea}\u{4e3a}\u{56e0}\u{ff09}", &s.id[..8], title, &s.local_parent_id[..8]);
                 if !dry {
                     let mut e = entry;
                     e.parent_id = String::new();
@@ -74,15 +74,15 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("—— 账单：挂真父 {}，升根 {}，共 {}", reattached, promoted, reattached + promoted);
+    println!("\u{2014}\u{2014} \u{8d26}\u{5355}\u{ff1a}\u{6302}\u{771f}\u{7236} {}\u{ff0c}\u{5347}\u{6839} {}\u{ff0c}\u{5171} {}", reattached, promoted, reattached + promoted);
     if dry {
-        println!("（dry 未动库——去掉 --dry 实修）");
+        println!("\u{ff08}dry \u{672a}\u{52a8}\u{5e93}\u{2014}\u{2014}\u{53bb}\u{6389} --dry \u{5b9e}\u{4fee}\u{ff09}");
         return Ok(());
     }
     if remote_configured() {
         match build_remote_from_env().and_then(|remote| sync_all(&keys, &store, &remote)) {
-            Ok(stats) => println!("🔁 已同步：拉 {} 条，推 {} 条", stats.pulled, stats.pushed),
-            Err(e) => eprintln!("⚠️ 同步失败（本地已修，稍后 rsrs sync）: {e}"),
+            Ok(stats) => println!("🔁 \u{5df2}\u{540c}\u{6b65}\u{ff1a}\u{62c9} {} \u{6761}\u{ff0c}\u{63a8} {} \u{6761}", stats.pulled, stats.pushed),
+            Err(e) => eprintln!("\u{26a0}\u{fe0f} \u{540c}\u{6b65}\u{5931}\u{8d25}\u{ff08}\u{672c}\u{5730}\u{5df2}\u{4fee}\u{ff0c}\u{7a0d}\u{540e} rsrs sync\u{ff09}: {e}"),
         }
     }
     Ok(())

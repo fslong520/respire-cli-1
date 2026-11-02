@@ -506,7 +506,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let local = LocalStore::open(&dir.path().join("local.db"))?;
         let embedder = HashingEmbedder::default();
-        let e = entry("keep-1", "保留向量");
+        let e = entry("keep-1", "\u{4fdd}\u{7559}\u{5411}\u{91cf}");
         let stored = MemoryEngine::seal(&keys, &embedder, &e, "local")?;
         assert!(!stored.local_artifact.is_empty());
         local.put(&stored)?;
@@ -538,11 +538,11 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let local = LocalStore::open(&dir.path().join("local.db"))?;
         let embedder = HashingEmbedder::default();
-        let e = entry("chg-1", "原内容");
+        let e = entry("chg-1", "\u{539f}\u{5185}\u{5bb9}");
         let stored = MemoryEngine::seal(&keys, &embedder, &e, "local")?;
         local.put(&stored)?;
 
-        let mut changed = entry("chg-1", "被他端改过的新内容");
+        let mut changed = entry("chg-1", "\u{88ab}\u{4ed6}\u{7aef}\u{6539}\u{8fc7}\u{7684}\u{65b0}\u{5185}\u{5bb9}");
         changed.updated_at = "2027-01-01T00:00:00.000Z".to_owned();
         let mut blob = MemoryEngine::seal(&keys, &embedder, &changed, "local")?;
         blob.local_embedding = None; // Remote records carry no local feature copy.
@@ -568,23 +568,23 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let local = LocalStore::open(&dir.path().join("local.db"))?;
         let embedder = HashingEmbedder::default();
-        let e = entry("lww-1", "LWW 内容");
+        let e = entry("lww-1", "LWW \u{5185}\u{5bb9}");
         let stored = MemoryEngine::seal(&keys, &embedder, &e, "local")?;
         local.put(&stored)?;
         // Local updated_at=T; remote blob older → skip
         let mut stale = stored.clone();
         stale.updated_at = "2026-01-01T00:00:00.000Z".to_owned();
         let pulled = merge_blobs(&keys, &local, vec![stale])?;
-        assert_eq!(pulled, 0, "旧副本不得覆盖本地新状态");
+        assert_eq!(pulled, 0, "\u{65e7}\u{526f}\u{672c}\u{4e0d}\u{5f97}\u{8986}\u{76d6}\u{672c}\u{5730}\u{65b0}\u{72b6}\u{6001}");
         assert_eq!(local.all(false)?.len(), 1);
         // Remote blob newer (same id, new payload: new title, updated_at newer) → store
         let mut fresh = e.clone();
-        fresh.title = "LWW 新标题".to_owned();
+        fresh.title = "LWW \u{65b0}\u{6807}\u{9898}".to_owned();
         fresh.updated_at = "2027-01-01T00:00:00.000Z".to_owned();
         let fresh_blob = MemoryEngine::seal(&keys, &embedder, &fresh, "local")?;
         let pulled = merge_blobs(&keys, &local, vec![fresh_blob])?;
         assert_eq!(pulled, 1);
-        assert_eq!(local.all(false)?[0].local_title, "LWW 新标题");
+        assert_eq!(local.all(false)?[0].local_title, "LWW \u{65b0}\u{6807}\u{9898}");
         Ok(())
     }
 
@@ -623,10 +623,10 @@ mod tests {
 
         // Device A: write two rows
         let a = LocalStore::open(&dir.path().join("a.db"))?;
-        let e1 = entry("a-1", "Rust 所有权 内存安全");
+        let e1 = entry("a-1", "Rust \u{6240}\u{6709}\u{6743} \u{5185}\u{5b58}\u{5b89}\u{5168}");
         let s1 = MemoryEngine::seal(&keys, &embedder, &e1, "u")?;
         a.put(&s1)?;
-        let e2 = entry("a-2", "Python 数据分析");
+        let e2 = entry("a-2", "Python \u{6570}\u{636e}\u{5206}\u{6790}");
         let s2 = MemoryEngine::seal(&keys, &embedder, &e2, "u")?;
         a.put(&s2)?;
 
@@ -644,7 +644,7 @@ mod tests {
         // B can semantically recall what A wrote (HashingEmbedder vectors differ from BGE semantics,
         // Core may omit test fixtures; this checks successful recall after sync, not retrieval quality.
         let all = b.all(false)?;
-        let q = MemoryQuery::new("内存安全 借用").limit(5);
+        let q = MemoryQuery::new("\u{5185}\u{5b58}\u{5b89}\u{5168} \u{501f}\u{7528}").limit(5);
         let ranked = MemoryEngine::recall_local(&keys, &embedder, &all, &q)?;
         if !ranked.is_empty() {
             assert_eq!(ranked[0].id, "a-1");
@@ -731,7 +731,7 @@ mod tests {
         let cloud = LocalStore::open(&dir.path().join("cloud.db"))?;
         let a = LocalStore::open(&dir.path().join("a.db"))?;
         for i in 0..101 {
-            let e = entry(&format!("bulk-{i}"), &format!("批量条目 {i}"));
+            let e = entry(&format!("bulk-{i}"), &format!("\u{6279}\u{91cf}\u{6761}\u{76ee} {i}"));
             let s = MemoryEngine::seal(&keys, &embedder, &e, "u")?;
             a.put(&s)?;
         }

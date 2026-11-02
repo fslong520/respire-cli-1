@@ -57,11 +57,11 @@ fn seed(metadata: bool) -> Result<respire::MemoryEntry> {
     app.store.meta_set("memory_metadata_v1_enabled", "1")?;
     let _defer = respire::core_sdk::defer_indexing();
     let mut entry = app.create(&respire::service::CreateReq {
-        title: "briefneedle 保留完整标题".into(),
-        content: "briefneedle 原文含 emoji 🧪 和组合字符 e\u{301}。".into(),
+        title: "briefneedle \u{4fdd}\u{7559}\u{5b8c}\u{6574}\u{6807}\u{9898}".into(),
+        content: "briefneedle \u{539f}\u{6587}\u{542b} emoji 🧪 \u{548c}\u{7ec4}\u{5408}\u{5b57}\u{7b26} e\u{301}\u{3002}".into(),
         importance: Some("important".into()),
         metadata: if metadata {
-            serde_json::from_value(json!({"memory_contract":1,"summary":"短摘要"}))?
+            serde_json::from_value(json!({"memory_contract":1,"summary":"\u{77ed}\u{6458}\u{8981}"}))?
         } else {
             Default::default()
         },
@@ -116,7 +116,7 @@ fn metadata_brief_preserves_complete_unicode_source_without_authority() -> Resul
 }
 
 fn layout(chars: usize) -> Value {
-    json!({"budget_chars":chars,"prefix_by_count":["","【自定】\n"],"separator":"\n\n","suffix":"\nEND","items":[]})
+    json!({"budget_chars":chars,"prefix_by_count":["","\u{3010}\u{81ea}\u{5b9a}\u{3011}\n"],"separator":"\n\n","suffix":"\nEND","items":[]})
 }
 
 fn budget_recall(layout: &Value, min_score: Option<&str>) -> Result<crate::output::ResultEnvelope> {

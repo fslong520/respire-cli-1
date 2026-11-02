@@ -129,7 +129,7 @@ pub fn build_body(session: &Session) -> String {
 
     let mut body = String::new();
     body.push_str(&format!(
-        "【Cause】{} session {}. Started {}; working directory {}; model {}.",
+        "\u{3010}Cause\u{3011}{} session {}. Started {}; working directory {}; model {}.",
         platform_label(&session.platform),
         short_id(&session.id),
         scrub(created),
@@ -139,7 +139,7 @@ pub fn build_body(session: &Session) -> String {
 
     let first_raw = session.first_user_message.trim();
     let first = truncate_chars(&scrub(first_raw), 600);
-    body.push_str("\n【Action】");
+    body.push_str("\n\u{3010}Action\u{3011}");
     if first.is_empty() {
         body.push_str("(no user message recorded)");
     } else {
@@ -153,7 +153,7 @@ pub fn build_body(session: &Session) -> String {
         ));
     }
 
-    body.push_str(&format!("\n【Result】Session updated at {}.", scrub(updated)));
+    body.push_str(&format!("\n\u{3010}Result\u{3011}Session updated at {}.", scrub(updated)));
     if let Some(line) = usage_line(&session.usage) {
         body.push(' ');
         body.push_str(&line);
@@ -229,7 +229,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
         text.to_owned()
     } else {
         let mut out: String = text.chars().take(max).collect();
-        out.push('…');
+        out.push('\u{2026}');
         out
     }
 }
@@ -290,11 +290,11 @@ const SECRET_KEYS: [&str; 17] = [
     "bearer",
     "credential",
     "client_secret",
-    "密码",
-    "口令",
-    "密钥",
-    "令牌",
-    "凭证",
+    "\u{5bc6}\u{7801}",
+    "\u{53e3}\u{4ee4}",
+    "\u{5bc6}\u{94a5}",
+    "\u{4ee4}\u{724c}",
+    "\u{51ed}\u{8bc1}",
 ];
 
 fn redact_line(line: &str) -> String {
@@ -319,7 +319,7 @@ fn redact_key_value(line: &str) -> Option<String> {
             let separator = trimmed
                 .chars()
                 .next()
-                .filter(|c| matches!(*c, '=' | ':' | '：'));
+                .filter(|c| matches!(*c, '=' | ':' | '\u{ff1a}'));
             let index = if let Some(separator) = separator {
                 line.len() - (trimmed.len() - separator.len_utf8())
             } else if line[..pos].ends_with("--") {
@@ -451,27 +451,27 @@ mod tests {
     fn english_scaffold_preserves_chinese_user_data_and_input_version() {
         let mut session = sample();
         session.platform = "hermes".into();
-        session.first_user_message = "保留用户中文与【前因】原始引用".into();
-        session.last_user_message = "保留混合【Result】原文".into();
+        session.first_user_message = "\u{4fdd}\u{7559}\u{7528}\u{6237}\u{4e2d}\u{6587}\u{4e0e}\u{3010}\u{524d}\u{56e0}\u{3011}\u{539f}\u{59cb}\u{5f15}\u{7528}".into();
+        session.last_user_message = "\u{4fdd}\u{7559}\u{6df7}\u{5408}\u{3010}Result\u{3011}\u{539f}\u{6587}".into();
         let fingerprint = session.content_fingerprint();
         let entry = session_entry(&session, &ConvertOptions::default());
         assert_eq!(fingerprint, session.content_fingerprint());
         assert_eq!(entry.id, session_id(&session.key()));
-        assert_eq!(entry.title, "Hermes session 保留用户中文与【前因】原始引用");
-        assert!(entry.content.starts_with("【Cause】Hermes session"));
-        assert!(entry.content.contains("\n【Action】保留用户中文与【前因】原始引用"));
-        assert!(entry.content.contains("\nLast request: 保留混合【Result】原文"));
-        assert!(entry.content.contains("\n【Result】Session updated at"));
+        assert_eq!(entry.title, "Hermes session \u{4fdd}\u{7559}\u{7528}\u{6237}\u{4e2d}\u{6587}\u{4e0e}\u{3010}\u{524d}\u{56e0}\u{3011}\u{539f}\u{59cb}\u{5f15}\u{7528}");
+        assert!(entry.content.starts_with("\u{3010}Cause\u{3011}Hermes session"));
+        assert!(entry.content.contains("\n\u{3010}Action\u{3011}\u{4fdd}\u{7559}\u{7528}\u{6237}\u{4e2d}\u{6587}\u{4e0e}\u{3010}\u{524d}\u{56e0}\u{3011}\u{539f}\u{59cb}\u{5f15}\u{7528}"));
+        assert!(entry.content.contains("\nLast request: \u{4fdd}\u{7559}\u{6df7}\u{5408}\u{3010}Result\u{3011}\u{539f}\u{6587}"));
+        assert!(entry.content.contains("\n\u{3010}Result\u{3011}Session updated at"));
         assert_eq!(entry.importance, "important");
-        assert_eq!(scrub("说明中文保持；密码：fixture-secret"), "说明中文保持；密码： ***");
+        assert_eq!(scrub("\u{8bf4}\u{660e}\u{4e2d}\u{6587}\u{4fdd}\u{6301}\u{ff1b}\u{5bc6}\u{7801}\u{ff1a}fixture-secret"), "\u{8bf4}\u{660e}\u{4e2d}\u{6587}\u{4fdd}\u{6301}\u{ff1b}\u{5bc6}\u{7801}\u{ff1a} ***");
     }
 
     #[test]
     fn builds_entry_with_three_markers_and_metadata() {
         let entry = session_entry(&sample(), &ConvertOptions::default());
-        assert!(entry.content.contains("【Cause】"));
-        assert!(entry.content.contains("【Action】"));
-        assert!(entry.content.contains("【Result】"));
+        assert!(entry.content.contains("\u{3010}Cause\u{3011}"));
+        assert!(entry.content.contains("\u{3010}Action\u{3011}"));
+        assert!(entry.content.contains("\u{3010}Result\u{3011}"));
         assert_eq!(entry.project, "respire");
         assert_eq!(entry.importance, "important");
         assert!(entry.title.starts_with("Codex session"));
@@ -502,8 +502,8 @@ mod tests {
     #[test]
     fn redact_only_when_keyword_adjoins_separator() {
         assert_eq!(
-            scrub("会话更新于 2026-10-01T02:03:00Z"),
-            "会话更新于 2026-10-01T02:03:00Z"
+            scrub("\u{4f1a}\u{8bdd}\u{66f4}\u{65b0}\u{4e8e} 2026-10-01T02:03:00Z"),
+            "\u{4f1a}\u{8bdd}\u{66f4}\u{65b0}\u{4e8e} 2026-10-01T02:03:00Z"
         );
         assert_eq!(
             scrub("fix the token refresh bug: now"),
@@ -511,7 +511,7 @@ mod tests {
         );
         assert!(scrub("token=abcd1234").contains("***"));
         assert!(scrub("api_key: abcd1234").contains("***"));
-        assert!(scrub("密码：hunter2").contains("***"));
+        assert!(scrub("\u{5bc6}\u{7801}\u{ff1a}hunter2").contains("***"));
     }
 
     #[test]

@@ -47,7 +47,7 @@ impl LibraryLock {
                     let waited = began.elapsed();
                     if waited >= max_wait {
                         anyhow::bail!(
-                            "memory library still locked after {}s — check the holding process or retry later",
+                            "memory library still locked after {}s \u{2014} check the holding process or retry later",
                             waited.as_secs()
                         );
                     }

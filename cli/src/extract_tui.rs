@@ -111,7 +111,7 @@ impl App {
         self.done = 0;
         self.total = 0;
         self.phase = "scanning".to_owned();
-        self.log_line(format!("extracting {} source(s)…", ids.len()), ACCENT);
+        self.log_line(format!("extracting {} source(s)\u{2026}", ids.len()), ACCENT);
         spawn_worker(ids, sender);
     }
 

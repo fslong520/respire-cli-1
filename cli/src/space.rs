@@ -512,7 +512,7 @@ mod tests {
             "main is a valid switch target; create forbids it separately"
         );
         assert!(validate_space_name("").is_err());
-        assert!(validate_space_name("有中文").is_err());
+        assert!(validate_space_name("\u{6709}\u{4e2d}\u{6587}").is_err());
         assert!(
             validate_space_name("a/b").is_err(),
             "path traversal is forbidden"

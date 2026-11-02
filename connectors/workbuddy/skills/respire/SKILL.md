@@ -12,7 +12,7 @@ rsrs is the user's long-term memory store. The WorkBuddy connector talks to it o
 - Use MCP tools (`memory_recall`, `memory_remember`, `memory_show`, `memory_update`, `memory_attach`, `memory_list`, `memory_tree`, `memory_history`, `memory_diary`, `memory_chain`, `memory_query_log_mark`, `memory_forget`, `memory_restore`, `memory_taxonomy`, `memory_status`).
 - Do not run `rsrs`, `rsrs.cmd`, `npx @rsrsai/cli`, or any npm wrapper in Bash. Default sandbox blocks `~/.rsrs`, the model directory, and the npm shim.
 - Opening full access is not the normal fix.
-- First tool in a turn is `memory_recall`. If it fails, say `recall 失败：<因>` in the first line.
+- First tool in a turn is `memory_recall`. If it fails, say `recall failed: <cause>` in the first line.
 
 ## HTTP fallback (Codex and other hosts)
 
@@ -24,7 +24,7 @@ Do not fall back to sandboxed CLI.
 
 ## How to remember
 
-Prefer update/merge/attach over a new root. Body uses `【前因】` `【行为】` `【后果】`. Pass `title`, extracted from the body facts (subject + action + key entity or result, 12–24 chars) — never a bare topic label. Important reusable facts use `importance=important`. Diary trivia uses `importance=trivial`. After `memory_recall`, mark useful hits with `memory_query_log_mark` (`good` or `bad`).
+Prefer update/merge/attach over a new root. Body uses the cause/action/result three markers. Pass `title`, extracted from the body facts (subject + action + key entity or result, 12–24 chars) — never a bare topic label. Important reusable facts use `importance=important`. Diary trivia uses `importance=trivial`. After `memory_recall`, mark useful hits with `memory_query_log_mark` (`good` or `bad`).
 
 ## Login
 

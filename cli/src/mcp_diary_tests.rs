@@ -87,12 +87,12 @@ fn diary_tools_schema_arguments_and_strict_bounds() -> Result<(), String> {
         )
         .is_err());
     }
-    for query in [" ".to_owned(), "中".repeat(501)] {
+    for query in [" ".to_owned(), "\u{4e2d}".repeat(501)] {
         assert!(tool_argv("memory_diary_search", &serde_json::json!({"query":query})).is_err());
     }
     assert!(tool_argv(
         "memory_diary_search",
-        &serde_json::json!({"query":"中".repeat(500)})
+        &serde_json::json!({"query":"\u{4e2d}".repeat(500)})
     )
     .is_ok());
     assert!(tool_argv(

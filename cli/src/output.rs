@@ -186,12 +186,12 @@ impl ResultEnvelope {
                 if task["active"] == true {
                     return model_task_text(task);
                 }
-                return if zh { "已安排后台准备" } else { "Background preparation scheduled" }.to_owned();
+                return if zh { "\u{5df2}\u{5b89}\u{6392}\u{540e}\u{53f0}\u{51c6}\u{5907}" } else { "Background preparation scheduled" }.to_owned();
             }
             if item.name == "model index" && item.value.starts_with("BGE-M3 index pending;") {
                 let index = &self.details["retrieval_index"];
                 let state = index["state"].as_str().unwrap_or("pending");
-                let mut text = format!("{}: {}", if zh { "后台索引" } else { "Background index" }, task_phase(state));
+                let mut text = format!("{}: {}", if zh { "\u{540e}\u{53f0}\u{7d22}\u{5f15}" } else { "Background index" }, task_phase(state));
                 if let Some(error) = index["error"].as_str() {
                     text.push_str(&format!("; {error}"));
                 }
@@ -213,7 +213,7 @@ pub(crate) fn model_task_text(task: &Value) -> String {
     } else if total > 0 {
         format!("{:.1}% ({done}/{total})", done as f64 / total as f64 * 100.0)
     } else {
-        if zh { "等待进度" } else { "waiting for progress" }.to_owned()
+        if zh { "\u{7b49}\u{5f85}\u{8fdb}\u{5ea6}" } else { "waiting for progress" }.to_owned()
     };
     format!("{} {} {}", task_phase(phase), progress,
         task["item"].as_str().unwrap_or("")).trim_end().to_owned()
@@ -224,18 +224,18 @@ fn task_phase(phase: &str) -> String {
         return phase.to_owned();
     }
     match phase {
-        "download" => "下载中",
-        "connect" => "连接下载源",
-        "prepare" => "准备模型",
-        "index-load" => "加载索引模型",
-        "verify" => "校验中",
-        "index" => "重建索引",
-        "load" => "加载模型",
-        "running" => "处理中",
-        "scheduled" | "pending" => "等待处理",
-        "failed" => "失败",
-        "ready" => "就绪",
-        "unknown" => "未知",
+        "download" => "\u{4e0b}\u{8f7d}\u{4e2d}",
+        "connect" => "\u{8fde}\u{63a5}\u{4e0b}\u{8f7d}\u{6e90}",
+        "prepare" => "\u{51c6}\u{5907}\u{6a21}\u{578b}",
+        "index-load" => "\u{52a0}\u{8f7d}\u{7d22}\u{5f15}\u{6a21}\u{578b}",
+        "verify" => "\u{6821}\u{9a8c}\u{4e2d}",
+        "index" => "\u{91cd}\u{5efa}\u{7d22}\u{5f15}",
+        "load" => "\u{52a0}\u{8f7d}\u{6a21}\u{578b}",
+        "running" => "\u{5904}\u{7406}\u{4e2d}",
+        "scheduled" | "pending" => "\u{7b49}\u{5f85}\u{5904}\u{7406}",
+        "failed" => "\u{5931}\u{8d25}",
+        "ready" => "\u{5c31}\u{7eea}",
+        "unknown" => "\u{672a}\u{77e5}",
         other => other,
     }.to_owned()
 }
@@ -249,7 +249,7 @@ pub fn related_value(related: &respire::memory::model::RelatedMemory) -> String 
         RelationKind::CoRecall => "co-recall",
         RelationKind::Neighbor => "neighbor",
     };
-    format!("≈ {label} {}", related.title)
+    format!("\u{2248} {label} {}", related.title)
 }
 
 /// Remove persistence and credential material before a result crosses the
@@ -337,7 +337,7 @@ fn humanize_value(raw: &str) -> String {
     }
     if let Some((total, active)) = split_ends(trimmed, " total / ", " active") {
         return if crate::i18n::lang() == crate::i18n::Lang::Zh {
-            format!("总数 {total} / 有效 {active}")
+            format!("\u{603b}\u{6570} {total} / \u{6709}\u{6548} {active}")
         } else {
             format!("total {total} / active {active}")
         };
@@ -345,7 +345,7 @@ fn humanize_value(raw: &str) -> String {
     if let Some(rest) = trimmed.strip_prefix("pulled ") {
         if let Some((pulled, pushed)) = rest.split_once(" / pushed ") {
             return if crate::i18n::lang() == crate::i18n::Lang::Zh {
-                format!("下载 {pulled} / 上传 {pushed}")
+                format!("\u{4e0b}\u{8f7d} {pulled} / \u{4e0a}\u{4f20} {pushed}")
             } else {
                 format!("pulled {pulled} / pushed {pushed}")
             };
@@ -359,7 +359,7 @@ fn humanize_value(raw: &str) -> String {
             let index = parts[3].strip_prefix("index ").unwrap_or(parts[3]);
             return if crate::i18n::lang() == crate::i18n::Lang::Zh {
                 format!(
-                    "待推送 {} / 冲突 {conflicts} / 解密 {decrypt} / 嵌入 {index}",
+                    "\u{5f85}\u{63a8}\u{9001} {} / \u{51b2}\u{7a81} {conflicts} / \u{89e3}\u{5bc6} {decrypt} / \u{5d4c}\u{5165} {index}",
                     parts[0]
                 )
             } else {
@@ -420,56 +420,56 @@ fn known_phrase(text: &str) -> Option<String> {
         match text {
             "converged" => {
                 if zh {
-                    "已对齐"
+                    "\u{5df2}\u{5bf9}\u{9f50}"
                 } else {
                     "converged"
                 }
             }
             "not-converged" => {
                 if zh {
-                    "未对齐"
+                    "\u{672a}\u{5bf9}\u{9f50}"
                 } else {
                     "not converged"
                 }
             }
             "active-count-diff" => {
                 if zh {
-                    "有效条数不一致"
+                    "\u{6709}\u{6548}\u{6761}\u{6570}\u{4e0d}\u{4e00}\u{81f4}"
                 } else {
                     "active count differs"
                 }
             }
             "cloud sync (auto)" => {
                 if zh {
-                    "云同步（自动）"
+                    "\u{4e91}\u{540c}\u{6b65}\u{ff08}\u{81ea}\u{52a8}\u{ff09}"
                 } else {
                     "cloud sync (auto)"
                 }
             }
             "cloud sync (manual)" => {
                 if zh {
-                    "云同步（手动）"
+                    "\u{4e91}\u{540c}\u{6b65}\u{ff08}\u{624b}\u{52a8}\u{ff09}"
                 } else {
                     "cloud sync (manual)"
                 }
             }
             "local authority store (offline)" => {
                 if zh {
-                    "本地库（离线）"
+                    "\u{672c}\u{5730}\u{5e93}\u{ff08}\u{79bb}\u{7ebf}\u{ff09}"
                 } else {
                     "local store (offline)"
                 }
             }
             "reset" => {
                 if zh {
-                    "已重置"
+                    "\u{5df2}\u{91cd}\u{7f6e}"
                 } else {
                     "reset"
                 }
             }
             "kept" => {
                 if zh {
-                    "保留"
+                    "\u{4fdd}\u{7559}"
                 } else {
                     "kept"
                 }
@@ -658,11 +658,11 @@ mod tests {
         let table = render_table(
             &["NAME", "VALUE"],
             &[
-                vec!["中文".into(), "one\ntwo".into()],
+                vec!["\u{4e2d}\u{6587}".into(), "one\ntwo".into()],
                 vec!["a".into(), "plain".into()],
             ],
         );
-        assert!(table.contains("中文  one two"));
+        assert!(table.contains("\u{4e2d}\u{6587}  one two"));
         assert!(table.contains("a     plain"));
         assert_eq!(table.lines().count(), 3);
     }
@@ -735,7 +735,7 @@ mod tests {
         anyhow::ensure!(pending.contains("waiting for progress") && pending.contains("download failed"), "{pending}");
         std::env::set_var("RSRS_LANG", "zh");
         let chinese = result.render(false)?;
-        anyhow::ensure!(chinese.contains("下载中") && chinese.contains("等待进度") && chinese.contains("后台索引"), "{chinese}");
+        anyhow::ensure!(chinese.contains("\u{4e0b}\u{8f7d}\u{4e2d}") && chinese.contains("\u{7b49}\u{5f85}\u{8fdb}\u{5ea6}") && chinese.contains("\u{540e}\u{53f0}\u{7d22}\u{5f15}"), "{chinese}");
         restore_lang(prev);
         assert!(!text.contains("SUMMARY") && !text.contains("ACTION"));
         assert!(text.contains("session") && text.contains("missing"));
@@ -808,23 +808,23 @@ mod tests {
         );
         anyhow::ensure!(nested.iter().any(|row| row[1] == "2"), "{nested:?}");
         std::env::set_var("RSRS_LANG", "zh");
-        anyhow::ensure!(humanize_value("converged") == "已对齐");
-        anyhow::ensure!(humanize_value("12 total / 3 active").contains("总数"));
-        anyhow::ensure!(humanize_value("pulled 1 / pushed 2").contains("下载"));
+        anyhow::ensure!(humanize_value("converged") == "\u{5df2}\u{5bf9}\u{9f50}");
+        anyhow::ensure!(humanize_value("12 total / 3 active").contains("\u{603b}\u{6570}"));
+        anyhow::ensure!(humanize_value("pulled 1 / pushed 2").contains("\u{4e0b}\u{8f7d}"));
         anyhow::ensure!(
-            humanize_value("send 0 / conflicts 1 / decrypt 2 / index 3").contains("待推送")
+            humanize_value("send 0 / conflicts 1 / decrypt 2 / index 3").contains("\u{5f85}\u{63a8}\u{9001}")
         );
-        anyhow::ensure!(humanize_value("not-converged") == "未对齐");
-        anyhow::ensure!(humanize_value("active-count-diff").contains("不一致"));
-        anyhow::ensure!(humanize_value("cloud sync (auto)").contains("自动"));
-        anyhow::ensure!(humanize_value("cloud sync (manual)").contains("手动"));
-        anyhow::ensure!(humanize_value("local authority store (offline)").contains("离线"));
-        anyhow::ensure!(humanize_value("reset") == "已重置");
-        anyhow::ensure!(humanize_value("kept") == "保留");
+        anyhow::ensure!(humanize_value("not-converged") == "\u{672a}\u{5bf9}\u{9f50}");
+        anyhow::ensure!(humanize_value("active-count-diff").contains("\u{4e0d}\u{4e00}\u{81f4}"));
+        anyhow::ensure!(humanize_value("cloud sync (auto)").contains("\u{81ea}\u{52a8}"));
+        anyhow::ensure!(humanize_value("cloud sync (manual)").contains("\u{624b}\u{52a8}"));
+        anyhow::ensure!(humanize_value("local authority store (offline)").contains("\u{79bb}\u{7ebf}"));
+        anyhow::ensure!(humanize_value("reset") == "\u{5df2}\u{91cd}\u{7f6e}");
+        anyhow::ensure!(humanize_value("kept") == "\u{4fdd}\u{7559}");
         let mut result = ResultEnvelope::new("sync", Status::Ok, serde_json::json!({}), vec![]);
         result.actions.push("reembed".into());
         let text = result.render(false)?;
-        anyhow::ensure!(text.contains("动作"), "{text}");
+        anyhow::ensure!(text.contains("\u{52a8}\u{4f5c}"), "{text}");
         anyhow::ensure!(!text.contains('{'), "{text}");
         std::env::set_var("RSRS_LANG", "en");
         let text = result.render(false)?;

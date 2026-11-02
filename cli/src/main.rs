@@ -107,7 +107,7 @@ fn run_sync_attempts<T>(mut once: impl FnMut() -> Result<T>) -> Result<T> {
         match once() {
             Ok(value) => return Ok(value),
             Err(err) if attempt + 1 < SYNC_ATTEMPTS && is_retriable_sync_error(&err) => {
-                progress::phase("同步连接失败；等待重试", "Sync connection failed; waiting to retry");
+                progress::phase("\u{540c}\u{6b65}\u{8fde}\u{63a5}\u{5931}\u{8d25}\u{ff1b}\u{7b49}\u{5f85}\u{91cd}\u{8bd5}", "Sync connection failed; waiting to retry");
                 let pause = if cfg!(test) {
                     std::time::Duration::from_millis(0)
                 } else {
@@ -130,13 +130,13 @@ struct RuntimeSyncControl {
 impl respire::sync::SyncControl for RuntimeSyncControl {
     fn progress(&self, phase: &str) {
         match phase {
-            "capabilities" => progress::phase("协商同步协议；等待服务器", "Negotiating sync protocol; waiting for server"),
-            "pull" => progress::phase("下载变更；等待服务器", "Downloading changes; waiting for server"),
-            "push" => progress::phase("上传变更；等待服务器确认", "Uploading changes; waiting for server acknowledgement"),
-            "apply" => progress::phase("保存同步数据", "Saving synchronized data"),
-            "materialize" => progress::phase("解密同步数据", "Decrypting synchronized data"),
-            "conflicts" => progress::phase("检查同步冲突", "Checking sync conflicts"),
-            "verify" => progress::phase("核对同步结果", "Verifying sync result"),
+            "capabilities" => progress::phase("\u{534f}\u{5546}\u{540c}\u{6b65}\u{534f}\u{8bae}\u{ff1b}\u{7b49}\u{5f85}\u{670d}\u{52a1}\u{5668}", "Negotiating sync protocol; waiting for server"),
+            "pull" => progress::phase("\u{4e0b}\u{8f7d}\u{53d8}\u{66f4}\u{ff1b}\u{7b49}\u{5f85}\u{670d}\u{52a1}\u{5668}", "Downloading changes; waiting for server"),
+            "push" => progress::phase("\u{4e0a}\u{4f20}\u{53d8}\u{66f4}\u{ff1b}\u{7b49}\u{5f85}\u{670d}\u{52a1}\u{5668}\u{786e}\u{8ba4}", "Uploading changes; waiting for server acknowledgement"),
+            "apply" => progress::phase("\u{4fdd}\u{5b58}\u{540c}\u{6b65}\u{6570}\u{636e}", "Saving synchronized data"),
+            "materialize" => progress::phase("\u{89e3}\u{5bc6}\u{540c}\u{6b65}\u{6570}\u{636e}", "Decrypting synchronized data"),
+            "conflicts" => progress::phase("\u{68c0}\u{67e5}\u{540c}\u{6b65}\u{51b2}\u{7a81}", "Checking sync conflicts"),
+            "verify" => progress::phase("\u{6838}\u{5bf9}\u{540c}\u{6b65}\u{7ed3}\u{679c}", "Verifying sync result"),
             _ => {}
         }
     }
@@ -551,7 +551,7 @@ fn candidates_count_normal(all: &[respire::StoredMemory]) -> usize {
 #[command(
     name = "rsrs",
     version = crate::app_version::clap_version(),
-    about = "跨设备跨软件统一 AI 记忆系统（local-first）",
+    about = "\u{8de8}\u{8bbe}\u{5907}\u{8de8}\u{8f6f}\u{4ef6}\u{7edf}\u{4e00} AI \u{8bb0}\u{5fc6}\u{7cfb}\u{7edf}\u{ff08}local-first\u{ff09}",
     after_help = "Sandbox: use --client-only or RSRS_CLIENT_ONLY=1 to connect to the host HTTP runtime without managing its lifecycle."
 )]
 struct Cli {
@@ -611,7 +611,7 @@ enum ModelAction {
         #[arg(long, value_parser = ["m3"])]
         model: Option<String>,
         /// Text to compare against the CPU baseline, including long-input checks.
-        #[arg(long, default_value = "本地推理引擎验证：记忆检索")]
+        #[arg(long, default_value = "\u{672c}\u{5730}\u{63a8}\u{7406}\u{5f15}\u{64ce}\u{9a8c}\u{8bc1}\u{ff1a}\u{8bb0}\u{5fc6}\u{68c0}\u{7d22}")]
         text: String,
     },
     /// Delete the user-installed BGE-M3 files.
@@ -1677,7 +1677,7 @@ fn note_write_maintenance() -> Option<String> {
     match respire::service::counter_bump(&respire::service::maintenance_path()) {
         Ok((n, t)) if n >= t => {
             let mut notes = vec![format!(
-                "TIDY {n} new entries since last tidy (>= threshold {t}) - AI should judge whether to run the §3.8 three-round tidy now (a successful resort --go resets the counter)"
+                "TIDY {n} new entries since last tidy (>= threshold {t}) - AI should judge whether to run the \u{a7}3.8 three-round tidy now (a successful resort --go resets the counter)"
             )];
             if let Some(h) = respire::update_check::hint(false) {
                 notes.push(h);
@@ -2384,7 +2384,7 @@ fn run_extract(
     let outcome = respire::session_import::import_entries(
         &mut entries,
         parent,
-        |done, total| progress::phase_count("写入记忆", "Storing memories", done, total),
+        |done, total| progress::phase_count("\u{5199}\u{5165}\u{8bb0}\u{5fc6}", "Storing memories", done, total),
         |start, completed| {
             for (offset, ok) in completed.iter().enumerate() {
                 if *ok {
@@ -2710,7 +2710,7 @@ fn run_run_log(id: &str, status: &str, note: &str) -> Result<()> {
             respire::service::short_id(&full),
             OutputStatus::Ok,
             format!(
-                "{status} · ok {} / fail {} / confounded {} / no_effect {}",
+                "{status} \u{b7} ok {} / fail {} / confounded {} / no_effect {}",
                 stats.ok, stats.fail, stats.confounded, stats.no_effect
             ),
         )],
@@ -2989,7 +2989,7 @@ fn run_bench_run(
     let mut latency = Vec::new();
     let mut selector_fallbacks = 0usize;
     for (i, c) in cases.iter().enumerate() {
-        progress::phase(&format!("评估召回 {}/{}", i + 1, cases.len()), &format!("Evaluating recall {}/{}", i + 1, cases.len()));
+        progress::phase(&format!("\u{8bc4}\u{4f30}\u{53ec}\u{56de} {}/{}", i + 1, cases.len()), &format!("Evaluating recall {}/{}", i + 1, cases.len()));
         let mut q = MemoryQuery::new(&c.query).limit(topk);
         if let Some(p) = &c.project {
             if !p.is_empty() {
@@ -3636,7 +3636,7 @@ fn run_audit(json_flag: bool) -> Result<()> {
     // 4. Truncated titles: title is a prefix of the body AND the cut is **mid-word** (next char is not a separator).
     //    "title is a body prefix" alone false-positives - tree roots (CATALOG title + gist) and
     //    entries whose body starts with the title are both prefix-matches with a complete title.
-    const TITLE_SEP: &str = "：:，,。.、；;？！!）)】」』\"“” \n\t--/|（(【《「『";
+    const TITLE_SEP: &str = "\u{ff1a}:\u{ff0c},\u{3002}.\u{3001}\u{ff1b};\u{ff1f}\u{ff01}!\u{ff09})\u{3011}\u{300d}\u{300f}\"\u{201c}\u{201d} \n\t--/|\u{ff08}(\u{3010}\u{300a}\u{300c}\u{300e}";
     let truncated: Vec<&&respire::StoredMemory> = active
         .iter()
         .filter(|m| {
@@ -4820,7 +4820,7 @@ fn run_update_check(force: bool, clear: bool) -> Result<()> {
 /// Self-check (OpenViking doctor absorbed): model/store/lock/remote/inject/scope in one pass.
 /// --remote also probes server /health. Per-item ok/fail; exit code stays 0 (diagnosis is not failure).
 fn run_doctor(check_remote: bool, check_update: bool, fix: bool) -> Result<()> {
-    progress::phase("检查本地数据和文件", "Checking local data and files");
+    progress::phase("\u{68c0}\u{67e5}\u{672c}\u{5730}\u{6570}\u{636e}\u{548c}\u{6587}\u{4ef6}", "Checking local data and files");
     let mut items: Vec<(String, bool, String)> = Vec::new();
     let mut model_warnings = Vec::new();
     let add = |items: &mut Vec<(String, bool, String)>, name: &str, ok: bool, note: String| {
@@ -4890,7 +4890,7 @@ fn run_doctor(check_remote: bool, check_update: bool, fix: bool) -> Result<()> {
     );
 
     // 2) session (can we unlock)
-    progress::phase("检查账户和解密密钥", "Checking account and decryption keys");
+    progress::phase("\u{68c0}\u{67e5}\u{8d26}\u{6237}\u{548c}\u{89e3}\u{5bc6}\u{5bc6}\u{94a5}", "Checking account and decryption keys");
     match auth::load_local_session() {
         Ok(_) => add(
             &mut items,
@@ -4905,7 +4905,7 @@ fn run_doctor(check_remote: bool, check_update: bool, fix: bool) -> Result<()> {
     // while it downloads, or wait here while holding its foreground command slot.
     let store = build_local()?;
     let active_model = store.retrieval_model()?;
-    progress::phase("检查模型和索引", "Checking model and index");
+    progress::phase("\u{68c0}\u{67e5}\u{6a21}\u{578b}\u{548c}\u{7d22}\u{5f15}", "Checking model and index");
     let pending_index = store.index_pending(&active_model);
     let model_task = respire::model_progress::status()?;
     let model_busy = model_task["active"].as_bool() == Some(true);
@@ -4942,7 +4942,7 @@ fn run_doctor(check_remote: bool, check_update: bool, fix: bool) -> Result<()> {
                 );
             }
             Err(_) => {
-                progress::phase("下载 BGE-M3 模型", "Downloading BGE-M3 model");
+                progress::phase("\u{4e0b}\u{8f7d} BGE-M3 \u{6a21}\u{578b}", "Downloading BGE-M3 model");
                 let mirror = respire::model_install::mirror_from_env();
                 let install = respire::model_install::install_m3(mirror.as_deref());
                 match install {
@@ -4998,7 +4998,7 @@ fn run_doctor(check_remote: bool, check_update: bool, fix: bool) -> Result<()> {
 
     // 5) remote (config + optional reachability)
     let configured = remote_configured();
-    progress::phase("检查服务器连接；等待响应", "Checking server connection; waiting for response");
+    progress::phase("\u{68c0}\u{67e5}\u{670d}\u{52a1}\u{5668}\u{8fde}\u{63a5}\u{ff1b}\u{7b49}\u{5f85}\u{54cd}\u{5e94}", "Checking server connection; waiting for response");
     if configured {
         let (addr, _tok) = remote_config_from_session_or_env()?.unwrap_or_default();
         if check_remote {
@@ -5037,7 +5037,7 @@ fn run_doctor(check_remote: bool, check_update: bool, fix: bool) -> Result<()> {
     }
 
     // 6) inject status
-    progress::phase("检查工具注入状态", "Checking tool injection status");
+    progress::phase("\u{68c0}\u{67e5}\u{5de5}\u{5177}\u{6ce8}\u{5165}\u{72b6}\u{6001}", "Checking tool injection status");
     match respire::inject::targets() {
         Ok(ts) => {
             let fresh = ts.iter().filter(|t| t.state == "fresh").count();
@@ -5089,7 +5089,7 @@ fn run_doctor(check_remote: bool, check_update: bool, fix: bool) -> Result<()> {
     // 9) CLI version (--check-update or RSRS_UPDATE_CHECK=1 hits the network; default reads cache, no network)
     //    Doctor must not stall on the network, so it does not force a query - report known result, hint how to check if no cache.
     if respire::update_check::enabled() {
-        progress::phase("检查 CLI 版本；等待版本源", "Checking CLI version; waiting for version registry");
+        progress::phase("\u{68c0}\u{67e5} CLI \u{7248}\u{672c}\u{ff1b}\u{7b49}\u{5f85}\u{7248}\u{672c}\u{6e90}", "Checking CLI version; waiting for version registry");
         let force = check_update;
         match respire::update_check::check(force) {
             Some(s) if s.outdated => add(
@@ -6702,7 +6702,7 @@ fn run(args: Cli) -> Result<()> {
     }
     if matches!(args.command, Some(Command::Model { action: ModelAction::InstallEngines })) {
         runtime_policy::require_host("inference engine installation")?;
-        progress::phase("安装推理引擎；等待 Windows ML", "Installing inference providers; waiting for Windows ML");
+        progress::phase("\u{5b89}\u{88c5}\u{63a8}\u{7406}\u{5f15}\u{64ce}\u{ff1b}\u{7b49}\u{5f85} Windows ML", "Installing inference providers; waiting for Windows ML");
         let mut providers = Vec::new();
         rpc::change_profile(|| { providers = respire::model_install::install_engines()?; Ok(()) })?;
         return emit_result(ResultEnvelope::new("model", OutputStatus::Ok,
@@ -6868,7 +6868,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
         return run_memory_revision();
     }
     // The runtime worker already holds lock.db for the process lifetime.
-    progress::phase("打开本地库；等待数据库锁", "Opening local library; waiting for database lock");
+    progress::phase("\u{6253}\u{5f00}\u{672c}\u{5730}\u{5e93}\u{ff1b}\u{7b49}\u{5f85}\u{6570}\u{636e}\u{5e93}\u{9501}", "Opening local library; waiting for database lock");
     let _library_lock = if rpc::worker_active() {
         None
     } else {
@@ -6880,7 +6880,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
     // A direct caller can wait here while a restore installs maintenance. The
     // pre-dispatch check cannot authorize a mutation after that ownership wait.
     respire_app::snapshot::ensure_no_incomplete_restore(&respire::service::data_dir())?;
-    progress::phase("执行本地操作", "Executing local operation");
+    progress::phase("\u{6267}\u{884c}\u{672c}\u{5730}\u{64cd}\u{4f5c}", "Executing local operation");
     autostart::check_direct_access()?;
     // -- Read-only gate (added 2026-09-20; same-day audit moved it) --
     // When this space's agent.json has readonly=true, every write command is refused.
@@ -6941,7 +6941,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 GrantCommand::Create { root, label } => {
                     uuid::Uuid::parse_str(root).map_err(|error| respire_app::input_error::InputError(format!("grant root must be a full UUID: {error}")))?;
                     if label.trim().is_empty() || label.len() > 128 {
-                        return Err(respire_app::input_error::InputError("grant label must be 1–128 bytes of non-empty text".into()).into());
+                        return Err(respire_app::input_error::InputError("grant label must be 1\u{2013}128 bytes of non-empty text".into()).into());
                     }
                     if !store.all(false)?.iter().any(|entry| entry.id == *root) {
                         return Err(respire_app::input_error::InputError("grant root does not exist or is deleted".into()).into());
@@ -7690,8 +7690,8 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     // for legacy tracks created before deterministic IDs were used.
                     let now_local = chrono::Local::now();
                     let day = now_local.format("%Y-%m-%d").to_string();
-                    let track_title = format!("活动轨迹 {day}");
-                    let line = format!("【{}】{}", now_local.format("%H:%M"), content.trim());
+                    let track_title = format!("\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} {day}");
+                    let line = format!("\u{3010}{}\u{3011}{}", now_local.format("%H:%M"), content.trim());
                     let all = store.all(false)?;
                     let user = current_user();
                     let track_id = uuid::Uuid::new_v5(
@@ -7711,7 +7711,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                         for t in &tracks {
                             let full = MemoryEngine::open(&session, t)?;
                             for row in full.content.lines() {
-                                if row.trim() == format!("【活动轨迹】{day}")
+                                if row.trim() == format!("\u{3010}\u{6d3b}\u{52a8}\u{8f68}\u{8ff9}\u{3011}{day}")
                                     || row.trim().is_empty()
                                 {
                                     continue;
@@ -7758,7 +7758,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     }
                     // No track for today: create with a deterministic id (same id across devices that day; sync converges), then the generic create path
                     id = track_id;
-                    content = format!("【活动轨迹】{day}\n{line}");
+                    content = format!("\u{3010}\u{6d3b}\u{52a8}\u{8f68}\u{8ff9}\u{3011}{day}\n{line}");
                     title = track_title;
                 } else {
                     content = respire::taxonomy::diary_content(&content);
@@ -9254,7 +9254,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
             emit_result(result)?;
         }
         Command::Sync => {
-            progress::phase("读取账户和待同步数据", "Reading account and pending sync data");
+            progress::phase("\u{8bfb}\u{53d6}\u{8d26}\u{6237}\u{548c}\u{5f85}\u{540c}\u{6b65}\u{6570}\u{636e}", "Reading account and pending sync data");
             let session = sync_phase(build_session)?;
             let local = sync_phase(build_local)?;
             let remote = sync_phase(build_remote)?;
@@ -10259,11 +10259,11 @@ mod diary_identity_tests {
     /// Stable identity wins over older same-title legacy rows.
     #[test]
     fn stable_id_precedes_legacy_titles_and_preserves_importance_compatibility() -> Result<()> {
-        let mut legacy = track("legacy", "alice", "活动轨迹 2026-10-13", "2026-10-13T00:00:00Z");
+        let mut legacy = track("legacy", "alice", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", "2026-10-13T00:00:00Z");
         legacy.local_importance = "normal".into();
         let canonical = track("stable", "server-routing-owner", "User's renamed day", "2026-10-13T01:00:00Z");
         let rows = vec![legacy, canonical];
-        let tracks = select_diary_tracks(&rows, "stable", "活动轨迹 2026-10-13", |row| Ok(row.id == "stable" || row.user == "alice"))?;
+        let tracks = select_diary_tracks(&rows, "stable", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", |row| Ok(row.id == "stable" || row.user == "alice"))?;
         assert_eq!(tracks.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), ["stable", "legacy"]);
         Ok(())
     }
@@ -10272,8 +10272,8 @@ mod diary_identity_tests {
     #[test]
     fn canonical_author_mismatch_is_not_a_legacy_fallback() -> Result<()> {
         let rows = vec![track("stable", "wire-owner", "renamed", "1"),
-            track("legacy", "alice", "活动轨迹 2026-10-13", "0")];
-        let result = select_diary_tracks(&rows, "stable", "活动轨迹 2026-10-13", |row| Ok(row.id != "stable"));
+            track("legacy", "alice", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", "0")];
+        let result = select_diary_tracks(&rows, "stable", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", |row| Ok(row.id != "stable"));
         assert!(result.is_err());
         Ok(())
     }
@@ -10281,18 +10281,18 @@ mod diary_identity_tests {
     /// Blank titles remain valid while deleted and unrelated tracks stay separate.
     #[test]
     fn blank_title_deleted_rows_other_users_and_days_are_handled_separately() -> Result<()> {
-        let mut deleted = track("deleted", "alice", "活动轨迹 2026-10-13", "0");
+        let mut deleted = track("deleted", "alice", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", "0");
         deleted.deleted = true;
         let rows = vec![
             track("stable", "alice", "", "1"),
             deleted,
-            track("other-user", "bob", "活动轨迹 2026-10-13", "0"),
-            track("other-day", "alice", "活动轨迹 2026-10-12", "0"),
+            track("other-user", "bob", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", "0"),
+            track("other-day", "alice", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-12", "0"),
         ];
-        let tracks = select_diary_tracks(&rows, "stable", "活动轨迹 2026-10-13", |row| Ok(row.user == "alice"))?;
+        let tracks = select_diary_tracks(&rows, "stable", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", |row| Ok(row.user == "alice"))?;
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].id, "stable");
-        assert!(select_diary_tracks(&rows, "charlie-stable", "活动轨迹 2026-10-14", |row| Ok(row.user == "charlie"))?.is_empty());
+        assert!(select_diary_tracks(&rows, "charlie-stable", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-14", |row| Ok(row.user == "charlie"))?.is_empty());
         Ok(())
     }
 
@@ -10302,11 +10302,11 @@ mod diary_identity_tests {
         let mut deleted = track("stable", "alice", "renamed", "0");
         deleted.deleted = true;
         let rows = vec![
-            track("later", "alice", "活动轨迹 2026-10-13", "2"),
-            track("earlier", "alice", "活动轨迹 2026-10-13", "1"),
+            track("later", "alice", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", "2"),
+            track("earlier", "alice", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", "1"),
             deleted,
         ];
-        let tracks = select_diary_tracks(&rows, "stable", "活动轨迹 2026-10-13", |row| Ok(row.user == "alice"))?;
+        let tracks = select_diary_tracks(&rows, "stable", "\u{6d3b}\u{52a8}\u{8f68}\u{8ff9} 2026-10-13", |row| Ok(row.user == "alice"))?;
         assert_eq!(tracks.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), ["earlier", "later"]);
         Ok(())
     }

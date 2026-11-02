@@ -99,7 +99,7 @@ pub fn decode(text: &str) -> Result<SharePayload> {
     if candidates.is_empty() {
         // No decent candidate: same guidance as extract
         extract(text)?;
-        return Err(anyhow!("payload too short — text may have been truncated on copy"));
+        return Err(anyhow!("payload too short \u{2014} text may have been truncated on copy"));
     }
     let mut last_err = None;
     for body in &candidates {
@@ -124,12 +124,12 @@ fn decode_body(body: &str) -> Result<SharePayload> {
         serde_json::from_slice(&json).map_err(|e| anyhow!("payload JSON parse failed: {e}"))?;
     if payload.v != 1 {
         return Err(anyhow!(
-            "unknown payload version {} (this CLI only accepts v1) — upgrade rsrs and retry",
+            "unknown payload version {} (this CLI only accepts v1) \u{2014} upgrade rsrs and retry",
             payload.v
         ));
     }
     if payload.items.is_empty() {
-        return Err(anyhow!("payload has no memories — the shared subtree may be empty"));
+        return Err(anyhow!("payload has no memories \u{2014} the shared subtree may be empty"));
     }
     Ok(payload)
 }
@@ -170,10 +170,10 @@ pub fn extract(text: &str) -> Result<String> {
         }
     }
     if found {
-        return Err(anyhow!("payload is empty — text may have been truncated on copy"));
+        return Err(anyhow!("payload is empty \u{2014} text may have been truncated on copy"));
     }
     Err(anyhow!(
-        "payload not found (missing `{PAYLOAD_PREFIX}` prefix) — feed the whole BEGIN/END block from the prompt unchanged"
+        "payload not found (missing `{PAYLOAD_PREFIX}` prefix) \u{2014} feed the whole BEGIN/END block from the prompt unchanged"
     ))
 }
 
@@ -214,9 +214,9 @@ pub fn build_prompt(payload: &SharePayload, encoded: &str) -> String {
         format!(", from {}", payload.device)
     };
     format!(
-        r#"# Respire subtree share · import task
+        "# Respire subtree share \u{b7} import task
 
-Someone shared a Respire subtree with you: **{root}** ({n} items · {chars} chars{from}).
+Someone shared a Respire subtree with you: **{root}** ({n} items \u{b7} {chars} chars{from}).
 Install it into this machine's Respire library. Follow the steps; do not rewrite memory bodies.
 
 ## 1. Ready the CLI
@@ -238,32 +238,32 @@ Save the **whole** text between BEGIN / END below, unchanged, as `{file}` (keep 
 rsrs share-import {file}
 ```
 
-This command only prints a candidate bill: nearby existing entries proposed by Core. **Read it, then decide** —
+This command only prints a candidate bill: nearby existing entries proposed by Core. **Read it, then decide** \u{2014}
 whether this subtree hangs under an existing memory, or becomes its own root.
 
 ## 4. Write (pick one)
 
-- **A close candidate exists** → attach under it (use the 8-char short id from the bill):
+- **A close candidate exists** \u{2192} attach under it (use the 8-char short id from the bill):
   ```
   rsrs share-import {file} --parent <candidate-id> --go
   ```
-- **No close candidate** → create a same-titled root (title `{root}`) and hang the tree under it:
+- **No close candidate** \u{2192} create a same-titled root (title `{root}`) and hang the tree under it:
   ```
   rsrs share-import {file} --go
   ```
 
 `--go` is the write switch; without it you only ever get a bill. Import always mints new ids; a repeat import will not overwrite old rows.
 
-**Conflict gate**: if your library already has Core-reported same-topic rows, `--go` without `--parent` is **refused** and lists conflicts —
+**Conflict gate**: if your library already has Core-reported same-topic rows, `--go` without `--parent` is **refused** and lists conflicts \u{2014}
 this is the hard gate against sibling same-topic. Then pick one: (1) attach under the same-topic row (`--parent <short-id>`);
-(2) import with `--go --force`, then `remember "<merged>" --merge-ids "<old-id>,<new-id>"` into one;
+(2) import with `--go --force`, then `remember \"<merged>\" --merge-ids \"<old-id>,<new-id>\"` into one;
 (3) confirm it is a new fact that should sit as a sibling, and force with `--force`.
 
 ## 5. Verify
 
 ```
 rsrs tree --from <new-root-id> --depth 2
-rsrs recall "{root}" --limit 3
+rsrs recall \"{root}\" --limit 3
 ```
 
 If the tree is in place and recall sees it, it is installed. If you made a new root, you can still `rsrs attach <new-root-id> --parent <better-parent>` to move it.
@@ -271,8 +271,8 @@ If the tree is in place and recall sees it, it is installed. If you made a new r
 ## Appendix: what the payload is
 
 After `{prefix}` is gzip-compressed JSON (base64). It holds this subtree's plaintext bodies and parent links.
-**It is plaintext** — treat both ends of a share as public; do not send a subtree that holds keys or private data.
-"#,
+**It is plaintext** \u{2014} treat both ends of a share as public; do not send a subtree that holds keys or private data.
+",
         file = SUGGESTED_FILE,
         prefix = PAYLOAD_PREFIX,
         begin = MARK_BEGIN,
@@ -354,7 +354,7 @@ pub fn remap_parents(
                 break;
             }
             if !chain.insert(i) {
-                return Err(anyhow!("payload parent chain contains a cycle — import refused"));
+                return Err(anyhow!("payload parent chain contains a cycle \u{2014} import refused"));
             }
             cursor = old_index.get(items[i].parent_id.as_str()).copied();
         }
@@ -408,7 +408,7 @@ mod tests {
         SharePayload {
             v: 1,
             kind: "subtree".into(),
-            root_title: "编程开发".into(),
+            root_title: "\u{7f16}\u{7a0b}\u{5f00}\u{53d1}".into(),
             created_at: "2026-09-21T00:00:00Z".into(),
             device: "test-host/linux".into(),
             source_user: "alice".into(),
@@ -423,8 +423,8 @@ mod tests {
                     parent_id: "".into(),
                     kind: "context".into(),
                     tags: vec!["rust".into()],
-                    title: "根条".into(),
-                    content: "【前因】x\n【行为】y\n【后果】z".into(),
+                    title: "\u{6839}\u{6761}".into(),
+                    content: "\u{3010}\u{524d}\u{56e0}\u{3011}x\n\u{3010}\u{884c}\u{4e3a}\u{3011}y\n\u{3010}\u{540e}\u{679c}\u{3011}z".into(),
                     created_at: "2026-09-01T00:00:00Z".into(),
                     updated_at: "2026-09-01T00:00:00Z".into(),
                     importance: "important".into(),
@@ -439,8 +439,8 @@ mod tests {
                     parent_id: "aaaa-root".into(),
                     kind: "decision".into(),
                     tags: vec![],
-                    title: "子条".into(),
-                    content: "子条正文，含中文与符号 —— 测试。".into(),
+                    title: "\u{5b50}\u{6761}".into(),
+                    content: "\u{5b50}\u{6761}\u{6b63}\u{6587}\u{ff0c}\u{542b}\u{4e2d}\u{6587}\u{4e0e}\u{7b26}\u{53f7} \u{2014}\u{2014} \u{6d4b}\u{8bd5}\u{3002}".into(),
                     created_at: "2026-09-02T00:00:00Z".into(),
                     updated_at: "2026-09-02T00:00:00Z".into(),
                     importance: "trivial".into(),
@@ -456,9 +456,9 @@ mod tests {
         assert!(text.starts_with(PAYLOAD_PREFIX));
         let back = decode(&text)?;
         assert_eq!(back.items.len(), 2);
-        assert_eq!(back.root_title, "编程开发");
+        assert_eq!(back.root_title, "\u{7f16}\u{7a0b}\u{5f00}\u{53d1}");
         assert_eq!(back.items[1].parent_id, "aaaa-root");
-        assert_eq!(back.items[1].content, "子条正文，含中文与符号 —— 测试。");
+        assert_eq!(back.items[1].content, "\u{5b50}\u{6761}\u{6b63}\u{6587}\u{ff0c}\u{542b}\u{4e2d}\u{6587}\u{4e0e}\u{7b26}\u{53f7} \u{2014}\u{2014} \u{6d4b}\u{8bd5}\u{3002}");
         assert_eq!(back.total_chars(), p.total_chars());
         Ok(())
     }
@@ -481,7 +481,7 @@ mod tests {
         let cut = &text[..text.len() * 2 / 3];
         assert!(decode(cut).is_err(), "truncated payload must error");
         // no prefix → explicit guidance
-        let e = decode("这是一段无关文本").unwrap_err().to_string();
+        let e = decode("\u{8fd9}\u{662f}\u{4e00}\u{6bb5}\u{65e0}\u{5173}\u{6587}\u{672c}").unwrap_err().to_string();
         assert!(e.contains("payload not found"), "missing prefix must give guidance: {e}");
         // Prefix present but body empty
         assert!(decode(PAYLOAD_PREFIX).is_err());
@@ -612,10 +612,10 @@ mod tests {
     fn remap_rejects_cycle_and_duplicate() {
         let cyc = vec![item("a", "b"), item("b", "a")];
         let ids = vec!["N0".to_owned(), "N1".to_owned()];
-        assert!(remap_parents(&cyc, &ids, "").is_err(), "环须拒");
+        assert!(remap_parents(&cyc, &ids, "").is_err(), "\u{73af}\u{987b}\u{62d2}");
         let dup = vec![item("a", ""), item("a", "")];
-        assert!(remap_parents(&dup, &ids, "").is_err(), "重复 id 须拒");
-        assert!(remap_parents(&cyc, &["N0".to_owned()], "").is_err(), "长度不符须拒");
+        assert!(remap_parents(&dup, &ids, "").is_err(), "\u{91cd}\u{590d} id \u{987b}\u{62d2}");
+        assert!(remap_parents(&cyc, &["N0".to_owned()], "").is_err(), "\u{957f}\u{5ea6}\u{4e0d}\u{7b26}\u{987b}\u{62d2}");
     }
 
     #[test]
@@ -662,15 +662,15 @@ mod tests {
         let lookup = |id: &str| entries.iter().find(|e| e.id == id).cloned();
         let items = items_from("r", &order, &lookup, &members);
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].parent_id, "", "根条之父在子树外须置空");
-        assert_eq!(items[1].parent_id, "r", "子树内父链须保留");
+        assert_eq!(items[0].parent_id, "", "\u{6839}\u{6761}\u{4e4b}\u{7236}\u{5728}\u{5b50}\u{6811}\u{5916}\u{987b}\u{7f6e}\u{7a7a}");
+        assert_eq!(items[1].parent_id, "r", "\u{5b50}\u{6811}\u{5185}\u{7236}\u{94fe}\u{987b}\u{4fdd}\u{7559}");
     }
 
     #[test]
     fn mount_query_includes_root_and_titles() {
         let q = mount_query(&sample());
-        assert!(q.contains("编程开发"));
-        assert!(q.contains("根条"));
-        assert!(q.contains("子条"));
+        assert!(q.contains("\u{7f16}\u{7a0b}\u{5f00}\u{53d1}"));
+        assert!(q.contains("\u{6839}\u{6761}"));
+        assert!(q.contains("\u{5b50}\u{6761}"));
     }
 }

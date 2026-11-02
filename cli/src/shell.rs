@@ -186,7 +186,7 @@ pub fn run() -> Result<()> {
         if api_saved {
             app.overlay = Overlay::None;
             app.set_notice(t(
-                "API 配置已保存；选择高质量模式后生效",
+                "API \u{914d}\u{7f6e}\u{5df2}\u{4fdd}\u{5b58}\u{ff1b}\u{9009}\u{62e9}\u{9ad8}\u{8d28}\u{91cf}\u{6a21}\u{5f0f}\u{540e}\u{751f}\u{6548}",
                 "API saved; select High quality to enable it",
             ));
         }
@@ -239,10 +239,10 @@ pub fn run() -> Result<()> {
                 match result {
                     Ok(()) => {
                         app.overlay = Overlay::None;
-                        app.set_notice(t("下载源已保存", "Download source saved"));
+                        app.set_notice(t("\u{4e0b}\u{8f7d}\u{6e90}\u{5df2}\u{4fdd}\u{5b58}", "Download source saved"));
                         if let Some(id) = app.live.model_progress["id"].as_str().filter(|_| app.live.model_progress["active"] == true) {
                             let id = id.to_owned();
-                            ask(&mut app, t("取消当前任务，使用所选下载源重新下载？", "Cancel the current task and restart using the selected source?"), ConfirmKind::RestartM3(id, value));
+                            ask(&mut app, t("\u{53d6}\u{6d88}\u{5f53}\u{524d}\u{4efb}\u{52a1}\u{ff0c}\u{4f7f}\u{7528}\u{6240}\u{9009}\u{4e0b}\u{8f7d}\u{6e90}\u{91cd}\u{65b0}\u{4e0b}\u{8f7d}\u{ff1f}", "Cancel the current task and restart using the selected source?"), ConfirmKind::RestartM3(id, value));
                         }
                     }
                     Err(error) => app.set_notice(error),
@@ -294,7 +294,7 @@ pub fn run() -> Result<()> {
                 }
             };
             app.set_notice(match login {
-                Ok(()) => t("登录成功；账户已验证", "Signed in; account verified"),
+                Ok(()) => t("\u{767b}\u{5f55}\u{6210}\u{529f}\u{ff1b}\u{8d26}\u{6237}\u{5df2}\u{9a8c}\u{8bc1}", "Signed in; account verified"),
                 Err(error) => format!("{error:#}"),
             });
         }
@@ -460,7 +460,7 @@ fn checked_result(result: Value) -> Result<Value, String> {
         .join("; ");
     if errors.contains("model operation cancelled") {
         return Err(t(
-            "已取消；当前索引保持不变",
+            "\u{5df2}\u{53d6}\u{6d88}\u{ff1b}\u{5f53}\u{524d}\u{7d22}\u{5f15}\u{4fdd}\u{6301}\u{4e0d}\u{53d8}",
             "Cancelled; current index unchanged",
         ));
     }
@@ -482,7 +482,7 @@ fn switch_account(name: &str) -> Result<String, String> {
     if actual["name"] != name || actual["dir"] != expected_dir {
         return Err("Runtime account does not match the requested profile".to_owned());
     }
-    Ok(t("已切换账户", "Account switched"))
+    Ok(t("\u{5df2}\u{5207}\u{6362}\u{8d26}\u{6237}", "Account switched"))
 }
 
 fn host_command(args: &[&str]) -> Result<Value, String> {
@@ -705,7 +705,7 @@ fn go_back(app: &mut App) -> bool {
 fn toggle_lang(app: &mut App) {
     let next = if zh() { Lang::En } else { Lang::Zh };
     match i18n::set_lang(next) {
-        Ok(()) => app.set_notice(t("语言已切换", "Language saved")),
+        Ok(()) => app.set_notice(t("\u{8bed}\u{8a00}\u{5df2}\u{5207}\u{6362}", "Language saved")),
         Err(error) => app.set_notice(error.to_string()),
     }
 }
@@ -809,14 +809,14 @@ fn account_key(app: &mut App, code: KeyCode) {
         return;
     };
     if row.current {
-        app.set_notice(t("已经是当前账户", "Already the active account"));
+        app.set_notice(t("\u{5df2}\u{7ecf}\u{662f}\u{5f53}\u{524d}\u{8d26}\u{6237}", "Already the active account"));
         return;
     }
     let name = row.name.clone();
     ask(
         app,
         t(
-            &format!("切换到账户 {name}？",),
+            &format!("\u{5207}\u{6362}\u{5230}\u{8d26}\u{6237} {name}\u{ff1f}",),
             &format!("Switch to account {name}?"),
         ),
         ConfirmKind::Switch(name),
@@ -827,13 +827,13 @@ fn migration_key(app: &mut App, code: KeyCode) {
     if code != KeyCode::Enter { return; }
     let Some(row) = app.migration_profiles.get(app.cursor) else { return; };
     if !row["migrated_to"].is_null() {
-        app.set_notice(t("该来源已迁移，不会重复复制", "Already migrated; no duplicate copy"));
+        app.set_notice(t("\u{8be5}\u{6765}\u{6e90}\u{5df2}\u{8fc1}\u{79fb}\u{ff0c}\u{4e0d}\u{4f1a}\u{91cd}\u{590d}\u{590d}\u{5236}", "Already migrated; no duplicate copy"));
         return;
     }
     let (Some(id), Some(account)) = (row["source_id"].as_str(), row["account"].as_str()) else { return; };
     let id = id.to_owned();
     let account = account.to_owned();
-    ask(app, t(&format!("将所选旧账户复制为 {account}？当前账户保持不变。"),
+    ask(app, t(&format!("\u{5c06}\u{6240}\u{9009}\u{65e7}\u{8d26}\u{6237}\u{590d}\u{5236}\u{4e3a} {account}\u{ff1f}\u{5f53}\u{524d}\u{8d26}\u{6237}\u{4fdd}\u{6301}\u{4e0d}\u{53d8}\u{3002}"),
         &format!("Copy the selected legacy account into {account}? Current account stays active.")),
         ConfirmKind::Migrate(id, account));
 }
@@ -878,11 +878,11 @@ fn inject_key(app: &mut App, code: KeyCode) {
         .map(|row| (row.id.clone(), if batch { remove } else { row.checked }))
         .collect();
     if ids.is_empty() {
-        app.set_notice(t("没有已安装的提示词", "No installed prompts"));
+        app.set_notice(t("\u{6ca1}\u{6709}\u{5df2}\u{5b89}\u{88c5}\u{7684}\u{63d0}\u{793a}\u{8bcd}", "No installed prompts"));
         return;
     }
     INJECT_REVISION.fetch_add(1, Ordering::AcqRel);
-    app.set_notice(t("正在处理提示词", "Updating prompts"));
+    app.set_notice(t("\u{6b63}\u{5728}\u{5904}\u{7406}\u{63d0}\u{793a}\u{8bcd}", "Updating prompts"));
     let slot = Arc::clone(&app.outcome);
     let shared = Arc::clone(&app.shared);
     std::thread::spawn(move || {
@@ -909,7 +909,7 @@ fn inject_key(app: &mut App, code: KeyCode) {
             Err(error) => errors.push(error),
         }
         let mut message = t(
-            &format!("提示词处理完成：成功 {succeeded}/{}", ids.len()),
+            &format!("\u{63d0}\u{793a}\u{8bcd}\u{5904}\u{7406}\u{5b8c}\u{6210}\u{ff1a}\u{6210}\u{529f} {succeeded}/{}", ids.len()),
             &format!("Prompts finished: {succeeded}/{} succeeded", ids.len()),
         );
         if !errors.is_empty() {
@@ -967,7 +967,7 @@ fn sync_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Enter if app.cursor == 2 => app.page = Page::Home,
         KeyCode::Enter if app.cursor == 0 => ask(
             app,
-            t("现在同步一次？", "Sync once now?"),
+            t("\u{73b0}\u{5728}\u{540c}\u{6b65}\u{4e00}\u{6b21}\u{ff1f}", "Sync once now?"),
             ConfirmKind::Sync,
         ),
         KeyCode::Enter if app.cursor == 1 => {
@@ -976,9 +976,9 @@ fn sync_key(app: &mut App, code: KeyCode) -> bool {
                 app,
                 t(
                     if on {
-                        "打开自动同步？"
+                        "\u{6253}\u{5f00}\u{81ea}\u{52a8}\u{540c}\u{6b65}\u{ff1f}"
                     } else {
-                        "关闭自动同步？"
+                        "\u{5173}\u{95ed}\u{81ea}\u{52a8}\u{540c}\u{6b65}\u{ff1f}"
                     },
                     if on {
                         "Turn auto-sync on?"
@@ -1017,12 +1017,12 @@ fn cancel_model(id: &str) -> Result<(), String> {
             // The original task finished after accepting cancellation. A newly
             // scheduled task must not be cancelled or reported as its failure.
             if cancellation_accepted { return Ok(()); }
-            return Err(t("模型任务已变化；刷新进度后重试", "The model task changed; refresh progress and retry"));
+            return Err(t("\u{6a21}\u{578b}\u{4efb}\u{52a1}\u{5df2}\u{53d8}\u{5316}\u{ff1b}\u{5237}\u{65b0}\u{8fdb}\u{5ea6}\u{540e}\u{91cd}\u{8bd5}", "The model task changed; refresh progress and retry"));
         }
         cancellation_accepted |= progress["cancelled"] == true;
         if progress["active"] != true { return Ok(()); }
         if started.elapsed() >= Duration::from_secs(45) {
-            return Err(t("取消尚未完成；等待当前网络读取结束后重试", "Cancellation is still pending; wait for the current network read before retrying"));
+            return Err(t("\u{53d6}\u{6d88}\u{5c1a}\u{672a}\u{5b8c}\u{6210}\u{ff1b}\u{7b49}\u{5f85}\u{5f53}\u{524d}\u{7f51}\u{7edc}\u{8bfb}\u{53d6}\u{7ed3}\u{675f}\u{540e}\u{91cd}\u{8bd5}", "Cancellation is still pending; wait for the current network read before retrying"));
         }
         std::thread::sleep(FAST);
     }
@@ -1036,7 +1036,7 @@ fn model_key(app: &mut App, code: KeyCode) {
         0 => ask(
             app,
             t(
-                "安装或校验 BGE-M3 量化模型（543 MiB）？校验通过则跳过。",
+                "\u{5b89}\u{88c5}\u{6216}\u{6821}\u{9a8c} BGE-M3 \u{91cf}\u{5316}\u{6a21}\u{578b}\u{ff08}543 MiB\u{ff09}\u{ff1f}\u{6821}\u{9a8c}\u{901a}\u{8fc7}\u{5219}\u{8df3}\u{8fc7}\u{3002}",
                 "Install or verify BGE-M3 quantized (543 MiB model)? Verified files are skipped.",
             ),
             ConfirmKind::InstallM3,
@@ -1044,7 +1044,7 @@ fn model_key(app: &mut App, code: KeyCode) {
         1 => ask(
             app,
             t(
-                "卸载 BGE-M3 并删除模型文件？卸载后 recall 需要重新安装。",
+                "\u{5378}\u{8f7d} BGE-M3 \u{5e76}\u{5220}\u{9664}\u{6a21}\u{578b}\u{6587}\u{4ef6}\u{ff1f}\u{5378}\u{8f7d}\u{540e} recall \u{9700}\u{8981}\u{91cd}\u{65b0}\u{5b89}\u{88c5}\u{3002}",
                 "Uninstall BGE-M3 and delete its files? Recall will need a reinstall.",
             ),
             ConfirmKind::UninstallM3,
@@ -1061,7 +1061,7 @@ fn model_key(app: &mut App, code: KeyCode) {
                 ask(
                     app,
                     t(
-                        "通过 Windows ML 下载兼容的 NPU 推理引擎？",
+                        "\u{901a}\u{8fc7} Windows ML \u{4e0b}\u{8f7d}\u{517c}\u{5bb9}\u{7684} NPU \u{63a8}\u{7406}\u{5f15}\u{64ce}\u{ff1f}",
                         "Download compatible NPU providers through Windows ML?",
                     ),
                     ConfirmKind::InstallEngines,
@@ -1074,12 +1074,12 @@ fn model_key(app: &mut App, code: KeyCode) {
                     Some(0) => run_confirm(app, ConfirmKind::RecallMode("fast".to_owned())),
                     Some(1) if !recall_api::ready() => {
                         app.overlay = Overlay::RecallApi(recall_api::Form::new());
-                        app.set_notice(t("请先配置高质量召回 API", "Configure the recall API first"));
+                        app.set_notice(t("\u{8bf7}\u{5148}\u{914d}\u{7f6e}\u{9ad8}\u{8d28}\u{91cf}\u{53ec}\u{56de} API", "Configure the recall API first"));
                     }
                     Some(1) => ask(
                         app,
                         t(
-                            "启用高质量召回？查询和候选标题将发送到已配置的模型服务；失败时退回本地结果。",
+                            "\u{542f}\u{7528}\u{9ad8}\u{8d28}\u{91cf}\u{53ec}\u{56de}\u{ff1f}\u{67e5}\u{8be2}\u{548c}\u{5019}\u{9009}\u{6807}\u{9898}\u{5c06}\u{53d1}\u{9001}\u{5230}\u{5df2}\u{914d}\u{7f6e}\u{7684}\u{6a21}\u{578b}\u{670d}\u{52a1}\u{ff1b}\u{5931}\u{8d25}\u{65f6}\u{9000}\u{56de}\u{672c}\u{5730}\u{7ed3}\u{679c}\u{3002}",
                             "Enable high-quality recall? Queries and candidate titles go to your configured model service; failures use local results.",
                         ),
                         ConfirmKind::RecallMode("quality".to_owned()),
@@ -1090,12 +1090,12 @@ fn model_key(app: &mut App, code: KeyCode) {
                     Some(5) => {
                         if let Some(id) = app.live.model_progress["id"].as_str().filter(|_| app.live.model_progress["active"] == true) {
                             let id = id.to_owned();
-                            ask(app, t("取消当前模型任务？已完成的模型文件和原索引会保留。", "Cancel the current model task? Completed files and the original index are kept."), ConfirmKind::CancelModel(id));
-                        } else { app.set_notice(t("没有正在运行的模型任务", "No model task is running")); }
+                            ask(app, t("\u{53d6}\u{6d88}\u{5f53}\u{524d}\u{6a21}\u{578b}\u{4efb}\u{52a1}\u{ff1f}\u{5df2}\u{5b8c}\u{6210}\u{7684}\u{6a21}\u{578b}\u{6587}\u{4ef6}\u{548c}\u{539f}\u{7d22}\u{5f15}\u{4f1a}\u{4fdd}\u{7559}\u{3002}", "Cancel the current model task? Completed files and the original index are kept."), ConfirmKind::CancelModel(id));
+                        } else { app.set_notice(t("\u{6ca1}\u{6709}\u{6b63}\u{5728}\u{8fd0}\u{884c}\u{7684}\u{6a21}\u{578b}\u{4efb}\u{52a1}", "No model task is running")); }
                     }
                     Some(6) => {
                         let id = app.live.model_progress["id"].as_str().unwrap_or("").to_owned();
-                        ask(app, t("取消当前任务并从所选下载源重新下载未完成文件？", "Cancel the current task and redownload unfinished files from the selected source?"), ConfirmKind::RestartM3(id, selected_model_mirror()));
+                        ask(app, t("\u{53d6}\u{6d88}\u{5f53}\u{524d}\u{4efb}\u{52a1}\u{5e76}\u{4ece}\u{6240}\u{9009}\u{4e0b}\u{8f7d}\u{6e90}\u{91cd}\u{65b0}\u{4e0b}\u{8f7d}\u{672a}\u{5b8c}\u{6210}\u{6587}\u{4ef6}\u{ff1f}", "Cancel the current task and redownload unfinished files from the selected source?"), ConfirmKind::RestartM3(id, selected_model_mirror()));
                     }
                     Some(7) => app.overlay = Overlay::RecallTest(recall_test::Form::new("benchmark")),
                     Some(8) => app.overlay = Overlay::ModelWeights(model_weights::Form::new(&app.live.model_settings)),
@@ -1115,11 +1115,11 @@ fn model_weights_key(app: &mut App, code: KeyCode) {
         Some(model_weights::Action::Back) => app.overlay = Overlay::None,
         Some(model_weights::Action::Save) => {
             if !model_engines().contains(&engine) {
-                app.set_notice(t("此系统不支持该引擎；请选择 CPU", "This OS does not support that engine; choose CPU"));
+                app.set_notice(t("\u{6b64}\u{7cfb}\u{7edf}\u{4e0d}\u{652f}\u{6301}\u{8be5}\u{5f15}\u{64ce}\u{ff1b}\u{8bf7}\u{9009}\u{62e9} CPU", "This OS does not support that engine; choose CPU"));
             } else if !model_weights::Form::present(&app.live.model_settings, variant) {
-                app.set_notice(t("请先下载所选权重；不会自动下载或保存", "Download the selected weights first; nothing was downloaded or saved"));
+                app.set_notice(t("\u{8bf7}\u{5148}\u{4e0b}\u{8f7d}\u{6240}\u{9009}\u{6743}\u{91cd}\u{ff1b}\u{4e0d}\u{4f1a}\u{81ea}\u{52a8}\u{4e0b}\u{8f7d}\u{6216}\u{4fdd}\u{5b58}", "Download the selected weights first; nothing was downloaded or saved"));
             } else {
-                ask(app, t(&format!("校验并加载 {engine} / {variant}？试推理成功后保存；不会下载。"),
+                ask(app, t(&format!("\u{6821}\u{9a8c}\u{5e76}\u{52a0}\u{8f7d} {engine} / {variant}\u{ff1f}\u{8bd5}\u{63a8}\u{7406}\u{6210}\u{529f}\u{540e}\u{4fdd}\u{5b58}\u{ff1b}\u{4e0d}\u{4f1a}\u{4e0b}\u{8f7d}\u{3002}"),
                     &format!("Validate and load {engine} / {variant}? Save only after trial inference succeeds; no download.")),
                     ConfirmKind::Weights(engine.to_owned(), variant.to_owned()));
             }
@@ -1127,7 +1127,7 @@ fn model_weights_key(app: &mut App, code: KeyCode) {
         Some(model_weights::Action::Install) => {
             if let Ok(selected) = respire::memory::onnx::parse_variant(variant) {
                 let mib = selected.size as f64 / 1048576.0;
-                ask(app, t(&format!("下载 {variant}（{mib:.0} MiB）？基础模型及 CPU 容器可能另需各 543 MiB，tokenizer 约 17 MiB；已验证文件跳过。只下载，不保存选择。"),
+                ask(app, t(&format!("\u{4e0b}\u{8f7d} {variant}\u{ff08}{mib:.0} MiB\u{ff09}\u{ff1f}\u{57fa}\u{7840}\u{6a21}\u{578b}\u{53ca} CPU \u{5bb9}\u{5668}\u{53ef}\u{80fd}\u{53e6}\u{9700}\u{5404} 543 MiB\u{ff0c}tokenizer \u{7ea6} 17 MiB\u{ff1b}\u{5df2}\u{9a8c}\u{8bc1}\u{6587}\u{4ef6}\u{8df3}\u{8fc7}\u{3002}\u{53ea}\u{4e0b}\u{8f7d}\u{ff0c}\u{4e0d}\u{4fdd}\u{5b58}\u{9009}\u{62e9}\u{3002}"),
                     &format!("Download {variant} ({mib:.0} MiB)? Baseline and CPU container may each need another 543 MiB plus a 17 MiB tokenizer; verified files are skipped. Downloads only; selection is not saved.")),
                     ConfirmKind::InstallVariant(engine.to_owned(), variant.to_owned()));
             }
@@ -1141,18 +1141,18 @@ fn save_model_settings_with(engine: &str, variant: Option<&str>,
     let current;
     let variant = if let Some(variant) = variant { variant } else {
         current = checked_result(action(&["model", "engine"])?)?;
-        current["summary"]["model"].as_str().ok_or_else(|| t("无法读取当前权重", "Cannot read current weights"))?
+        current["summary"]["model"].as_str().ok_or_else(|| t("\u{65e0}\u{6cd5}\u{8bfb}\u{53d6}\u{5f53}\u{524d}\u{6743}\u{91cd}", "Cannot read current weights"))?
     };
     let args = ["model", "load", engine, "--model", variant];
     let loaded = checked_result(action(&args)?)?;
     if loaded["summary"]["loaded"] != true || loaded["summary"]["validated"] != true
         || loaded["summary"]["saved"] != true {
-        return Err(t("加载回执不完整，未确认加载成功", "Incomplete load receipt; loading was not confirmed"));
+        return Err(t("\u{52a0}\u{8f7d}\u{56de}\u{6267}\u{4e0d}\u{5b8c}\u{6574}\u{ff0c}\u{672a}\u{786e}\u{8ba4}\u{52a0}\u{8f7d}\u{6210}\u{529f}", "Incomplete load receipt; loading was not confirmed"));
     }
     let read_back = checked_result(action(&["model", "engine"])?)?;
     let summary = &read_back["summary"];
     if summary["engine"] != engine || summary["model"] != variant {
-        return Err(t("runtime 回读与选择不一致；请检查环境变量覆盖并刷新", "Runtime read-back differs from selection; check environment overrides and refresh"));
+        return Err(t("runtime \u{56de}\u{8bfb}\u{4e0e}\u{9009}\u{62e9}\u{4e0d}\u{4e00}\u{81f4}\u{ff1b}\u{8bf7}\u{68c0}\u{67e5}\u{73af}\u{5883}\u{53d8}\u{91cf}\u{8986}\u{76d6}\u{5e76}\u{5237}\u{65b0}", "Runtime read-back differs from selection; check environment overrides and refresh"));
     }
     Ok(summary.clone())
 }
@@ -1163,15 +1163,15 @@ fn save_model_settings(shared: &Arc<Mutex<Live>>, engine: &str, variant: Option<
         live.engine = settings["engine"].as_str().unwrap_or("").to_owned();
         live.model_settings = settings;
     }
-    Ok(t("权重已校验、加载、试推理并保存；已回读设置", "Weights validated, loaded, trial inference passed, saved and read back."))
+    Ok(t("\u{6743}\u{91cd}\u{5df2}\u{6821}\u{9a8c}\u{3001}\u{52a0}\u{8f7d}\u{3001}\u{8bd5}\u{63a8}\u{7406}\u{5e76}\u{4fdd}\u{5b58}\u{ff1b}\u{5df2}\u{56de}\u{8bfb}\u{8bbe}\u{7f6e}", "Weights validated, loaded, trial inference passed, saved and read back."))
 }
 
 fn probe_notice(value: Value) -> Result<String, String> {
     let result = &value["summary"];
     if result["ready"] != true || !result["cosine"].as_f64().is_some_and(|v| v >= 0.99) {
-        return Err(t("推理验证回执不完整，未报告验证成功", "Incomplete inference receipt; validation was not accepted"));
+        return Err(t("\u{63a8}\u{7406}\u{9a8c}\u{8bc1}\u{56de}\u{6267}\u{4e0d}\u{5b8c}\u{6574}\u{ff0c}\u{672a}\u{62a5}\u{544a}\u{9a8c}\u{8bc1}\u{6210}\u{529f}", "Incomplete inference receipt; validation was not accepted"));
     }
-    Ok(format!("{}: {}  cosine {}  {} ms", t("数值验证通过（不代表实测算子硬件分配）", "Numerical check passed (node placement not measured)"),
+    Ok(format!("{}: {}  cosine {}  {} ms", t("\u{6570}\u{503c}\u{9a8c}\u{8bc1}\u{901a}\u{8fc7}\u{ff08}\u{4e0d}\u{4ee3}\u{8868}\u{5b9e}\u{6d4b}\u{7b97}\u{5b50}\u{786c}\u{4ef6}\u{5206}\u{914d}\u{ff09}", "Numerical check passed (node placement not measured)"),
         result["selected"].as_str().unwrap_or("unknown"), result["cosine"], result["elapsed_ms"]))
 }
 
@@ -1190,7 +1190,7 @@ fn workspace_key(app: &mut App, code: KeyCode) -> bool {
             ask(
                 app,
                 t(
-                    &format!("把整台设备的工作模式改成 {}？", workspace_label(mode)),
+                    &format!("\u{628a}\u{6574}\u{53f0}\u{8bbe}\u{5907}\u{7684}\u{5de5}\u{4f5c}\u{6a21}\u{5f0f}\u{6539}\u{6210} {}\u{ff1f}", workspace_label(mode)),
                     &format!("Change service mode for this device to {}?", workspace_label(mode)),
                 ),
                 ConfirmKind::Workspace(mode.to_owned()),
@@ -1218,14 +1218,14 @@ fn version_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Enter => {
             let Some(manager) = tools.get(app.manager_pick).copied() else {
                 app.set_notice(t(
-                    "没有找到 npm、pnpm、yarn 或 bun",
+                    "\u{6ca1}\u{6709}\u{627e}\u{5230} npm\u{3001}pnpm\u{3001}yarn \u{6216} bun",
                     "npm, pnpm, yarn, and bun were not found",
                 ));
                 return false;
             };
             if matches!(manager, Manager::Direct) {
                 app.set_notice(t(
-                    "当前窗口是直接运行的程序，包管理器更新不会换掉这个窗口",
+                    "\u{5f53}\u{524d}\u{7a97}\u{53e3}\u{662f}\u{76f4}\u{63a5}\u{8fd0}\u{884c}\u{7684}\u{7a0b}\u{5e8f}\u{ff0c}\u{5305}\u{7ba1}\u{7406}\u{5668}\u{66f4}\u{65b0}\u{4e0d}\u{4f1a}\u{6362}\u{6389}\u{8fd9}\u{4e2a}\u{7a97}\u{53e3}",
                     "This window is a direct binary. A package-manager update will not replace it",
                 ));
                 return false;
@@ -1238,7 +1238,7 @@ fn version_key(app: &mut App, code: KeyCode) -> bool {
             ask(
                 app,
                 t(
-                    &format!("用 {} 更新到 {spec}？", manager_name(manager)),
+                    &format!("\u{7528} {} \u{66f4}\u{65b0}\u{5230} {spec}\u{ff1f}", manager_name(manager)),
                     &format!("Update to {spec} with {}?", manager_name(manager)),
                 ),
                 ConfirmKind::Update(manager_name(manager).to_owned(), spec),
@@ -1256,7 +1256,7 @@ fn lang_key(app: &mut App, code: KeyCode) {
         KeyCode::Enter => {
             let lang = if app.cursor == 0 { Lang::Zh } else { Lang::En };
             match i18n::set_lang(lang) {
-                Ok(()) => app.set_notice(t("语言已切换", "Language saved")),
+                Ok(()) => app.set_notice(t("\u{8bed}\u{8a00}\u{5df2}\u{5207}\u{6362}", "Language saved")),
                 Err(error) => app.set_notice(error.to_string()),
             }
         }
@@ -1312,25 +1312,25 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
     }
     let label = match &kind {
         ConfirmKind::Switch(name) => t(
-            &format!("正在切换到 {name}"),
+            &format!("\u{6b63}\u{5728}\u{5207}\u{6362}\u{5230} {name}"),
             &format!("Switching to {name}"),
         ),
-        ConfirmKind::Migrate(_, _) => t("正在迁移所选旧账户", "Migrating selected legacy account"),
-        ConfirmKind::Sync => t("正在同步", "Syncing"),
-        ConfirmKind::InstallM3 => t("正在安装或校验 BGE-M3", "Installing or verifying BGE-M3"),
-        ConfirmKind::UninstallM3 => t("正在卸载 BGE-M3", "Uninstalling BGE-M3"),
-        ConfirmKind::CancelModel(_) => t("正在取消模型任务，等待当前网络读取结束", "Cancelling model task; waiting for the current network read"),
-        ConfirmKind::RestartM3(_, _) => t("正在取消旧任务并重新安排下载", "Cancelling the old task and scheduling a new download"),
-        ConfirmKind::Weights(_, _) => t("正在校验并加载；试推理成功后保存", "Validating and loading; saving after trial inference"),
-        ConfirmKind::InstallVariant(_, _) => t("正在下载所选权重；不切换模型", "Downloading selected weights; current model unchanged"),
-        ConfirmKind::Engine(_) => t("正在校验并加载推理引擎", "Validating and loading inference engine"),
-        ConfirmKind::InstallEngines => t("正在下载 NPU 推理引擎", "Downloading NPU providers"),
-        ConfirmKind::ProbeEngine => t("正在验证推理引擎", "Checking inference engine"),
-        ConfirmKind::RecallMode(_) => t("正在保存召回模式", "Saving recall mode"),
-        ConfirmKind::Workspace(_) => t("正在切换工作区", "Changing workspace"),
-        ConfirmKind::Autosync(_) => t("正在保存自动同步", "Saving auto-sync"),
+        ConfirmKind::Migrate(_, _) => t("\u{6b63}\u{5728}\u{8fc1}\u{79fb}\u{6240}\u{9009}\u{65e7}\u{8d26}\u{6237}", "Migrating selected legacy account"),
+        ConfirmKind::Sync => t("\u{6b63}\u{5728}\u{540c}\u{6b65}", "Syncing"),
+        ConfirmKind::InstallM3 => t("\u{6b63}\u{5728}\u{5b89}\u{88c5}\u{6216}\u{6821}\u{9a8c} BGE-M3", "Installing or verifying BGE-M3"),
+        ConfirmKind::UninstallM3 => t("\u{6b63}\u{5728}\u{5378}\u{8f7d} BGE-M3", "Uninstalling BGE-M3"),
+        ConfirmKind::CancelModel(_) => t("\u{6b63}\u{5728}\u{53d6}\u{6d88}\u{6a21}\u{578b}\u{4efb}\u{52a1}\u{ff0c}\u{7b49}\u{5f85}\u{5f53}\u{524d}\u{7f51}\u{7edc}\u{8bfb}\u{53d6}\u{7ed3}\u{675f}", "Cancelling model task; waiting for the current network read"),
+        ConfirmKind::RestartM3(_, _) => t("\u{6b63}\u{5728}\u{53d6}\u{6d88}\u{65e7}\u{4efb}\u{52a1}\u{5e76}\u{91cd}\u{65b0}\u{5b89}\u{6392}\u{4e0b}\u{8f7d}", "Cancelling the old task and scheduling a new download"),
+        ConfirmKind::Weights(_, _) => t("\u{6b63}\u{5728}\u{6821}\u{9a8c}\u{5e76}\u{52a0}\u{8f7d}\u{ff1b}\u{8bd5}\u{63a8}\u{7406}\u{6210}\u{529f}\u{540e}\u{4fdd}\u{5b58}", "Validating and loading; saving after trial inference"),
+        ConfirmKind::InstallVariant(_, _) => t("\u{6b63}\u{5728}\u{4e0b}\u{8f7d}\u{6240}\u{9009}\u{6743}\u{91cd}\u{ff1b}\u{4e0d}\u{5207}\u{6362}\u{6a21}\u{578b}", "Downloading selected weights; current model unchanged"),
+        ConfirmKind::Engine(_) => t("\u{6b63}\u{5728}\u{6821}\u{9a8c}\u{5e76}\u{52a0}\u{8f7d}\u{63a8}\u{7406}\u{5f15}\u{64ce}", "Validating and loading inference engine"),
+        ConfirmKind::InstallEngines => t("\u{6b63}\u{5728}\u{4e0b}\u{8f7d} NPU \u{63a8}\u{7406}\u{5f15}\u{64ce}", "Downloading NPU providers"),
+        ConfirmKind::ProbeEngine => t("\u{6b63}\u{5728}\u{9a8c}\u{8bc1}\u{63a8}\u{7406}\u{5f15}\u{64ce}", "Checking inference engine"),
+        ConfirmKind::RecallMode(_) => t("\u{6b63}\u{5728}\u{4fdd}\u{5b58}\u{53ec}\u{56de}\u{6a21}\u{5f0f}", "Saving recall mode"),
+        ConfirmKind::Workspace(_) => t("\u{6b63}\u{5728}\u{5207}\u{6362}\u{5de5}\u{4f5c}\u{533a}", "Changing workspace"),
+        ConfirmKind::Autosync(_) => t("\u{6b63}\u{5728}\u{4fdd}\u{5b58}\u{81ea}\u{52a8}\u{540c}\u{6b65}", "Saving auto-sync"),
         ConfirmKind::Update(tool, spec) => t(
-            &format!("正在用 {tool} 更新 {spec}"),
+            &format!("\u{6b63}\u{5728}\u{7528} {tool} \u{66f4}\u{65b0} {spec}"),
             &format!("Updating {spec} with {tool}"),
         ),
     };
@@ -1349,7 +1349,7 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
                 .is_some_and(|flag| flag.load(Ordering::Acquire))
             {
                 return Err(t(
-                    "已取消，当前索引保持不变",
+                    "\u{5df2}\u{53d6}\u{6d88}\u{ff0c}\u{5f53}\u{524d}\u{7d22}\u{5f15}\u{4fdd}\u{6301}\u{4e0d}\u{53d8}",
                     "Cancelled; current index unchanged",
                 ));
             }
@@ -1362,28 +1362,28 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
                 switch_account(&name)
             }
             ConfirmKind::Migrate(id, account) => host_command(&["migrate", "--source", &id, "--account", &account])
-                .map(|_| t("迁移完成；可在账户页面切换", "Migration complete; select it on the Accounts page")),
+                .map(|_| t("\u{8fc1}\u{79fb}\u{5b8c}\u{6210}\u{ff1b}\u{53ef}\u{5728}\u{8d26}\u{6237}\u{9875}\u{9762}\u{5207}\u{6362}", "Migration complete; select it on the Accounts page")),
             ConfirmKind::Sync => rpc(&["sync"]).map(|value| sync_notice(&value)),
             ConfirmKind::InstallM3 => model_action(&["model", "install-m3", "--mirror", &selected_model_mirror()])
-                .map(|_| t("BGE-M3 处理结束", "BGE-M3 step finished")),
+                .map(|_| t("BGE-M3 \u{5904}\u{7406}\u{7ed3}\u{675f}", "BGE-M3 step finished")),
             ConfirmKind::CancelModel(id) => cancel_model(&id)
-                .map(|_| t("已取消模型任务", "Model task cancelled")),
+                .map(|_| t("\u{5df2}\u{53d6}\u{6d88}\u{6a21}\u{578b}\u{4efb}\u{52a1}", "Model task cancelled")),
             ConfirmKind::RestartM3(id, mirror) => cancel_model(&id)
                 .and_then(|_| crate::rpc::prepare_model(&mirror).map_err(|error| error.to_string()))
-                .map(|_| t("已重新安排下载；可在模型页面查看进度", "Download rescheduled; progress is shown on the Models page")),
+                .map(|_| t("\u{5df2}\u{91cd}\u{65b0}\u{5b89}\u{6392}\u{4e0b}\u{8f7d}\u{ff1b}\u{53ef}\u{5728}\u{6a21}\u{578b}\u{9875}\u{9762}\u{67e5}\u{770b}\u{8fdb}\u{5ea6}", "Download rescheduled; progress is shown on the Models page")),
             ConfirmKind::UninstallM3 => {
-                rpc(&["model", "uninstall-m3"]).map(|_| t("BGE-M3 已卸载", "BGE-M3 uninstalled"))
+                rpc(&["model", "uninstall-m3"]).map(|_| t("BGE-M3 \u{5df2}\u{5378}\u{8f7d}", "BGE-M3 uninstalled"))
             }
             ConfirmKind::Engine(engine) => save_model_settings(&shared, &engine, None),
             ConfirmKind::Weights(engine, variant) => save_model_settings(&shared, &engine, Some(&variant)),
             ConfirmKind::InstallVariant(engine, variant) => model_action(&["model", "install-m3", "--model", &variant, "--for-engine", &engine,
                 "--mirror", &selected_model_mirror()]).map(|_| t(
-                    "预下载完成；当前模型未切换，可继续下载其他权重或选择加载", "Download complete; current model unchanged. Download more weights or select Load.")),
+                    "\u{9884}\u{4e0b}\u{8f7d}\u{5b8c}\u{6210}\u{ff1b}\u{5f53}\u{524d}\u{6a21}\u{578b}\u{672a}\u{5207}\u{6362}\u{ff0c}\u{53ef}\u{7ee7}\u{7eed}\u{4e0b}\u{8f7d}\u{5176}\u{4ed6}\u{6743}\u{91cd}\u{6216}\u{9009}\u{62e9}\u{52a0}\u{8f7d}", "Download complete; current model unchanged. Download more weights or select Load.")),
             ConfirmKind::RecallMode(mode) => {
                 retrieval_action(&["agent-config", "--set", &format!("recall_mode={mode}")]).map(
                     |_| {
                         t(
-                            "召回模式已保存，下次查询生效",
+                            "\u{53ec}\u{56de}\u{6a21}\u{5f0f}\u{5df2}\u{4fdd}\u{5b58}\u{ff0c}\u{4e0b}\u{6b21}\u{67e5}\u{8be2}\u{751f}\u{6548}",
                             "Recall mode saved; applies to the next query",
                         )
                     },
@@ -1392,7 +1392,7 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
             ConfirmKind::InstallEngines => host_command(&["model", "install-engines"]).map(|v| {
                 format!(
                     "{}: {}",
-                    t("推理引擎", "Providers"),
+                    t("\u{63a8}\u{7406}\u{5f15}\u{64ce}", "Providers"),
                     v["summary"]["providers"].as_array().map(|providers|
                         providers.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
                         .unwrap_or_default()
@@ -1402,7 +1402,7 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
             ConfirmKind::Workspace(mode) => set_workspace(&mode),
             ConfirmKind::Autosync(on) => {
                 let flag = if on { "true" } else { "false" };
-                rpc(&["config", "--autosync", flag]).map(|_| t("自动同步已保存", "Auto-sync saved"))
+                rpc(&["config", "--autosync", flag]).map(|_| t("\u{81ea}\u{52a8}\u{540c}\u{6b65}\u{5df2}\u{4fdd}\u{5b58}", "Auto-sync saved"))
             }
             ConfirmKind::Update(tool, spec) => run_package_update(&tool, &spec),
         };
@@ -1419,7 +1419,7 @@ fn run_confirm(app: &mut App, kind: ConfirmKind) {
 
 fn set_workspace(mode: &str) -> Result<String, String> {
     rpc(&["agent-config", "--set", &format!("workspace_mode={mode}")])?;
-    Ok(t("工作模式已保存", "Service mode saved"))
+    Ok(t("\u{5de5}\u{4f5c}\u{6a21}\u{5f0f}\u{5df2}\u{4fdd}\u{5b58}", "Service mode saved"))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1502,7 +1502,7 @@ fn channel_spec() -> String {
 }
 
 fn check_versions(app: &mut App) {
-    app.set_notice(t("正在检查 npm 上的版本", "Checking versions on npm"));
+    app.set_notice(t("\u{6b63}\u{5728}\u{68c0}\u{67e5} npm \u{4e0a}\u{7684}\u{7248}\u{672c}", "Checking versions on npm"));
     let slot = Arc::clone(&app.outcome);
     let shared = Arc::clone(&app.shared);
     std::thread::spawn(move || {
@@ -1519,15 +1519,15 @@ fn check_versions(app: &mut App) {
                     !remote.is_empty() && respire::update_check::is_newer(remote, current);
                 let line = format!(
                     "{} {current}    latest {latest}    dev {dev}{}",
-                    if zh() { "当前" } else { "current" },
+                    if zh() { "\u{5f53}\u{524d}" } else { "current" },
                     if newer {
                         if zh() {
-                            format!("    有新版本 {remote}")
+                            format!("    \u{6709}\u{65b0}\u{7248}\u{672c} {remote}")
                         } else {
                             format!("    update available {remote}")
                         }
                     } else if zh() {
-                        "    已是这条通道上的最新版".to_owned()
+                        "    \u{5df2}\u{662f}\u{8fd9}\u{6761}\u{901a}\u{9053}\u{4e0a}\u{7684}\u{6700}\u{65b0}\u{7248}".to_owned()
                     } else {
                         "    already the newest on this channel".to_owned()
                     }
@@ -1539,7 +1539,7 @@ fn check_versions(app: &mut App) {
                 line
             }
             None => t(
-                "没有读到 npm 版本，检查网络后再试",
+                "\u{6ca1}\u{6709}\u{8bfb}\u{5230} npm \u{7248}\u{672c}\u{ff0c}\u{68c0}\u{67e5}\u{7f51}\u{7edc}\u{540e}\u{518d}\u{8bd5}",
                 "Could not read npm versions. Check the network and try again",
             ),
         };
@@ -1556,7 +1556,7 @@ fn run_package_update(tool: &str, spec: &str) -> Result<String, String> {
         "pnpm" => format!("pnpm add -g {spec}"),
         "yarn" => format!("yarn global add {spec}"),
         "bun" => format!("bun add -g {spec}"),
-        _ => return Err(t("没有可用的包管理器", "No package manager is available")),
+        _ => return Err(t("\u{6ca1}\u{6709}\u{53ef}\u{7528}\u{7684}\u{5305}\u{7ba1}\u{7406}\u{5668}", "No package manager is available")),
     };
     let mut cmd = if cfg!(windows) {
         let mut cmd = std::process::Command::new("cmd");
@@ -1572,7 +1572,7 @@ fn run_package_update(tool: &str, spec: &str) -> Result<String, String> {
     let output = cmd.output().map_err(|error| format!("{error}"))?;
     if output.status.success() {
         return Ok(t(
-            "更新命令已完成。重新打开程序后才会换成新版本。当前这个窗口如果是直接运行的，不会被换掉。",
+            "\u{66f4}\u{65b0}\u{547d}\u{4ee4}\u{5df2}\u{5b8c}\u{6210}\u{3002}\u{91cd}\u{65b0}\u{6253}\u{5f00}\u{7a0b}\u{5e8f}\u{540e}\u{624d}\u{4f1a}\u{6362}\u{6210}\u{65b0}\u{7248}\u{672c}\u{3002}\u{5f53}\u{524d}\u{8fd9}\u{4e2a}\u{7a97}\u{53e3}\u{5982}\u{679c}\u{662f}\u{76f4}\u{63a5}\u{8fd0}\u{884c}\u{7684}\u{ff0c}\u{4e0d}\u{4f1a}\u{88ab}\u{6362}\u{6389}\u{3002}",
             "Update command finished. Reopen the program to use the new version. This window is unchanged if it was started as a direct binary.",
         ));
     }
@@ -1586,7 +1586,7 @@ fn sync_notice(value: &Value) -> String {
     let summary = &value["summary"];
     t(
         &format!(
-            "同步结束  拉 {}  推 {}  冲突 {}",
+            "\u{540c}\u{6b65}\u{7ed3}\u{675f}  \u{62c9} {}  \u{63a8} {}  \u{51b2}\u{7a81} {}",
             summary["pulled"].as_u64().unwrap_or(0),
             summary["pushed"].as_u64().unwrap_or(0),
             summary["conflicts"].as_i64().unwrap_or(0)
@@ -1612,16 +1612,16 @@ fn edit_key(app: &mut App, code: KeyCode) -> bool {
             if value.is_empty() || !(value.starts_with("http://") || value.starts_with("https://"))
             {
                 app.set_notice(t(
-                    "地址必须以 http:// 或 https:// 开头",
+                    "\u{5730}\u{5740}\u{5fc5}\u{987b}\u{4ee5} http:// \u{6216} https:// \u{5f00}\u{5934}",
                     "Address must start with http:// or https://",
                 ));
                 return false;
             }
             let slot = Arc::clone(&app.outcome);
-            app.set_notice(t("正在保存服务器地址", "Saving the server address"));
+            app.set_notice(t("\u{6b63}\u{5728}\u{4fdd}\u{5b58}\u{670d}\u{52a1}\u{5668}\u{5730}\u{5740}", "Saving the server address"));
             std::thread::spawn(move || {
                 let message = match rpc(&["config", "--addr", &value]) {
-                    Ok(_) => t("服务器地址已保存", "Server address saved"),
+                    Ok(_) => t("\u{670d}\u{52a1}\u{5668}\u{5730}\u{5740}\u{5df2}\u{4fdd}\u{5b58}", "Server address saved"),
                     Err(error) => error,
                 };
                 if let Ok(mut guard) = slot.lock() {
@@ -1672,14 +1672,14 @@ fn draw(frame: &mut Frame, app: &App) {
         Layout::vertical([Constraint::Min(8), Constraint::Length(foot_height)]).split(area);
     let mut body = if !app.live.connected {
         let mut lines = vec![line(t(
-            "正在连接 runtime / 初始化中…",
+            "\u{6b63}\u{5728}\u{8fde}\u{63a5} runtime / \u{521d}\u{59cb}\u{5316}\u{4e2d}\u{2026}",
             "Connecting to runtime / initializing...",
         ))];
         if !app.live.error.is_empty() {
             lines.push(fail_line(app.live.error.clone()));
         }
         lines.push(line(t(
-            "推理卡住可在终端运行：rsrs model reset-cpu",
+            "\u{63a8}\u{7406}\u{5361}\u{4f4f}\u{53ef}\u{5728}\u{7ec8}\u{7aef}\u{8fd0}\u{884c}\u{ff1a}rsrs model reset-cpu",
             "If inference is stuck: rsrs model reset-cpu",
         )));
         lines
@@ -1731,24 +1731,24 @@ fn draw(frame: &mut Frame, app: &App) {
         draw_inject(frame, app, chunks[0]);
     }
     let foot = if matches!(app.overlay, Overlay::ModelTask(_)) {
-        t("Esc / C 取消当前模型任务", "Esc / C cancels the model task")
+        t("Esc / C \u{53d6}\u{6d88}\u{5f53}\u{524d}\u{6a21}\u{578b}\u{4efb}\u{52a1}", "Esc / C cancels the model task")
     } else if matches!(app.overlay, Overlay::RecallApi(_)) {
         t(
-            "Tab 切字段    Ctrl+A 全选    Ctrl+S 保存    Esc 放弃",
+            "Tab \u{5207}\u{5b57}\u{6bb5}    Ctrl+A \u{5168}\u{9009}    Ctrl+S \u{4fdd}\u{5b58}    Esc \u{653e}\u{5f03}",
             "Tab changes field    Ctrl+A selects all    Ctrl+S saves    Esc discards",
         )
     } else if matches!(app.overlay, Overlay::RecallTest(_)) {
         t(
-            "回车测试    Ctrl+A 全选    PgUp/PgDn 滚动    Esc 返回",
+            "\u{56de}\u{8f66}\u{6d4b}\u{8bd5}    Ctrl+A \u{5168}\u{9009}    PgUp/PgDn \u{6eda}\u{52a8}    Esc \u{8fd4}\u{56de}",
             "Enter tests    Ctrl+A selects all    PgUp/PgDn scroll    Esc returns",
         )
     } else if matches!(app.overlay, Overlay::Edit { .. }) {
         t(
-            "回车保存    空格或 Esc 放弃    退格删除",
+            "\u{56de}\u{8f66}\u{4fdd}\u{5b58}    \u{7a7a}\u{683c}\u{6216} Esc \u{653e}\u{5f03}    \u{9000}\u{683c}\u{5220}\u{9664}",
             "Enter saves    Space or Esc cancels    Backspace deletes",
         )
     } else if zh() {
-        "方向键移动    数字进入    回车确认    空格勾选    0 或 Esc 返回    7 切换语言".to_owned()
+        "\u{65b9}\u{5411}\u{952e}\u{79fb}\u{52a8}    \u{6570}\u{5b57}\u{8fdb}\u{5165}    \u{56de}\u{8f66}\u{786e}\u{8ba4}    \u{7a7a}\u{683c}\u{52fe}\u{9009}    0 \u{6216} Esc \u{8fd4}\u{56de}    7 \u{5207}\u{6362}\u{8bed}\u{8a00}".to_owned()
     } else {
         "Arrows move    digits open    Enter confirms    Space checks    0 or Esc back    7 switches language".to_owned()
     };
@@ -1762,7 +1762,7 @@ fn draw(frame: &mut Frame, app: &App) {
         Paragraph::new(foot_lines).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(t("按键", "Keys")),
+                .title(t("\u{6309}\u{952e}", "Keys")),
         ),
         chunks[1],
     );
@@ -1794,13 +1794,13 @@ fn keep_selection_visible(body: &mut Vec<Line<'static>>, area: Rect) {
 fn home_body(app: &App, inner: usize) -> Vec<Line<'static>> {
     let live = &app.live;
     let phase = match live.phase.as_str() {
-        "running" => t("正在同步", "syncing"),
-        "ok" => t("上次成功", "last ok"),
-        "err" => t("上次失败", "last failed"),
-        _ => t("空闲", "idle"),
+        "running" => t("\u{6b63}\u{5728}\u{540c}\u{6b65}", "syncing"),
+        "ok" => t("\u{4e0a}\u{6b21}\u{6210}\u{529f}", "last ok"),
+        "err" => t("\u{4e0a}\u{6b21}\u{5931}\u{8d25}", "last failed"),
+        _ => t("\u{7a7a}\u{95f2}", "idle"),
     };
     let user = if live.user.is_empty() {
-        t("未登录", "signed out")
+        t("\u{672a}\u{767b}\u{5f55}", "signed out")
     } else {
         live.user.clone()
     };
@@ -1821,60 +1821,60 @@ fn home_body(app: &App, inner: usize) -> Vec<Line<'static>> {
                 format!("rsrs  {stamp}"),
                 format!("pid {}", live.pid),
                 if live.connected {
-                    t("runtime 在运行", "runtime up")
+                    t("runtime \u{5728}\u{8fd0}\u{884c}", "runtime up")
                 } else {
-                    t("runtime 未连通", "runtime down")
+                    t("runtime \u{672a}\u{8fde}\u{901a}", "runtime down")
                 },
             ],
             [
                 live.url.clone(),
-                format!("{}  {user}", t("档案", "Account")),
+                format!("{}  {user}", t("\u{6863}\u{6848}", "Account")),
                 format!(
                     "{}  {}",
-                    t("工作模式", "Service mode"),
+                    t("\u{5de5}\u{4f5c}\u{6a21}\u{5f0f}", "Service mode"),
                     workspace_label(&live.workspace)
                 ),
             ],
             [
-                format!("{}  {addr}", t("服务器", "Server")),
-                format!("{}  {phase}", t("同步", "Sync")),
+                format!("{}  {addr}", t("\u{670d}\u{52a1}\u{5668}", "Server")),
+                format!("{}  {phase}", t("\u{540c}\u{6b65}", "Sync")),
                 format!(
                     "{} {} / {} {}",
-                    t("本地", "Local"),
+                    t("\u{672c}\u{5730}", "Local"),
                     live.local_alive,
-                    t("云端", "Remote"),
+                    t("\u{4e91}\u{7aef}", "Remote"),
                     live.remote_alive
                 ),
             ],
             [
                 format!(
                     "{} {}  {} {}",
-                    t("冲突", "Conflicts"),
+                    t("\u{51b2}\u{7a81}", "Conflicts"),
                     live.conflicts,
-                    t("自动", "Auto"),
+                    t("\u{81ea}\u{52a8}", "Auto"),
                     if live.autosync {
-                        t("开", "on")
+                        t("\u{5f00}", "on")
                     } else {
-                        t("关", "off")
+                        t("\u{5173}", "off")
                     }
                 ),
-                format!("{} {}", t("待推送", "Pending"), live.pending),
+                format!("{} {}", t("\u{5f85}\u{63a8}\u{9001}", "Pending"), live.pending),
                 format!(
                     "{} {}  {} {}",
-                    t("上次拉", "Pulled"),
+                    t("\u{4e0a}\u{6b21}\u{62c9}", "Pulled"),
                     live.pulled,
-                    t("推", "pushed"),
+                    t("\u{63a8}", "pushed"),
                     live.pushed
                 ),
             ],
             [
                 format!(
                     "{} {}  {} {}  {} {}",
-                    t("注入新", "fresh"),
+                    t("\u{6ce8}\u{5165}\u{65b0}", "fresh"),
                     live.fresh,
-                    t("过期", "stale"),
+                    t("\u{8fc7}\u{671f}", "stale"),
                     live.stale,
-                    t("未注入", "missing"),
+                    t("\u{672a}\u{6ce8}\u{5165}", "missing"),
                     live.missing
                 ),
                 String::new(),
@@ -1896,7 +1896,7 @@ fn home_body(app: &App, inner: usize) -> Vec<Line<'static>> {
         lines.push(ok_line(format!(
             "doctor  {} {}",
             live.doctor.len(),
-            t("项已读取", "checks read")
+            t("\u{9879}\u{5df2}\u{8bfb}\u{53d6}", "checks read")
         )));
     } else {
         for (name, status, value) in fails.iter().take(6) {
@@ -1910,20 +1910,20 @@ fn home_body(app: &App, inner: usize) -> Vec<Line<'static>> {
     }
     lines.push(line(String::new()));
     let labels = [
-        t("1  账户", "1  Accounts"),
-        t("2  服务器", "2  Server"),
-        t("3  注入与提示词", "3  Inject and prompts"),
-        t("4  同步", "4  Sync"),
-        t("5  模型", "5  Models"),
-        t("6  工作模式", "6  Service mode"),
-        t("7  语言", "7  Language"),
-        t("8  版本", "8  Version"),
-        t("9  打开 Web", "9  Open Web"),
+        t("1  \u{8d26}\u{6237}", "1  Accounts"),
+        t("2  \u{670d}\u{52a1}\u{5668}", "2  Server"),
+        t("3  \u{6ce8}\u{5165}\u{4e0e}\u{63d0}\u{793a}\u{8bcd}", "3  Inject and prompts"),
+        t("4  \u{540c}\u{6b65}", "4  Sync"),
+        t("5  \u{6a21}\u{578b}", "5  Models"),
+        t("6  \u{5de5}\u{4f5c}\u{6a21}\u{5f0f}", "6  Service mode"),
+        t("7  \u{8bed}\u{8a00}", "7  Language"),
+        t("8  \u{7248}\u{672c}", "8  Version"),
+        t("9  \u{6253}\u{5f00} Web", "9  Open Web"),
     ];
     for (index, label) in labels.iter().enumerate() {
         lines.push(choice(index == app.cursor, label.clone()));
     }
-    lines.push(choice(app.cursor == 9, t("0  退出", "0  Quit")));
+    lines.push(choice(app.cursor == 9, t("0  \u{9000}\u{51fa}", "0  Quit")));
     lines
 }
 
@@ -2010,7 +2010,7 @@ fn web_key(app: &mut App, code: KeyCode) -> bool {
                 app.set_notice(error.to_string());
                 return false;
             }
-            app.set_notice(t(&format!("已打开 {url}"), &format!("Opened {url}")));
+            app.set_notice(t(&format!("\u{5df2}\u{6253}\u{5f00} {url}"), &format!("Opened {url}")));
         }
         _ => {}
     }
@@ -2020,13 +2020,13 @@ fn web_key(app: &mut App, code: KeyCode) -> bool {
 fn web_body(app: &App) -> Vec<Line<'static>> {
     let url = crate::web::DASHBOARD_URL;
     vec![
-        line(format!("{}: {url}", t("用户后台", "User dashboard"))),
+        line(format!("{}: {url}", t("\u{7528}\u{6237}\u{540e}\u{53f0}", "User dashboard"))),
         line(t(
-            "回车用系统浏览器打开。",
+            "\u{56de}\u{8f66}\u{7528}\u{7cfb}\u{7edf}\u{6d4f}\u{89c8}\u{5668}\u{6253}\u{5f00}\u{3002}",
             "Enter opens it in the system browser.",
         )),
-        choice(app.cursor == 0, t("打开 Web", "Open Web")),
-        choice(app.cursor == 1, t("0  返回", "0  Back")),
+        choice(app.cursor == 0, t("\u{6253}\u{5f00} Web", "Open Web")),
+        choice(app.cursor == 1, t("0  \u{8fd4}\u{56de}", "0  Back")),
     ]
 }
 
@@ -2038,30 +2038,30 @@ fn banner() -> Line<'static> {
         .add_modifier(Modifier::BOLD);
     let off = Style::default().fg(Color::DarkGray);
     Line::from(vec![
-        Span::raw(t("语言  ", "Language  ")),
-        Span::styled("中文", if zh_on { on } else { off }),
+        Span::raw(t("\u{8bed}\u{8a00}  ", "Language  ")),
+        Span::styled("\u{4e2d}\u{6587}", if zh_on { on } else { off }),
         Span::raw("  "),
         Span::styled("English", if zh_on { off } else { on }),
-        Span::raw(t("      7 立即切换", "      7 switches now")),
+        Span::raw(t("      7 \u{7acb}\u{5373}\u{5207}\u{6362}", "      7 switches now")),
     ])
 }
 
 fn accounts_body(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![line(t(
-        "选择账户后回车切换；新账户使用登录入口。",
+        "\u{9009}\u{62e9}\u{8d26}\u{6237}\u{540e}\u{56de}\u{8f66}\u{5207}\u{6362}\u{ff1b}\u{65b0}\u{8d26}\u{6237}\u{4f7f}\u{7528}\u{767b}\u{5f55}\u{5165}\u{53e3}\u{3002}",
         "Enter switches account; use Sign in for a new account.",
     ))];
     if app.live.accounts.is_empty() {
-        lines.push(line(t("没有读到账户", "No accounts read")));
+        lines.push(line(t("\u{6ca1}\u{6709}\u{8bfb}\u{5230}\u{8d26}\u{6237}", "No accounts read")));
     }
     for (index, row) in app.live.accounts.iter().enumerate() {
         let mark = if row.current {
-            t("当前", "current")
+            t("\u{5f53}\u{524d}", "current")
         } else {
             t("    ", "       ")
         };
         let user = if row.user.is_empty() {
-            t("未登录", "signed out")
+            t("\u{672a}\u{767b}\u{5f55}", "signed out")
         } else {
             row.user.clone()
         };
@@ -2072,30 +2072,30 @@ fn accounts_body(app: &App) -> Vec<Line<'static>> {
     }
     lines.push(choice(
         app.cursor == app.live.accounts.len(),
-        t("迁移旧版本", "Migrate old version"),
+        t("\u{8fc1}\u{79fb}\u{65e7}\u{7248}\u{672c}", "Migrate old version"),
     ));
     lines.push(choice(
         app.cursor == app.live.accounts.len() + 1,
-        t("登录（OAuth / 密码与 TOTP）", "Sign in (OAuth / password and TOTP)"),
+        t("\u{767b}\u{5f55}\u{ff08}OAuth / \u{5bc6}\u{7801}\u{4e0e} TOTP\u{ff09}", "Sign in (OAuth / password and TOTP)"),
     ));
     lines.push(choice(
         app.cursor == app.live.accounts.len() + 2,
-        t("0  返回", "0  Back"),
+        t("0  \u{8fd4}\u{56de}", "0  Back"),
     ));
     lines
 }
 
 fn migration_body(app: &App) -> Vec<Line<'static>> {
-    let mut lines = vec![line(t("选择来源目录和旧账户，回车确认；不会覆盖已有库。",
+    let mut lines = vec![line(t("\u{9009}\u{62e9}\u{6765}\u{6e90}\u{76ee}\u{5f55}\u{548c}\u{65e7}\u{8d26}\u{6237}\u{ff0c}\u{56de}\u{8f66}\u{786e}\u{8ba4}\u{ff1b}\u{4e0d}\u{4f1a}\u{8986}\u{76d6}\u{5df2}\u{6709}\u{5e93}\u{3002}",
         "Choose the source directory and legacy account. Existing libraries are preserved."))];
     for (index, row) in app.migration_profiles.iter().enumerate() {
         let state = if row["migrated_to"].is_null() { "" } else { " [migrated]" };
-        lines.push(choice(index == app.cursor, format!("{} | {} → {}{state}",
+        lines.push(choice(index == app.cursor, format!("{} | {} \u{2192} {}{state}",
             row["source"].as_str().unwrap_or(""), row["user"].as_str().unwrap_or(""),
             row["account"].as_str().unwrap_or(""))));
     }
-    if app.migration_profiles.is_empty() { lines.push(line(t("没有可迁移的旧库", "No legacy libraries found"))); }
-    lines.push(line(t("0  返回", "0  Back")));
+    if app.migration_profiles.is_empty() { lines.push(line(t("\u{6ca1}\u{6709}\u{53ef}\u{8fc1}\u{79fb}\u{7684}\u{65e7}\u{5e93}", "No legacy libraries found"))); }
+    lines.push(line(t("0  \u{8fd4}\u{56de}", "0  Back")));
     lines
 }
 
@@ -2103,14 +2103,14 @@ fn server_body(app: &App) -> Vec<Line<'static>> {
     vec![
         choice(
             app.cursor == 0,
-            format!("{}: {}", t("修改地址", "Edit address"), app.live.addr),
+            format!("{}: {}", t("\u{4fee}\u{6539}\u{5730}\u{5740}", "Edit address"), app.live.addr),
         ),
-        choice(app.cursor == 1, t("0  返回", "0  Back")),
+        choice(app.cursor == 1, t("0  \u{8fd4}\u{56de}", "0  Back")),
     ]
 }
 
 fn draw_inject(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::bordered().title(t("注入与提示词", "Inject and prompts"));
+    let block = Block::bordered().title(t("\u{6ce8}\u{5165}\u{4e0e}\u{63d0}\u{793a}\u{8bcd}", "Inject and prompts"));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let sections = Layout::vertical([
@@ -2125,11 +2125,11 @@ fn draw_inject(frame: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(vec![
             choice(
                 app.cursor == 0,
-                t("更新所有已安装提示词", "Update all installed prompts"),
+                t("\u{66f4}\u{65b0}\u{6240}\u{6709}\u{5df2}\u{5b89}\u{88c5}\u{63d0}\u{793a}\u{8bcd}", "Update all installed prompts"),
             ),
             choice(
                 app.cursor == 1,
-                t("卸载所有已安装提示词", "Uninstall all installed prompts"),
+                t("\u{5378}\u{8f7d}\u{6240}\u{6709}\u{5df2}\u{5b89}\u{88c5}\u{63d0}\u{793a}\u{8bcd}", "Uninstall all installed prompts"),
             ),
         ]),
         sections[1],
@@ -2145,9 +2145,9 @@ fn draw_inject(frame: &mut Frame, app: &App, area: Rect) {
             Cell::from(row.name.clone()),
             Cell::from(state_label(&row.state)).style(Style::default().fg(color)),
             Cell::from(if row.seen {
-                t("已检测到", "detected")
+                t("\u{5df2}\u{68c0}\u{6d4b}\u{5230}", "detected")
             } else {
-                t("未检测到", "not detected")
+                t("\u{672a}\u{68c0}\u{6d4b}\u{5230}", "not detected")
             }),
         ])
     });
@@ -2162,10 +2162,10 @@ fn draw_inject(frame: &mut Frame, app: &App, area: Rect) {
     )
     .header(
         Row::new([
-            t("安装", "On"),
-            t("目标", "Target"),
-            t("提示词状态", "Prompt status"),
-            t("应用检测", "App detected"),
+            t("\u{5b89}\u{88c5}", "On"),
+            t("\u{76ee}\u{6807}", "Target"),
+            t("\u{63d0}\u{793a}\u{8bcd}\u{72b6}\u{6001}", "Prompt status"),
+            t("\u{5e94}\u{7528}\u{68c0}\u{6d4b}", "App detected"),
         ])
         .style(Style::default().bold()),
     )
@@ -2182,7 +2182,7 @@ fn draw_inject(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(
         Paragraph::new(choice(
             app.cursor == app.live.inject.len() + 2,
-            t("0  返回", "0  Back"),
+            t("0  \u{8fd4}\u{56de}", "0  Back"),
         )),
         sections[3],
     );
@@ -2190,54 +2190,54 @@ fn draw_inject(frame: &mut Frame, app: &App, area: Rect) {
 
 fn state_label(state: &str) -> String {
     match state {
-        "fresh" => t("提示词已更新", "prompt fresh"),
-        "stale" => t("提示词过期", "prompt stale"),
-        "none" | "absent" => t("未注入", "not injected"),
+        "fresh" => t("\u{63d0}\u{793a}\u{8bcd}\u{5df2}\u{66f4}\u{65b0}", "prompt fresh"),
+        "stale" => t("\u{63d0}\u{793a}\u{8bcd}\u{8fc7}\u{671f}", "prompt stale"),
+        "none" | "absent" => t("\u{672a}\u{6ce8}\u{5165}", "not injected"),
         other => other.to_owned(),
     }
 }
 
 fn sync_body(app: &App) -> Vec<Line<'static>> {
     let phase = match app.live.phase.as_str() {
-        "running" => t("正在同步", "syncing"),
-        "ok" => t("上次成功", "last ok"),
-        "err" => t("上次失败", "last failed"),
-        _ => t("尚未同步", "not synced yet"),
+        "running" => t("\u{6b63}\u{5728}\u{540c}\u{6b65}", "syncing"),
+        "ok" => t("\u{4e0a}\u{6b21}\u{6210}\u{529f}", "last ok"),
+        "err" => t("\u{4e0a}\u{6b21}\u{5931}\u{8d25}", "last failed"),
+        _ => t("\u{5c1a}\u{672a}\u{540c}\u{6b65}", "not synced yet"),
     };
     vec![
         line(format!(
             "{phase}    {}: {}  {}: {}  {}: {}",
-            t("拉", "pulled"),
+            t("\u{62c9}", "pulled"),
             app.live.pulled,
-            t("推", "pushed"),
+            t("\u{63a8}", "pushed"),
             app.live.pushed,
-            t("冲突", "conflicts"),
+            t("\u{51b2}\u{7a81}", "conflicts"),
             app.live.conflicts
         )),
         line(if app.live.error.is_empty() {
             t(
-                "冲突只在这里查看，合并仍用命令。",
+                "\u{51b2}\u{7a81}\u{53ea}\u{5728}\u{8fd9}\u{91cc}\u{67e5}\u{770b}\u{ff0c}\u{5408}\u{5e76}\u{4ecd}\u{7528}\u{547d}\u{4ee4}\u{3002}",
                 "Conflicts are listed here. Merging stays a command.",
             )
         } else {
             app.live.error.clone()
         }),
-        choice(app.cursor == 0, t("手动同步一次", "Sync once")),
+        choice(app.cursor == 0, t("\u{624b}\u{52a8}\u{540c}\u{6b65}\u{4e00}\u{6b21}", "Sync once")),
         choice(
             app.cursor == 1,
             format!(
                 "{}  {}",
-                t("自动同步", "Auto-sync"),
+                t("\u{81ea}\u{52a8}\u{540c}\u{6b65}", "Auto-sync"),
                 if app.autosync_draft {
-                    t("开", "on")
+                    t("\u{5f00}", "on")
                 } else {
-                    t("关", "off")
+                    t("\u{5173}", "off")
                 }
             ),
         ),
-        choice(app.cursor == 2, t("0  返回", "0  Back")),
+        choice(app.cursor == 2, t("0  \u{8fd4}\u{56de}", "0  Back")),
         line(t(
-            "左右键切换自动同步，回车保存。",
+            "\u{5de6}\u{53f3}\u{952e}\u{5207}\u{6362}\u{81ea}\u{52a8}\u{540c}\u{6b65}\u{ff0c}\u{56de}\u{8f66}\u{4fdd}\u{5b58}\u{3002}",
             "Left and right change auto-sync. Enter saves.",
         )),
     ]
@@ -2250,16 +2250,16 @@ fn model_body(app: &App) -> Vec<Line<'static>> {
         line(format!("BGE-M3  {bge}")),
         choice(
             app.cursor == 0,
-            t("安装或校验 BGE-M3 量化模型（543 MiB）", "Install or verify BGE-M3 quantized (543 MiB)"),
+            t("\u{5b89}\u{88c5}\u{6216}\u{6821}\u{9a8c} BGE-M3 \u{91cf}\u{5316}\u{6a21}\u{578b}\u{ff08}543 MiB\u{ff09}", "Install or verify BGE-M3 quantized (543 MiB)"),
         ),
         choice(
             app.cursor == 1,
-            t("卸载 BGE-M3（删除文件）", "Uninstall BGE-M3 (delete files)"),
+            t("\u{5378}\u{8f7d} BGE-M3\u{ff08}\u{5220}\u{9664}\u{6587}\u{4ef6}\u{ff09}", "Uninstall BGE-M3 (delete files)"),
         ),
-        choice(app.cursor == 2, format!("{}: {}", t("下载源（回车选择）", "Download source (Enter to choose)"), selected_model_mirror())),
+        choice(app.cursor == 2, format!("{}: {}", t("\u{4e0b}\u{8f7d}\u{6e90}\u{ff08}\u{56de}\u{8f66}\u{9009}\u{62e9}\u{ff09}", "Download source (Enter to choose)"), selected_model_mirror())),
         line(format!(
             "{}: {engine} / {}",
-            t("当前推理设置", "Inference setting"), app.live.model_settings["model"].as_str().unwrap_or("unknown")
+            t("\u{5f53}\u{524d}\u{63a8}\u{7406}\u{8bbe}\u{7f6e}", "Inference setting"), app.live.model_settings["model"].as_str().unwrap_or("unknown")
         )),
     ];
     for (index, engine) in model_engines().iter().enumerate() {
@@ -2267,7 +2267,7 @@ fn model_body(app: &App) -> Vec<Line<'static>> {
             "npu" if cfg!(target_os = "macos") => "Apple CoreML (ANE / CPU)".to_owned(),
             "npu" => "NPU (Windows ML)".to_owned(),
             "gpu" => "GPU".to_owned(),
-            _ => t("CPU（默认）", "CPU (default)"),
+            _ => t("CPU\u{ff08}\u{9ed8}\u{8ba4}\u{ff09}", "CPU (default)"),
         };
         lines.push(choice(app.cursor == index + 3, label));
     }
@@ -2275,32 +2275,32 @@ fn model_body(app: &App) -> Vec<Line<'static>> {
     if cfg!(windows) {
         lines.push(choice(
             app.cursor == index,
-            t("安装 Windows NPU 推理引擎", "Install Windows NPU providers"),
+            t("\u{5b89}\u{88c5} Windows NPU \u{63a8}\u{7406}\u{5f15}\u{64ce}", "Install Windows NPU providers"),
         ));
         index += 1;
     }
     lines.push(choice(
         app.cursor == index,
-        t("运行推理验证", "Check inference"),
+        t("\u{8fd0}\u{884c}\u{63a8}\u{7406}\u{9a8c}\u{8bc1}", "Check inference"),
     ));
     let mode = respire::service::read_agent_config()["recall_mode"]
         .as_str()
         .unwrap_or("fast")
         .to_owned();
-    lines.push(line(format!("{}: {mode}", t("召回模式", "Recall mode"))));
+    lines.push(line(format!("{}: {mode}", t("\u{53ec}\u{56de}\u{6a21}\u{5f0f}", "Recall mode"))));
     lines.push(choice(
         app.cursor == index + 1,
-        t("快速（本地召回，默认）", "Fast (local retrieval, default)"),
+        t("\u{5feb}\u{901f}\u{ff08}\u{672c}\u{5730}\u{53ec}\u{56de}\u{ff0c}\u{9ed8}\u{8ba4}\u{ff09}", "Fast (local retrieval, default)"),
     ));
     lines.push(choice(
         app.cursor == index + 2,
         t(
-            "高质量（模型筛选标题，需配置 API）",
+            "\u{9ad8}\u{8d28}\u{91cf}\u{ff08}\u{6a21}\u{578b}\u{7b5b}\u{9009}\u{6807}\u{9898}\u{ff0c}\u{9700}\u{914d}\u{7f6e} API\u{ff09}",
             "High quality (model selects titles; API required)",
         ),
     ));
     let index_state = app.live.index["state"].as_str().unwrap_or("unknown");
-    lines.push(line(format!("{}: {}", t("后台索引", "Background index"), index_state)));
+    lines.push(line(format!("{}: {}", t("\u{540e}\u{53f0}\u{7d22}\u{5f15}", "Background index"), index_state)));
     if let Some(error) = app.live.index["error"].as_str() {
         lines.push(fail_line(error.to_owned()));
     }
@@ -2313,55 +2313,55 @@ fn model_body(app: &App) -> Vec<Line<'static>> {
     }
     if let Some(error) = app.live.inference["error"].as_str() { lines.push(fail_line(error.to_owned())); }
     lines.push(line(t(
-        "默认 CPU；runtime 内共享模型与推理；失败报错，不切换引擎。",
+        "\u{9ed8}\u{8ba4} CPU\u{ff1b}runtime \u{5185}\u{5171}\u{4eab}\u{6a21}\u{578b}\u{4e0e}\u{63a8}\u{7406}\u{ff1b}\u{5931}\u{8d25}\u{62a5}\u{9519}\u{ff0c}\u{4e0d}\u{5207}\u{6362}\u{5f15}\u{64ce}\u{3002}",
         "CPU by default; shared model and inference inside runtime; failures report errors without switching engines.",
     )));
     lines.push(line(t(
-        "卡住时在终端运行：rsrs model reset-cpu",
+        "\u{5361}\u{4f4f}\u{65f6}\u{5728}\u{7ec8}\u{7aef}\u{8fd0}\u{884c}\u{ff1a}rsrs model reset-cpu",
         "If stuck, run in terminal: rsrs model reset-cpu",
     )));
     lines.push(choice(
         app.cursor == index + 3,
         t(
-            "配置高质量召回 API（地址 / 模型 / 密钥）",
+            "\u{914d}\u{7f6e}\u{9ad8}\u{8d28}\u{91cf}\u{53ec}\u{56de} API\u{ff08}\u{5730}\u{5740} / \u{6a21}\u{578b} / \u{5bc6}\u{94a5}\u{ff09}",
             "Configure recall API (URL / model / key)",
         ),
     ));
     lines.push(choice(
         app.cursor == index + 4,
-        t("测试快速召回", "Test fast recall"),
+        t("\u{6d4b}\u{8bd5}\u{5feb}\u{901f}\u{53ec}\u{56de}", "Test fast recall"),
     ));
     lines.push(choice(
         app.cursor == index + 5,
-        t("测试高质量召回", "Test high-quality recall"),
+        t("\u{6d4b}\u{8bd5}\u{9ad8}\u{8d28}\u{91cf}\u{53ec}\u{56de}", "Test high-quality recall"),
     ));
-    lines.push(choice(app.cursor == index + 6, t("取消当前模型任务", "Cancel current model task")));
-    lines.push(choice(app.cursor == index + 7, t("从所选下载源重新下载", "Restart download from selected source")));
-    lines.push(choice(app.cursor == index + 8, t("推理 / Recall Benchmark", "Inference / Recall Benchmark")));
-    lines.push(choice(app.cursor == index + 9, t("选择引擎与模型权重…", "Choose engine and model weights…")));
-    lines.push(choice(app.cursor == index + 10, t("0  返回", "0  Back")));
+    lines.push(choice(app.cursor == index + 6, t("\u{53d6}\u{6d88}\u{5f53}\u{524d}\u{6a21}\u{578b}\u{4efb}\u{52a1}", "Cancel current model task")));
+    lines.push(choice(app.cursor == index + 7, t("\u{4ece}\u{6240}\u{9009}\u{4e0b}\u{8f7d}\u{6e90}\u{91cd}\u{65b0}\u{4e0b}\u{8f7d}", "Restart download from selected source")));
+    lines.push(choice(app.cursor == index + 8, t("\u{63a8}\u{7406} / Recall Benchmark", "Inference / Recall Benchmark")));
+    lines.push(choice(app.cursor == index + 9, t("\u{9009}\u{62e9}\u{5f15}\u{64ce}\u{4e0e}\u{6a21}\u{578b}\u{6743}\u{91cd}\u{2026}", "Choose engine and model weights\u{2026}")));
+    lines.push(choice(app.cursor == index + 10, t("0  \u{8fd4}\u{56de}", "0  Back")));
     lines
 }
 
 fn workspace_body(app: &App) -> Vec<Line<'static>> {
     let labels = [
-        t("正常服务", "Normal service"),
-        t("只读服务", "Read-only service"),
-        t("禁用服务", "Disabled service"),
+        t("\u{6b63}\u{5e38}\u{670d}\u{52a1}", "Normal service"),
+        t("\u{53ea}\u{8bfb}\u{670d}\u{52a1}", "Read-only service"),
+        t("\u{7981}\u{7528}\u{670d}\u{52a1}", "Disabled service"),
     ];
     vec![
         line(format!(
             "{}: {}",
-            t("当前", "Current"),
+            t("\u{5f53}\u{524d}", "Current"),
             workspace_label(&app.live.workspace)
         )),
         choice(
             app.cursor == 0,
-            format!("{}  {}", t("选择", "Choice"), labels[app.workspace_draft]),
+            format!("{}  {}", t("\u{9009}\u{62e9}", "Choice"), labels[app.workspace_draft]),
         ),
-        choice(app.cursor == 1, t("0  返回", "0  Back")),
+        choice(app.cursor == 1, t("0  \u{8fd4}\u{56de}", "0  Back")),
         line(t(
-            "左右键选择，回车保存；切换账号后保持。",
+            "\u{5de6}\u{53f3}\u{952e}\u{9009}\u{62e9}\u{ff0c}\u{56de}\u{8f66}\u{4fdd}\u{5b58}\u{ff1b}\u{5207}\u{6362}\u{8d26}\u{53f7}\u{540e}\u{4fdd}\u{6301}\u{3002}",
             "Left/right chooses. Enter saves for all accounts on this device.",
         )),
     ]
@@ -2369,11 +2369,11 @@ fn workspace_body(app: &App) -> Vec<Line<'static>> {
 
 fn lang_body(app: &App) -> Vec<Line<'static>> {
     vec![
-        choice(app.cursor == 0, t("1  中文", "1  Chinese")),
+        choice(app.cursor == 0, t("1  \u{4e2d}\u{6587}", "1  Chinese")),
         choice(app.cursor == 1, t("2  English", "2  English")),
-        choice(app.cursor == 2, t("0  返回", "0  Back")),
+        choice(app.cursor == 2, t("0  \u{8fd4}\u{56de}", "0  Back")),
         line(t(
-            "任意界面按 7 也会立即切换。回车在这里选定。",
+            "\u{4efb}\u{610f}\u{754c}\u{9762}\u{6309} 7 \u{4e5f}\u{4f1a}\u{7acb}\u{5373}\u{5207}\u{6362}\u{3002}\u{56de}\u{8f66}\u{5728}\u{8fd9}\u{91cc}\u{9009}\u{5b9a}\u{3002}",
             "7 also switches immediately from any screen. Enter selects here.",
         )),
     ]
@@ -2391,24 +2391,24 @@ fn version_body(app: &App) -> Vec<Line<'static>> {
         app.live.update_spec.clone()
     };
     let status = if app.live.ver_line.is_empty() {
-        format!("{} {}", t("当前", "Current"), env!("CARGO_PKG_VERSION"))
+        format!("{} {}", t("\u{5f53}\u{524d}", "Current"), env!("CARGO_PKG_VERSION"))
     } else {
         app.live.ver_line.clone()
     };
     vec![
         line(status),
         line(runtime_version_label(&app.live)),
-        line(format!("{}: {}", t("启动方式", "Started as"), manager_name(detect_preferred()))),
-        choice(app.cursor == 0, t("检查最新版", "Check the newest version")),
-        choice(app.cursor == 1, format!("{} {}  {spec}", t("更新", "Update"), manager_name(tool))),
-        choice(app.cursor == 2, t("0  返回", "0  Back")),
-        line(t("左右键选择用哪个包管理器更新。直接运行的程序不会被这次更新替换。", "Left and right choose the package manager. A direct binary is not replaced by the update.")),
+        line(format!("{}: {}", t("\u{542f}\u{52a8}\u{65b9}\u{5f0f}", "Started as"), manager_name(detect_preferred()))),
+        choice(app.cursor == 0, t("\u{68c0}\u{67e5}\u{6700}\u{65b0}\u{7248}", "Check the newest version")),
+        choice(app.cursor == 1, format!("{} {}  {spec}", t("\u{66f4}\u{65b0}", "Update"), manager_name(tool))),
+        choice(app.cursor == 2, t("0  \u{8fd4}\u{56de}", "0  Back")),
+        line(t("\u{5de6}\u{53f3}\u{952e}\u{9009}\u{62e9}\u{7528}\u{54ea}\u{4e2a}\u{5305}\u{7ba1}\u{7406}\u{5668}\u{66f4}\u{65b0}\u{3002}\u{76f4}\u{63a5}\u{8fd0}\u{884c}\u{7684}\u{7a0b}\u{5e8f}\u{4e0d}\u{4f1a}\u{88ab}\u{8fd9}\u{6b21}\u{66f4}\u{65b0}\u{66ff}\u{6362}\u{3002}", "Left and right choose the package manager. A direct binary is not replaced by the update.")),
     ]
 }
 
 fn runtime_version_label(live: &Live) -> String {
     if live.runtime_version.is_empty() {
-        t("Runtime 未连接", "Runtime not connected")
+        t("Runtime \u{672a}\u{8fde}\u{63a5}", "Runtime not connected")
     } else {
         format!("Runtime {}", live.runtime_version)
     }
@@ -2420,20 +2420,20 @@ fn detect_preferred() -> Manager {
 
 fn doctor_value(live: &Live, name: &str) -> String {
     if name == "embedder" && live.model_progress["active"] == true {
-        return t("正在后台准备模型", "Preparing model in background");
+        return t("\u{6b63}\u{5728}\u{540e}\u{53f0}\u{51c6}\u{5907}\u{6a21}\u{578b}", "Preparing model in background");
     }
     live.doctor
         .iter()
         .find(|(item, _, _)| item == name)
         .map(|(_, status, value)| {
             let value = if value.starts_with("BGE-M3 preparation/indexing ") || value.starts_with("Model operation in progress:") {
-                t("已安排后台准备", "Background preparation scheduled")
+                t("\u{5df2}\u{5b89}\u{6392}\u{540e}\u{53f0}\u{51c6}\u{5907}", "Background preparation scheduled")
             } else if value.starts_with("BGE-M3 index pending;") {
-                t("等待后台重建", "Waiting for background rebuild")
+                t("\u{7b49}\u{5f85}\u{540e}\u{53f0}\u{91cd}\u{5efa}", "Waiting for background rebuild")
             } else { value.clone() };
             format!("{status}  {value}")
         })
-        .unwrap_or_else(|| t("还没有读到", "not read yet"))
+        .unwrap_or_else(|| t("\u{8fd8}\u{6ca1}\u{6709}\u{8bfb}\u{5230}", "not read yet"))
 }
 
 #[cfg(test)]
@@ -2453,7 +2453,7 @@ mod model_menu_tests {
         let mut terminal = Terminal::new(backend)?;
         terminal.draw(|frame| draw(frame, &app))?;
         let screen = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect::<String>();
-        assert!(screen.contains("Validate and load") || screen.contains("校验并加载"), "{screen}");
+        assert!(screen.contains("Validate and load") || screen.contains("\u{6821}\u{9a8c}\u{5e76}\u{52a0}\u{8f7d}"), "{screen}");
         Ok(())
     }
 
@@ -2586,9 +2586,9 @@ mod model_menu_tests {
 
 fn workspace_label(mode: &str) -> String {
     match mode {
-        "readonly" => t("只读服务", "Read-only service"),
-        "off" => t("禁用服务", "Disabled service"),
-        _ => t("正常服务", "Normal service"),
+        "readonly" => t("\u{53ea}\u{8bfb}\u{670d}\u{52a1}", "Read-only service"),
+        "off" => t("\u{7981}\u{7528}\u{670d}\u{52a1}", "Disabled service"),
+        _ => t("\u{6b63}\u{5e38}\u{670d}\u{52a1}", "Normal service"),
     }
 }
 
@@ -2598,18 +2598,18 @@ fn overlay_lines(app: &App) -> Option<Vec<Line<'static>>> {
         Overlay::ModelWeights(form) => Some(form.lines(&app.live.model_settings)),
         Overlay::SavingWeights => Some(vec![
             line(match app.live.model_progress["phase"].as_str() {
-                Some("verify") => t("正在校验固定大小、SHA-256 和模型身份", "Validating pinned size, SHA-256 and model identity"),
-                Some("load") => t("正在实际加载和试推理；成功后保存", "Loading and running trial inference; saving after success"),
-                _ => t("等待加载事务完成；不会下载", "Waiting for model load transaction; no downloads"),
+                Some("verify") => t("\u{6b63}\u{5728}\u{6821}\u{9a8c}\u{56fa}\u{5b9a}\u{5927}\u{5c0f}\u{3001}SHA-256 \u{548c}\u{6a21}\u{578b}\u{8eab}\u{4efd}", "Validating pinned size, SHA-256 and model identity"),
+                Some("load") => t("\u{6b63}\u{5728}\u{5b9e}\u{9645}\u{52a0}\u{8f7d}\u{548c}\u{8bd5}\u{63a8}\u{7406}\u{ff1b}\u{6210}\u{529f}\u{540e}\u{4fdd}\u{5b58}", "Loading and running trial inference; saving after success"),
+                _ => t("\u{7b49}\u{5f85}\u{52a0}\u{8f7d}\u{4e8b}\u{52a1}\u{5b8c}\u{6210}\u{ff1b}\u{4e0d}\u{4f1a}\u{4e0b}\u{8f7d}", "Waiting for model load transaction; no downloads"),
             }),
-            line(t("请等待；加载期间不接受取消", "Please wait; loading cannot be cancelled")),
+            line(t("\u{8bf7}\u{7b49}\u{5f85}\u{ff1b}\u{52a0}\u{8f7d}\u{671f}\u{95f4}\u{4e0d}\u{63a5}\u{53d7}\u{53d6}\u{6d88}", "Please wait; loading cannot be cancelled")),
         ]),
         Overlay::ModelMirror(input) => {
-            let mut lines = vec![line(t("BGE-M3 下载源", "BGE-M3 download source"))];
+            let mut lines = vec![line(t("BGE-M3 \u{4e0b}\u{8f7d}\u{6e90}", "BGE-M3 download source"))];
             lines.extend(respire::model_install::MIRRORS.iter().map(|mirror| choice(input.text == *mirror, (*mirror).to_owned())));
             lines.push(input.line(70, true, false));
-            lines.push(line(t("上下键选择，也可输入自定义地址；回车保存，Esc 返回。", "Up/down selects; custom URL supported; Enter saves, Esc returns.")));
-            lines.push(line(t("运行中的下载不会直接换源；保存后可取消并重新下载。", "An active download keeps its source; cancel and restart after saving.")));
+            lines.push(line(t("\u{4e0a}\u{4e0b}\u{952e}\u{9009}\u{62e9}\u{ff0c}\u{4e5f}\u{53ef}\u{8f93}\u{5165}\u{81ea}\u{5b9a}\u{4e49}\u{5730}\u{5740}\u{ff1b}\u{56de}\u{8f66}\u{4fdd}\u{5b58}\u{ff0c}Esc \u{8fd4}\u{56de}\u{3002}", "Up/down selects; custom URL supported; Enter saves, Esc returns.")));
+            lines.push(line(t("\u{8fd0}\u{884c}\u{4e2d}\u{7684}\u{4e0b}\u{8f7d}\u{4e0d}\u{4f1a}\u{76f4}\u{63a5}\u{6362}\u{6e90}\u{ff1b}\u{4fdd}\u{5b58}\u{540e}\u{53ef}\u{53d6}\u{6d88}\u{5e76}\u{91cd}\u{65b0}\u{4e0b}\u{8f7d}\u{3002}", "An active download keeps its source; cancel and restart after saving.")));
             Some(lines)
         }
         Overlay::RecallApi(_) | Overlay::RecallTest(_) => Some(Vec::new()),
@@ -2627,15 +2627,15 @@ fn overlay_lines(app: &App) -> Option<Vec<Line<'static>>> {
             }
             Some(vec![
                 line(String::new()),
-                line(t("服务器地址", "Server address")),
+                line(t("\u{670d}\u{52a1}\u{5668}\u{5730}\u{5740}", "Server address")),
                 line(shown),
             ])
         }
         Overlay::Confirm { text, cursor, .. } => Some(vec![
             line(String::new()),
             line(text.clone()),
-            choice(*cursor == 0, t("1  确认", "1  Confirm")),
-            choice(*cursor == 1, t("2  取消", "2  Cancel")),
+            choice(*cursor == 0, t("1  \u{786e}\u{8ba4}", "1  Confirm")),
+            choice(*cursor == 1, t("2  \u{53d6}\u{6d88}", "2  Cancel")),
         ]),
     }
 }

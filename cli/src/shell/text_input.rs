@@ -106,14 +106,14 @@ impl Input {
         }
         let mut spans = Vec::new();
         if start > 0 {
-            spans.push(Span::raw("‹"));
+            spans.push(Span::raw("\u{2039}"));
         }
         used = 0;
         for index in start..=chars.len() {
             let ch = chars.get(index).copied().unwrap_or(' ');
             let size = char_width(ch);
             if used + size > budget {
-                spans.push(Span::raw("›"));
+                spans.push(Span::raw("\u{203a}"));
                 break;
             }
             let selected = active && (self.selected || index == self.cursor);
