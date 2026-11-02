@@ -646,7 +646,14 @@ test('validated tarball reuse requires exact run/attempt/source, unique successf
   }
   assert.deepEqual(packProducer(packSource.sha,{GITHUB_JOB:'npm-dry-run',GITHUB_REPOSITORY:'test/cli',GITHUB_RUN_ID:'100',GITHUB_RUN_ATTEMPT:'2'}),{...packSource,job:'npm-dry-run'});
   assert.equal(packProducer(packSource.sha,{}),undefined);
-  assert.equal(packProducer(packSource.sha,{GITHUB_JOB:'publish',GITHUB_RUN_ID:'100'}),undefined);
+  assert.throws(()=>packProducer(packSource.sha,{GITHUB_JOB:'publish',GITHUB_RUN_ID:'100'}),/producer identity/);
+  assert.deepEqual(packProducer(packSource.sha,{GITHUB_JOB:'publish',GITHUB_REPOSITORY:'test/cli',GITHUB_RUN_ID:'100',GITHUB_RUN_ATTEMPT:'2'}),{...packSource,job:'publish'});
+  const parent=structuredClone(evidence), publicationSource={...packSource,job:'publish'};
+  parent.run.head_sha='b'.repeat(40);parent.run.head_branch='v1.2.3';parent.run.event='push';
+  Object.assign(parent.jobs[0],{name:'publish',head_sha:parent.run.head_sha,status:'in_progress',conclusion:null});
+  Object.assign(parent.artifacts[0],{name:`npm-publication-packages-${packSource.run_id}-${packSource.run_attempt}`,workflow_run:{id:100,head_sha:parent.run.head_sha}});
+  assert.equal(validatedPackArtifact(parent.run,parent.jobs,parent.artifacts,publicationSource).id,300);
+  parent.jobs[0].run_attempt++;assert.throws(()=>validatedPackArtifact(parent.run,parent.jobs,parent.artifacts,publicationSource));
   assert.throws(()=>currentPackSource({}),/incomplete/);
 });
 test('validated archive is submitted unchanged with no npm pack and with the original journal/ACK boundary',async t=>{

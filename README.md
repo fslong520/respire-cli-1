@@ -70,7 +70,7 @@ Startup preserves the selected account and does not import old profiles automati
 
 ## Plugins
 
-One engine, one plugin per host. Every adapter hooks the same `rsrs` engine into an agent loop: title-tier recall on each turn and one-prefix store (`记：` / `存：` / `remember:`). Storage triggers and lifecycle hooks differ per host — Magpie archives on the host `onResponse` callback and Hermes exposes `sync_turn()`; each guide documents its own contract. A plugin never bundles the engine — when `rsrs` is missing it hands `npm i -g @rsrsai/cli@latest` to the agent. Setup guides: [plugin guides](https://docs.rsrs.rs/plugins/).
+One engine, one plugin per host. Every adapter hooks the same `rsrs` engine into an agent loop: title-tier recall on each turn and one-prefix store (`记：` / `存：` / `remember:`). Storage triggers and lifecycle hooks differ per host — Magpie archives on the host `onResponse` callback and Hermes exposes `sync_turn()`; each guide documents its own contract. A plugin never bundles the engine — when `rsrs` is missing it hands `npm i -g rsrs-cli@latest` to the agent. Setup guides: [plugin guides](https://docs.rsrs.rs/plugins/).
 
 | | Host | Install | Repository |
 | --- | --- | --- | --- |

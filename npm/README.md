@@ -10,9 +10,17 @@ rsrs doctor
 rsrs --help
 ```
 
-`rsrs-cli` is the primary install entry. It depends on the exact same version of
-`@rsrsai/cli`, which selects the native platform package. Stable releases use
-`latest`; development releases use `dev`.
+`rsrs-cli` is the primary install entry. For releases built from a manifest whose
+`npmScope` is `rsrs-cli`, it contains the launcher and declares every supported
+`@rsrsai/` platform package as an optional dependency at the exact same version.
+It does not depend on `@rsrsai/cli`. Stable releases use `latest`; development
+releases use `dev`.
+
+This is a source-layout change for future publications. Published `1.0.19` and
+`1.0.20-dev.7` still use `rsrs-cli` → `@rsrsai/cli` → platform package. Historical
+source manifests with `npmScope: "@rsrsai/cli"` and their receipts retain that
+layout; the split is determined by the source manifest, not a version threshold.
+The historical packer under `npm/alias` stays unchanged for exact-byte recovery.
 
 | Platform | Package |
 | --- | --- |
@@ -46,7 +54,7 @@ export RSRS_LIBC=glibc
 
 The glibc packages require a compatible glibc host; they do not run on Alpine.
 If optional packages were omitted during installation, install the selected
-platform package at the same version as `@rsrsai/cli`.
+platform package at the same version as the installed launcher.
 See [CLI source](https://github.com/risense-ai/respire-cli) for builds and runtime guides.
 
 | Boundary | Behavior |

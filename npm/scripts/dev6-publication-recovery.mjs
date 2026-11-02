@@ -66,7 +66,7 @@ export async function recoveryReady() {
   const toolingRuns = api(`repos/${DEV6.repository}/actions/workflows/ci.yml/runs?head_sha=${tooling}&per_page=100`).workflow_runs;
   const toolingCi = toolingRuns.filter(r => r.event === 'push' && r.head_branch === 'main' && r.head_sha === tooling).sort((a,b) => b.id-a.id)[0];
   if (!toolingCi || toolingCi.status !== 'completed' || toolingCi.conclusion !== 'success') throw new Error('Exact tooling main CI must succeed before recovery');
-  const m = read('npm/artifact-manifest.json');
+  const m = JSON.parse(cmd('git', ['show', `${DEV6.sha}:npm/artifact-manifest.json`], {maxBuffer:65536}));
   m.cliVersion = DEV6.version; // Versioned manifest describes existing product bytes, not tooling HEAD.
   const artifacts = pages(`repos/${DEV6.repository}/actions/runs/${DEV6.run}/artifacts?per_page=100`).flatMap(p => p.artifacts);
   const evidence = [];

@@ -27,7 +27,8 @@ The cleanup job shares the existing `npm-rsrs-cli-publication` concurrency group
 
 ## What is deleted
 
-For an opted-in source run, the explicit allowlist covers its four platform build packages, temporary npm packages, npm validation, API/upgrade/sweep/migration/concurrency evidence, and exact source-attempt scoped receipt. Matching alias and background verification receipts are selected only after validating their source and final installation proof. Protocol-2 accepted summaries and scoped submission journals are also allowlisted. Unknown alias submission journals retain the one-day fallback. Unknown names, unrelated CI workflows, other source runs and SDK delivery files are preserved.
+For an opted-in source run, the explicit allowlist covers its source manifest's platform build packages, temporary npm packages (including
+`npm-publication-packages-RUN-ATTEMPT`, the parent's validated launcher handoff), npm validation, API/upgrade/sweep/migration/concurrency evidence, and exact source-attempt scoped receipt. Matching alias and background verification receipts are selected only after validating their source and final installation proof. Protocol-2 accepted summaries and scoped submission journals are also allowlisted. Unknown alias submission journals retain the one-day fallback. Unknown names, unrelated CI workflows, other source runs and SDK delivery files are preserved.
 
 Payloads/evidence are removed first, alias receipts next, and the parent scoped receipt last. This preserves proof during partial progress where possible. The policy does not delete workflow runs or their logs. Detailed artifact-only test evidence and old download inputs are lost after cleanup; the Release, npm versions, run conclusions, audit logs and job summary remain. Historical manual alias recovery may need a new validated run after its temporary receipts expire.
 

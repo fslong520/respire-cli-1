@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {execFileSync, spawnSync} from 'node:child_process';
 import {verifyBinary} from './verify-binary.mjs';
@@ -27,11 +27,12 @@ if (process.argv.includes('--assets-only')) {
 }
 
 const names = [...manifest.targets.map(target => target.pkg), manifest.npmScope];
-const packIndex = process.argv.indexOf('--pack');
+const exporting = process.argv.includes('--export-packs');
+const packIndex = process.argv.indexOf(exporting ? '--export-packs' : '--pack');
 const packDirectory = packIndex >= 0 ? resolve(process.argv[packIndex + 1] || 'npm/release-packages') : null;
 const reuseIndex = process.argv.indexOf('--reuse-packs');
 const reuseDirectory = reuseIndex >= 0 ? resolve(process.argv[reuseIndex + 1] || '') : null;
-if (reuseDirectory && packDirectory) throw Error('Packing and validated-tarball reuse are mutually exclusive');
+if (reuseDirectory && packDirectory && !exporting) throw Error('Packing and validated-tarball reuse are mutually exclusive');
 let reused;
 if (reuseDirectory) {
   const source=currentPackSource();
@@ -48,7 +49,7 @@ for (const name of names) {
     throw new Error(`npm identity/version/repository mismatch: ${name}`);
   }
   if (name === manifest.npmScope) {
-    if (JSON.stringify(pkg.bin) !== JSON.stringify({rsrs:'./bin/cli.js'})
+    if (pkg.dependencies !== undefined || JSON.stringify(pkg.bin) !== JSON.stringify({rsrs:'./bin/cli.js'})
         || JSON.stringify(pkg.optionalDependencies) !== JSON.stringify(Object.fromEntries(manifest.targets.map(target => [target.pkg, manifest.cliVersion])))) {
       throw new Error('npm launcher/optional dependency mismatch');
     }
@@ -66,6 +67,7 @@ for (const name of names) {
     verifyPackFile(expected.tarballPath,expected,directory);
     const {sha256,tarballPath,...packed}=expected;
     report=[packed];
+    if (packDirectory) copyFileSync(expected.tarballPath, join(packDirectory, expected.filename));
   } else {
     const args = ['pack', '--json', ...(packDirectory ? ['--pack-destination', packDirectory] : ['--dry-run'])];
     const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {

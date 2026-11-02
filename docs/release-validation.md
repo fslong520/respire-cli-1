@@ -24,8 +24,11 @@ requires exact-source workspace tests, CLI 90% coverage and packaging/workflow/
 fixture contracts across all three source CI lanes, seven Release builds, and
 seven native startup/real CPU inference/latest applicable formal-stable upgrade
 checks. API regression, pinned SDK digests, and consistent artifacts for all
-eight scoped npm packages remain required. The public alias makes nine npm
-packages in total. Byte, source, dependency, receipt and immutable-version fence
+eight npm packages remain required: seven scoped platform packages and the
+`rsrs-cli` launcher. The parent Release submits only the seven platform packages;
+`npm-alias.yml` submits the exact launcher tarball validated by the parent using
+its existing package-specific Trusted Publisher. Parent acceptance binds the
+launcher digest separately, without claiming its npm acceptance. Byte, source, dependency, receipt and immutable-version fence
 checks still apply before submission.
 
 The `full` profile additionally requires all historical upgrades, long resident
@@ -43,16 +46,16 @@ regression success; use the dispatched run's actual full results and receipts.
 `rsrs-cli` is the primary public npm install entry. Protocol 2 separates two
 states; neither state can substitute for the other:
 
-- **accepted**: all seven platform packages, the scoped umbrella and `rsrs-cli`
+- **accepted**: all seven platform packages and the direct `rsrs-cli` launcher
   have explicit successful npm submission acknowledgements, or their existing
   exact public bytes have been confirmed. Local pack SHA-512/SHA-1, package
-  versions and exact dependencies remain mandatory. The umbrella follows all
-  platform acknowledgements; alias follows the scoped receipt. The Release
+  versions and exact dependencies remain mandatory. The launcher follows the
+  platform acknowledgements and their parent receipt. The Release
   becomes public only after the exact alias publisher job succeeds, all required
   acknowledgements exist, and the source attempt, tag and twenty-one assets match.
 - **verified**: the separate `Verify public npm publication` workflow confirms
   public metadata, install-index resolution and tarball digests, then performs
-  isolated Linux x64 GNU and native Linux ARM64 GNU/musl public installs. They check alias/scoped/native
+  isolated Linux x64 GNU and native Linux ARM64 GNU/musl public installs. They check launcher/native
   versions, the native binary hash, `--version` and `--help`. This proves the
   three Linux routes only; it does not claim public installation on other systems.
 
@@ -95,7 +98,7 @@ and validation before it. Report those earlier stages separately when they ran
 before a manual release trigger; a promotion-only result does not prove this
 end-to-end target.
 
-Normal success requires all nine exact-package npm acknowledgements: exit code
+Normal direct-launcher success requires all eight exact-package npm acknowledgements: exit code
 zero, no spawn error and no signal. It does not wait for the npm web page, search,
 registry/install-index propagation or public installation. GitHub Release
 finalization and the independent public verifier retain their own results and
@@ -256,8 +259,8 @@ still wait for their complete critical gates before publishing.
 
 For an explicitly requested DEV number, manual Release accepts `dev_version`
 in `X.Y.Z-dev.N` format. Its base can differ from the source manifest. The
-version must have no Git tag or published version on any of the eight scoped
-packages or the alias. Only an empty unpublished DEV draft can be resumed after
+version must have no Git tag or published version on any platform package,
+`rsrs-cli`, or the historical `@rsrsai/cli` package. Only an empty unpublished DEV draft can be resumed after
 its previous owner run finishes; preserve the failed run and reports. Draft
 notes record the owner, and an active owner blocks resumption. Legacy drafts
 without an owner marker require all other Release runs to finish first. The
@@ -319,7 +322,9 @@ Before npm can start, the normal publisher binds the repository, version,
 selected source SHA, owning Release run and complete scoped/alias package names
 in an encoded `rsrs-npm-write-fence` comment in the Release notes. Immediately
 before the first possible submission it persists `phase: fenced` with every
-validated scoped package digest and confirms the write. This is durable intent,
+validated package digest and confirms the write. Direct-launcher sources use
+fence schema 2 for all eight packages, including the launcher. Historical schema
+1 still binds only its scoped-package digests and retains its original meaning. This is durable intent,
 not an npm acceptance or installation receipt. It survives Actions artifact
 expiry and is retained when descriptions are regenerated or the Release becomes
 public. No new credential, service or permission is used.
@@ -444,8 +449,9 @@ in model/runtime/diary feedback, native upgrades and full-profile cloud sweeps. 
 require seven native jobs, six cloud jobs, three native migration jobs, three joins
 and the API job. An ARM failure or missing result prevents full validation.
 
-Seven targets produce 21 Release assets and nine npm packages: seven platform
-packages, the scoped umbrella and alias. The npm launcher defaults ARM64 Linux to static musl;
+Seven targets produce 21 Release assets and eight npm packages for a direct
+launcher source: seven platform packages and `rsrs-cli`. Historical source
+manifests retain their scoped umbrella and separate alias. The npm launcher defaults ARM64 Linux to static musl;
 `RSRS_LIBC=glibc` explicitly selects GNU. Independent background verification
 runs native ARM public installations for both routes, checks their exact binary
 hashes, version and executable startup, and records a separate ARM proof.

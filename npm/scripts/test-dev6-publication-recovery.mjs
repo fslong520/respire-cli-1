@@ -6,7 +6,8 @@ import {DEV6, TARGETS, validateRecoveryInputs, validateRecoverySource, validateR
 import {validateSource, assertSourceRun, validateScoped, assertDraft} from './release-publication.mjs';
 import {validateRecoveryBuilds, verifyRecoveryPackages, verifyRecoveryAlias} from './dev6-publication-recovery.mjs';
 const copy = structuredClone;
-const m = JSON.parse(readFileSync(new URL('../artifact-manifest.json', import.meta.url))); m.cliVersion = DEV6.version;
+const m = JSON.parse(readFileSync(new URL('../artifact-manifest.json', import.meta.url))); m.npmScope = '@rsrsai/cli'; // Historical receipt layout.
+m.cliVersion = DEV6.version;
 m.targets=m.targets.filter(t=>TARGETS.includes(t.triple)); // immutable historical DEV6 platform inventory
 const env = {GITHUB_REPOSITORY: DEV6.repository, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', RECOVERY_REF: DEV6.sha,
   RECOVERY_VERSION: DEV6.version, RECOVERY_PUBLISH: 'true', RECOVERY_FULL: 'true', RECOVERY_REUSE: 'false',

@@ -3,7 +3,7 @@
   "cliVersion": "1.0.19",
   "binaryName": "rsrs",
   "commandAliases": [],
-  "npmScope": "@rsrsai/cli",
+  "npmScope": "rsrs-cli",
   "repository": "https://github.com/risense-ai/respire-cli",
   "targets": [
     {

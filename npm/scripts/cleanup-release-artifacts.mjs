@@ -37,7 +37,7 @@ export function requirePublished(release,scoped,tag){
 }
 export function allowedSourceArtifact(name,source,targets,preparedOrigin){
   if(preparedOrigin&&[importName(source),consumerName(source)].includes(name))return true;
-  if([`scoped-ready-${source.run_id}-${source.run_attempt}`,`scoped-accepted-${source.run_id}-${source.run_attempt}`,`npm-submissions-${source.run_id}-${source.run_attempt}`,`publication-accepted-${source.run_id}-${source.run_attempt}`].includes(name))return true;
+  if([`scoped-ready-${source.run_id}-${source.run_attempt}`,`scoped-accepted-${source.run_id}-${source.run_attempt}`,`npm-submissions-${source.run_id}-${source.run_attempt}`,`publication-accepted-${source.run_id}-${source.run_attempt}`,`npm-publication-packages-${source.run_id}-${source.run_attempt}`].includes(name))return true;
   if(['npm-release-packages','npm-release-validation','dev-api-coverage','gnu-login-interruption'].includes(name))return true;
   return targets.some(t=>['cli-release-','release-sweep-','base-release-sweep-','resident-concurrency-','published-upgrades-','native-profile-migration-','native-profile-migration-fixture-','secret-service-profile-migration-'].some(p=>name===p+t));
 }

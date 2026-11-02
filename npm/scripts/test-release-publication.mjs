@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 import {execFile, execFileSync} from 'node:child_process';
 import {waitForPublicInstall, publicInstallArgs, publicInstallPlatform, PUBLICATION_MAX_BUFFER, publicationCommand, scopedPublisherFinished, selectRelease, validateArtifact, assertTagCommit, assertDraft, assertSourceRun, validateAlias, validateScoped, validateSource, readyName, aliasName} from './release-publication.mjs';
 
-const m = JSON.parse(readFileSync(new URL('../artifact-manifest.json', import.meta.url)));
+const m = JSON.parse(readFileSync(new URL('../artifact-manifest.json', import.meta.url))); m.npmScope = '@rsrsai/cli'; // Historical receipt layout.
 const integrity = 'sha512-' + createHash('sha512').update('synthetic package').digest('base64');
 const hash = 'a'.repeat(64), sha = 'b'.repeat(40), version = '1.2.3-dev.4';
 const source = {repository: 'risense-ai/respire-cli', workflow: '.github/workflows/release.yml', run_id: '100', run_attempt: '2', sha, version, channel: 'dev', release_id: 300};
@@ -149,11 +149,11 @@ test('workflow contract keeps trust identities, unprivileged waiting and acyclic
   assert.doesNotMatch(waiting, /concurrency:|id-token:/);
   assert.match(child.split('\n  publish:')[1], /if: github.event_name == 'workflow_dispatch'/);
   const final = parent.split('\n  publish:')[1];
-  const indices = ['--publish --accepted-only --tag', 'scoped-accepted', 'name: scoped-accepted-', 'gh workflow run npm-alias.yml', 'await-alias-accepted', 'release-publication.mjs finalize-accepted'].map(s => final.indexOf(s));
+  const indices = ['--publish --accepted-only --verified-packs npm/publication-packages --tag', 'scoped-accepted', 'name: scoped-accepted-', 'gh workflow run npm-alias.yml', 'await-alias-accepted', 'release-publication.mjs finalize-accepted'].map(s => final.indexOf(s));
   assert(indices.every(i => i >= 0));
   assert.deepEqual(indices, [...indices].sort((a,b) => a-b));
   assert.equal((helper.match(/'--draft=false'/g) || []).length, 1);
-  assert(final.indexOf('release-publication.mjs protocol') < final.indexOf('--publish --accepted-only --tag'));
+  assert(final.indexOf('release-publication.mjs protocol') < final.indexOf('--publish --accepted-only --verified-packs npm/publication-packages --tag'));
   assert.match(parent, /tags: \['v\*'\]/);
   assert.match(final, /group: cli-release-publication\n      queue: max\n      cancel-in-progress: false/);
   assert.match(final, /contents: write\n      actions: write\n      id-token: write/);
@@ -181,11 +181,11 @@ test('same-run scoped tarball reuse is explicit current-main only; historical, p
     }
   const verify=publisher.split('- name: Verify release artifacts and prepare every scoped npm package')[1].split('\n      - ')[0];
   assert.match(verify,/CLI_SHA: \$\{\{ needs.plan.outputs.sha \}\}/);
-  assert.match(verify,/if \[ "\$REUSE_VALIDATED_PACKS" = true \]; then\n\s+node npm\/scripts\/verify-packages.mjs release-assets --reuse-packs "\$RUNNER_TEMP\/validated-npm" --download\n\s+else\n\s+node npm\/scripts\/verify-packages.mjs release-assets\n\s+fi/);
+  assert.match(verify,/if \[ "\$REUSE_VALIDATED_PACKS" = true \]; then\n\s+node npm\/scripts\/verify-packages.mjs release-assets --reuse-packs "\$RUNNER_TEMP\/validated-npm" --download --export-packs npm\/publication-packages\n\s+else\n\s+node npm\/scripts\/verify-packages.mjs release-assets --pack npm\/publication-packages\n\s+fi/);
   const publish=publisher.split('- name: Publish npm using Trusted Publishing')[1].split('\n      - ')[0];
-  assert.match(publish,/if \[ "\$REUSE_VALIDATED_PACKS" = true \]; then/);
-  assert.match(publish,/--publish --accepted-only --verified-packs "\$RUNNER_TEMP\/validated-npm" --tag/);
-  assert.match(publish,/else\n\s+node npm\/scripts\/pack.mjs --root target\/ci --publish --accepted-only --tag/);
+  assert.doesNotMatch(publish,/npm\/scripts\/pack.mjs.*\$RUNNER_TEMP\/validated-npm/);
+  assert.match(publish,/--publish --accepted-only --verified-packs npm\/publication-packages --tag/);
+  assert.match(publisher,/name: npm-publication-packages/);
   assert.match(publisher,/if: inputs.prepared_run != ''\n\s+run: node npm\/scripts\/verify-packages.mjs release-assets --pack npm\/release-packages/);
 });
 test('two overlapping Releases progress without waiting while holding the opposite alias lock', () => {
@@ -233,8 +233,8 @@ test('all Actions uploads, including both handshake receipts, retain evidence fo
       uploads++;
     }
   }
-  // The release dependency cache adds one upload declaration to the existing evidence inventory.
-  assert.equal(uploads, 49, 'preserve active evidence, registered consumer, verified platform copies, import proof and release dependency cache');
+  // Keep the validated parent publication tarballs alongside the existing evidence.
+  assert.equal(uploads, 50, 'preserve active evidence, registered consumer, verified platform copies, import proof and release dependency cache');
   const crates = readFileSync(new URL('publish-crates.yml', root), 'utf8');
   assert.match(crates, /name: protocol-package-verification/);
   assert.doesNotMatch(crates, /name: sdk-package-verification/);

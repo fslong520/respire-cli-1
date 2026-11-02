@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Cross-workflow publication barrier. No npm credentials or new GitHub permissions.
-import {appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync} from 'node:fs';
+import {appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
@@ -22,6 +22,12 @@ export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export const read = file => JSON.parse(readFileSync(file, 'utf8'));
 export const write = (file, value) => writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 export const manifest = () => read('npm/artifact-manifest.json');
+export function sourceManifest(source) {
+  validateSource(source);
+  const m = JSON.parse(command('git', ['show', `${source.sha}:npm/artifact-manifest.json`], {maxBuffer:65536}));
+  m.cliVersion = source.version;
+  return m;
+}
 export const PUBLICATION_MAX_BUFFER = 16 * 1024 * 1024;
 export const publicationCommand = (name, args, options = {}) => execFileSync(name, args,
   {encoding: 'utf8', timeout: 30000, maxBuffer: PUBLICATION_MAX_BUFFER, ...options});
@@ -68,12 +74,16 @@ export function assertRecoveryAuthority(source, run) {
   validateRecoveryAuthority(source, run, mainSha, comparison);
 }
 export function validateScoped(receipt, expectedManifest) {
-  if (receipt?.schema !== 1 || receipt.kind !== 'scoped-ready') throw new Error('Invalid scoped-ready receipt');
+  if (expectedManifest.npmScope === 'rsrs-cli' || receipt?.schema !== 1 || receipt.kind !== 'scoped-ready') throw new Error('Invalid scoped-ready receipt');
   return validateScopedPayload(receipt, expectedManifest);
 }
 export function validateScopedPayload(receipt, expectedManifest) {
   const source = validateSource(receipt.source);
-  const names = [...expectedManifest.targets.map(t => t.pkg), expectedManifest.npmScope].sort();
+  const names = [...expectedManifest.targets.map(t => t.pkg), ...(expectedManifest.npmScope === 'rsrs-cli' ? [] : [expectedManifest.npmScope])].sort();
+  if (expectedManifest.npmScope === 'rsrs-cli') {
+    if (receipt.schema !== 2 || receipt.launcher?.name !== 'rsrs-cli' || receipt.launcher.version !== source.version ||
+        !/^sha512-[A-Za-z0-9+/]{86}==$/.test(receipt.launcher.integrity || '') || !/^[a-f0-9]{40}$/.test(receipt.launcher.shasum || '')) throw Error('Missing validated launcher identity');
+  } else if (receipt.launcher !== undefined) throw Error('Historical scoped receipt cannot declare a direct launcher');
   if (!Array.isArray(receipt.packages) || !equal(receipt.packages.map(p => p.name).sort(), names) ||
       receipt.packages.some(p => p.version !== source.version || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(p.integrity) || !/^[a-f0-9]{40}$/.test(p.shasum))) {
     throw new Error('Scoped receipt must contain every exact version and content digest once');
@@ -197,13 +207,13 @@ async function awaitScoped() {
   const protocol2 = await import('./publication-acceptance.mjs');
   const accepted = artifact(runId, protocol2.scopedAcceptedName({run_id: runId, run_attempt: attempt}), repo);
   if (accepted) {
-    protocol2.validateAcceptedScoped(accepted, manifest());
+    protocol2.validateAcceptedScoped(accepted, sourceManifest(accepted.source));
     output(protocol2.acceptedScopedOutput(accepted, run, attempt));
     return;
   }
   const scoped = artifact(runId, readyName({run_id: runId, run_attempt: attempt}), repo);
   if (!scoped) throw new Error('Exact scoped receipt missing after explicit publication dispatch');
-  validateScoped(scoped, manifest());
+  validateScoped(scoped, sourceManifest(scoped.source));
   if (String(scoped.source.run_id) !== runId || Number(scoped.source.run_attempt) !== Number(attempt)) throw new Error('Receipt does not belong to source event');
   assertSourceRun(run, scoped.source);
   assertRecoveryAuthority(scoped.source, run);
@@ -242,7 +252,8 @@ export function publicInstallArgs(directory, cache, version) {
     '--no-audit', '--no-fund', '--prefer-online', '--json', `rsrs-cli@${version}`];
 }
 async function publishAlias() {
-  const scoped = validateScoped(read('scoped-ready.json'), manifest());
+  const raw = read('scoped-ready.json');
+  const scoped = validateScoped(raw, sourceManifest(raw.source));
   const source = scoped.source;
   if (command('git', ['rev-parse', 'HEAD']).trim() !== (source.tooling_sha || source.sha) || String(source.run_id) !== process.env.SOURCE_RUN || Number(source.run_attempt) !== Number(process.env.SOURCE_ATTEMPT)) throw new Error('Pinned alias checkout/source mismatch');
   if (source.recovery && command('git', ['diff', source.sha, source.tooling_sha, '--', 'npm/alias', 'npm/scripts/pack-alias.mjs', 'LICENSE', 'COMMERCIAL-LICENSE.md']).trim()) {
@@ -294,9 +305,11 @@ export async function publicInstall(scoped, expected, assertCurrent, platform='l
     });
     process.stdout.write(installOutput);
     const alias = read(path.join(directory, 'node_modules/rsrs-cli/package.json'));
-    const cli = read(path.join(directory, 'node_modules/@rsrsai/cli/package.json'));
+    const cliPath = path.join(directory, 'node_modules/@rsrsai/cli/package.json');
+    const cli = scoped.launcher ? alias : read(cliPath);
+    if (scoped.launcher && (existsSync(cliPath) || alias.name !== 'rsrs-cli' || alias.dependencies !== undefined || !equal(alias.optionalDependencies, scoped.optionalDependencies))) throw Error('Clean direct installation contains an intermediate CLI or different dependencies');
     const native = read(path.join(directory, 'node_modules',selected.pkg,'package.json'));
-    if (native.name!==selected.pkg||[alias, cli, native].some(p => p.version !== source.version) || alias.dependencies?.['@rsrsai/cli'] !== source.version) throw new Error('Clean install resolved a different version/platform');
+    if (native.name!==selected.pkg||[alias, cli, native].some(p => p.version !== source.version) || (!scoped.launcher && alias.dependencies?.['@rsrsai/cli'] !== source.version)) throw new Error('Clean install resolved a different version/platform');
     const binaryHash = digest(path.join(directory, 'node_modules',selected.pkg,'bin/rsrs'));
     if (!scoped.binaries.some(b => b.package === native.name && b.sha256 === binaryHash)) throw new Error('Installed native binary differs from validated build');
     const bin = path.join(directory, 'node_modules/.bin/rsrs');
@@ -308,7 +321,8 @@ export async function publicInstall(scoped, expected, assertCurrent, platform='l
   } finally { rmSync(directory, {recursive: true, force: true}); }
 }
 async function awaitAlias() {
-  const scoped = validateScoped(read('scoped-ready.json'), manifest());
+  const raw = read('scoped-ready.json');
+  const scoped = validateScoped(raw, sourceManifest(raw.source));
   const source = scoped.source;
   const deadline = Date.now() + 80 * 60 * 1000;
   const createdAt = assertActive(source).created_at;
@@ -341,7 +355,8 @@ async function awaitAlias() {
   throw new Error('Matching successful short-package publication/install receipt missing after 80 minutes; release remains draft');
 }
 function finalize() {
-  const scoped = validateScoped(read('scoped-ready.json'), manifest());
+  const raw = read('scoped-ready.json');
+  const scoped = validateScoped(raw, sourceManifest(raw.source));
   const complete = read('publication-complete.json');
   if (!equal(complete.source, scoped.source) || !positive(complete.alias_run) || !positive(complete.alias_attempt) ||
       String(scoped.source.run_id) !== process.env.GITHUB_RUN_ID || Number(scoped.source.run_attempt) !== Number(process.env.GITHUB_RUN_ATTEMPT)) throw new Error('Missing exact completed publication barrier');

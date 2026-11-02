@@ -81,11 +81,11 @@ const positive = value => /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteg
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
 export function packProducer(sha, env = process.env) {
-  if (!env.GITHUB_RUN_ID || env.GITHUB_JOB!=='npm-dry-run') return undefined; // Other pack callers cannot opt into same-run reuse.
+  if (!env.GITHUB_RUN_ID || !['npm-dry-run','publish'].includes(env.GITHUB_JOB)) return undefined; // Only validation and the active parent publisher can seal reusable packs.
   const producer = {repository:env.GITHUB_REPOSITORY,run_id:String(env.GITHUB_RUN_ID),
     run_attempt:Number(env.GITHUB_RUN_ATTEMPT),sha,job:env.GITHUB_JOB};
   if (!/^[\w.-]+\/[\w.-]+$/.test(producer.repository || '') || !positive(producer.run_id) ||
-      !positive(producer.run_attempt) || !/^[a-f0-9]{40}$/.test(sha) || producer.job !== 'npm-dry-run') {
+      !positive(producer.run_attempt) || !/^[a-f0-9]{40}$/.test(sha) || !['npm-dry-run','publish'].includes(producer.job)) {
     throw Error('Validated pack producer identity is incomplete');
   }
   return producer;
@@ -98,16 +98,18 @@ export function currentPackSource(env = process.env) {
   return source;
 }
 export function validatedPackArtifact(run,jobs,artifacts,source) {
-  if (String(run.id)!==source.run_id || Number(run.run_attempt)!==source.run_attempt || run.head_sha!==source.sha ||
+  const publication = source.job === 'publish';
+  if (source.job !== undefined && !publication) throw Error('Unexpected pack producer');
+  if (String(run.id)!==source.run_id || Number(run.run_attempt)!==source.run_attempt || (!publication && run.head_sha!==source.sha) ||
       run.head_repository?.full_name!==source.repository || run.path!=='.github/workflows/release.yml' ||
-      run.head_branch!=='main' || run.event!=='workflow_dispatch' || run.status!=='in_progress') throw Error('Validated pack run/source/attempt differs');
-  const producers=jobs.filter(j=>j.name==='validate / npm-dry-run');
+      (!publication && (run.head_branch!=='main' || run.event!=='workflow_dispatch')) || !['push','workflow_dispatch'].includes(run.event) || run.status!=='in_progress') throw Error('Validated pack run/source/attempt differs');
+  const producers=jobs.filter(j=>j.name===(publication?'publish':'validate / npm-dry-run'));
   if (producers.length!==1 || !positive(producers[0].id) || String(producers[0].run_id)!==source.run_id ||
-      Number(producers[0].run_attempt)!==source.run_attempt || producers[0].head_sha!==source.sha ||
-      producers[0].status!=='completed' || producers[0].conclusion!=='success') throw Error('Validated pack producer is missing, ambiguous or unsuccessful');
-  const found=artifacts.filter(a=>a.name==='npm-release-packages');
+      Number(producers[0].run_attempt)!==source.run_attempt || producers[0].head_sha!==run.head_sha ||
+      (publication ? !['in_progress','completed'].includes(producers[0].status) || (producers[0].status==='completed' && producers[0].conclusion!=='success') : producers[0].status!=='completed' || producers[0].conclusion!=='success')) throw Error('Validated pack producer is missing, ambiguous or unsuccessful');
+  const found=artifacts.filter(a=>a.name===(publication?`npm-publication-packages-${source.run_id}-${source.run_attempt}`:'npm-release-packages'));
   if (found.length!==1 || !positive(found[0].id) || found[0].expired!==false ||
-      String(found[0].workflow_run?.id)!==source.run_id || found[0].workflow_run.head_sha!==source.sha ||
+      String(found[0].workflow_run?.id)!==source.run_id || found[0].workflow_run.head_sha!==run.head_sha ||
       !/^sha256:[a-f0-9]{64}$/.test(found[0].digest || '') || !positive(found[0].size_in_bytes) ||
       found[0].size_in_bytes>1024*1024*1024) throw Error('Validated pack artifact is missing, foreign or undigested');
   return found[0];
@@ -171,9 +173,10 @@ function packMetadata(folder,file,limit) {
   } finally {closeSync(fd);}
 }
 export function readValidatedPacks(folder,source,manifest) {
+  if (source.job !== undefined && source.job !== 'publish') throw Error('Unexpected pack producer');
   currentPackSource({GITHUB_REPOSITORY:source.repository,GITHUB_RUN_ID:source.run_id,GITHUB_RUN_ATTEMPT:source.run_attempt,CLI_SHA:source.sha});
   const index=JSON.parse(packMetadata(folder,'source-version.json',1024*1024));
-  const seal={...source,job:'npm-dry-run'};
+  const seal={...source,job:source.job || 'npm-dry-run'};
   if (!same(index.producer,seal) || index.git_sha!==source.sha || index.schema_version!==1 || !Array.isArray(index.packages)) throw Error('Validated pack seal/source/attempt differs');
   const names=manifest?[...manifest.targets.map(t=>t.pkg),manifest.npmScope]:index.packages.map(p=>p.name);
   if (new Set(names).size!==names.length || !same(index.packages.map(p=>p.name).sort(),[...names].sort()) ||
@@ -331,6 +334,8 @@ export async function checkPackage(expected, options = {}) {
   // authorize a second submission, even if this response body times out.
   options.onVersionVisible?.();
   const metadata = await registryRead(() => response.json());
+  if (expected.name === 'rsrs-cli' && expected.optionalDependencies && metadata.dependencies !== undefined &&
+      (!metadata.dependencies || typeof metadata.dependencies !== 'object' || Array.isArray(metadata.dependencies) || Object.keys(metadata.dependencies).length)) throw Error('Direct launcher must not depend on an intermediate CLI');
   if (metadata.name !== expected.name || metadata.version !== expected.version) throw new Error(`Registry identity mismatch: ${label}`);
   for (const dependencyField of ['dependencies', 'optionalDependencies']) {
     if (!expected[dependencyField]) continue;

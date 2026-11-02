@@ -19,10 +19,11 @@ const targets = [
 let cases = 0;
 for (const [platform, arch, libc, name] of targets) {
   for (const resolution of ['module', 'global-sibling']) {
+    for (const launcher of [['@rsrsai', 'cli'], ['rsrs-cli']]) {
     for (const installed of [null, '1.0.9', version, 'invalid-manifest']) {
       const root = mkdtempSync(path.join(os.tmpdir(), 'rsrs-wrapper-'));
       try {
-        const directory = path.join(root, 'node_modules', '@rsrsai', 'cli', 'bin');
+        const directory = path.join(root, 'node_modules', ...launcher, 'bin');
         mkdirSync(directory, { recursive: true });
         const pkg = `@rsrsai/${name}`;
         const packageRoot = path.join(root, 'node_modules', '@rsrsai', name);
@@ -58,6 +59,7 @@ for (const [platform, arch, libc, name] of targets) {
       } finally { rmSync(root, { recursive: true, force: true }); }
     }
   }
+}
 }
 for (const [platform, arch] of [['win32', 'ia32'], ['darwin', 'x64']]) {
   let exit, stderr = '';

@@ -1046,6 +1046,7 @@ jobs:
         run: |
           # Old refs lacking the protocol must fail before scoped publication.
           test "$(node npm/scripts/release-publication.mjs protocol)" = 2
+          node --input-type=module -e "import fs from 'node:fs'; if (JSON.parse(fs.readFileSync('npm/artifact-manifest.json')).npmScope !== 'rsrs-cli') throw Error('New publication requires the direct rsrs-cli launcher')"
       - name: Reject previously fenced version owners before npm or asset mutation
         if: ${{ !(inputs.repair_dev12 || inputs.repair_dev14) }}
         env:
@@ -1080,10 +1081,17 @@ jobs:
           node npm/scripts/assemble-artifacts.mjs release-assets target/ci
           node npm/scripts/pack.mjs --root target/ci
           if [ "$REUSE_VALIDATED_PACKS" = true ]; then
-            node npm/scripts/verify-packages.mjs release-assets --reuse-packs "$RUNNER_TEMP/validated-npm" --download
+            node npm/scripts/verify-packages.mjs release-assets --reuse-packs "$RUNNER_TEMP/validated-npm" --download --export-packs npm/publication-packages
           else
-            node npm/scripts/verify-packages.mjs release-assets
+            node npm/scripts/verify-packages.mjs release-assets --pack npm/publication-packages
           fi
+      - uses: actions/upload-artifact@v4
+        if: ${{ !(inputs.repair_dev12 || inputs.repair_dev14) }}
+        with:
+          retention-days: 1
+          name: npm-publication-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: npm/publication-packages/*
+          if-no-files-found: error
       - name: Materialize the actual local tarballs for prepared-byte equality checks
         if: inputs.prepared_run != ''
         run: node npm/scripts/verify-packages.mjs release-assets --pack npm/release-packages
@@ -1158,11 +1166,7 @@ jobs:
           CLI_SHA: ${{ needs.plan.outputs.sha }}
           CLI_CHANNEL: ${{ needs.plan.outputs.channel }}
         run: |
-          if [ "$REUSE_VALIDATED_PACKS" = true ]; then
-            node npm/scripts/pack.mjs --root target/ci --publish --accepted-only --verified-packs "$RUNNER_TEMP/validated-npm" --tag "$CLI_CHANNEL"
-          else
-            node npm/scripts/pack.mjs --root target/ci --publish --accepted-only --tag "$CLI_CHANNEL"
-          fi
+          node npm/scripts/pack.mjs --root target/ci --publish --accepted-only --verified-packs npm/publication-packages --tag "$CLI_CHANNEL"
       - uses: actions/upload-artifact@v4
         if: ${{ always() && !(inputs.repair_dev12 || inputs.repair_dev14) }}
         with:
