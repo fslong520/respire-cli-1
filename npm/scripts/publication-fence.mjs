@@ -10,7 +10,7 @@ const marker=/<!-- rsrs-npm-write-fence:([A-Za-z0-9_-]+) -->/g;
 const id=v=>/^[1-9]\d*$/.test(String(v));
 const sha=v=>/^[a-f0-9]{40}$/.test(v||'');
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
-const names=m=>[...m.targets.map(t=>t.pkg),m.npmScope,'rsrs-cli'].sort();
+const names=m=>[...new Set([...m.targets.map(t=>t.pkg),m.npmScope,'rsrs-cli'])].sort();
 const identities=packages=>packages.map(packIdentity).sort((a,b)=>a.name.localeCompare(b.name));
 export function readFence(body=''){
   if(typeof body!=='string')throw Error('Invalid Release body');
@@ -20,7 +20,7 @@ export function readFence(body=''){
   const bytes=Buffer.from(matches[0][1],'base64url');
   if(bytes.toString('base64url')!==matches[0][1])throw Error('Noncanonical persistent npm fence');
   const f=JSON.parse(bytes.toString('utf8'));
-  if(f?.schema!==1||f.kind!=='npm-version-fence'||f.repository!=='risense-ai/respire-cli'||
+  if(![1,2].includes(f?.schema)||f.kind!=='npm-version-fence'||f.repository!=='risense-ai/respire-cli'||
     !/^\d+\.\d+\.\d+(?:-dev\.\d+)?$/.test(f.version||'')||!sha(f.source_sha)||!id(f.run_id)||!id(f.first_attempt)||
     !['prepared','fenced'].includes(f.phase)||typeof f.created_at!=='string'||!Number.isFinite(Date.parse(f.created_at))||
     !Array.isArray(f.package_names)||new Set(f.package_names).size!==f.package_names.length||
@@ -33,7 +33,7 @@ export function fenceBody(body,fence){
   const encoded=prefix+Buffer.from(JSON.stringify(fence)).toString('base64url')+' -->';
   readFence(encoded);
   if(previous){
-    for(const key of ['repository','version','source_sha','run_id','first_attempt','created_at'])if(previous[key]!==fence[key])throw Error('Persistent npm intent ownership cannot be replaced');
+    for(const key of ['schema','repository','version','source_sha','run_id','first_attempt','created_at'])if(previous[key]!==fence[key])throw Error('Persistent npm intent ownership cannot be replaced');
     if(!same(previous.package_names,fence.package_names)||
       (previous.phase==='fenced'&&(fence.phase!=='fenced'||!same(identities(previous.scoped_packages),identities(fence.scoped_packages)))))throw Error('Persistent npm intent cannot be erased or changed');
   }
@@ -46,12 +46,12 @@ export function fenceContext(){
   return c;
 }
 export function assertFenceOwner(f,c,m){
-  if(f.repository!==c.repository||f.version!==c.version||f.source_sha!==c.source_sha||!same(f.package_names,names(m)))throw Error('Persistent npm fence source/package/version differs');
+  if((f.schema===2)!==(m.npmScope==='rsrs-cli')||f.repository!==c.repository||f.version!==c.version||f.source_sha!==c.source_sha||!same(f.package_names,names(m)))throw Error('Persistent npm fence source/package/version differs');
   if(String(f.run_id)!==String(c.run_id))throw Error(`Version ${c.version} is fenced by previous Release run ${f.run_id}; reconcile read-only and resume the original run or use a new version; registry 404 cannot authorize another submission`);
   return f;
 }
 export function assertFencePackages(f,packages){
-  const expected=f.package_names.filter(name=>name!=='rsrs-cli').sort();
+  const expected=f.package_names.filter(name=>f.schema===2||name!=='rsrs-cli').sort();
   if(!Array.isArray(packages)||!same(packages.map(p=>p?.name).sort(),expected)||packages.some(p=>
     p.version!==f.version||!/^sha512-[A-Za-z0-9+/]{86}==$/.test(p.integrity||'')||!/^[a-f0-9]{40}$/.test(p.shasum||'')))throw Error('Persistent npm fence package/version/digest inventory differs');
   if(f.phase==='fenced'&&!same(identities(f.scoped_packages),identities(packages)))throw Error('Previously fenced immutable package content changed');
@@ -95,7 +95,7 @@ export function bindFenceNotes(){
   const c=fenceContext(),m=manifest(),f=assertReusableRelease(findVersionRelease(c),c,m);
   const packages=readExpectedPacks('npm/dist',m,c.version).map(packIdentity);
   if(f)assertFencePackages(f,packages);
-  const next=f||{schema:1,kind:'npm-version-fence',...c,phase:'prepared',package_names:names(m),scoped_packages:null,created_at:new Date().toISOString()};
+  const next=f||{schema:m.npmScope==='rsrs-cli'?2:1,kind:'npm-version-fence',...c,phase:'prepared',package_names:names(m),scoped_packages:null,created_at:new Date().toISOString()};
   const file=process.env.RELEASE_NOTES_FILE;
   if(!file)throw Error('Missing generated Release notes file');
   writeFileSync(file,fenceBody(readFileSync(file,'utf8'),next));

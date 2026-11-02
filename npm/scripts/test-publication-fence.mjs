@@ -4,7 +4,7 @@ import {readFileSync,rmSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {readFence,fenceBody,assertFenceOwner,assertFencePackages,assertReusableRelease,releaseVersionClaims} from './publication-fence.mjs';
-const m=JSON.parse(readFileSync(new URL('../artifact-manifest.json',import.meta.url)));
+const m=JSON.parse(readFileSync(new URL('../artifact-manifest.json',import.meta.url))); m.npmScope = '@rsrsai/cli'; // Historical receipt layout.
 const c={repository:'risense-ai/respire-cli',version:'1.2.3',source_sha:'a'.repeat(40),run_id:'700',first_attempt:'1'};
 const packages=[...m.targets.map(t=>t.pkg),m.npmScope].map(name=>({name,version:c.version,integrity:'sha512-'+'a'.repeat(86)+'==',shasum:'b'.repeat(40)}));
 const prepared={schema:1,kind:'npm-version-fence',...c,phase:'prepared',package_names:[...packages.map(p=>p.name),'rsrs-cli'].sort(),scoped_packages:null,created_at:'2026-10-27T00:00:00Z'};
@@ -16,6 +16,13 @@ test('durable owner binds repository, package inventory, source and version acro
   assert.equal(assertFenceOwner(fenced,c,m),fenced);assert.equal(assertFenceOwner(fenced,{...c,first_attempt:'2'},m),fenced);
   for(const change of [{run_id:'701'},{repository:'other/repo'},{version:'1.2.4'},{source_sha:'f'.repeat(40)}])assert.throws(()=>assertFenceOwner(fenced,{...c,...change},m));
   assertFencePackages(fenced,packages);
+  const direct = {...m,npmScope:'rsrs-cli'};
+  const directPackages = [...packages.filter(p=>p.name!==m.npmScope),{...packages.at(-1),name:'rsrs-cli'}];
+  const directFence = {...fenced,schema:2,package_names:directPackages.map(p=>p.name).sort(),scoped_packages:directPackages};
+  assertFenceOwner(directFence,c,direct);assertFencePackages(directFence,directPackages);
+  assert.deepEqual(readFence(fenceBody('Direct publication',directFence)),directFence);
+  assert.throws(()=>assertFencePackages(directFence,directPackages.filter(p=>p.name!=='rsrs-cli')));
+  assert.throws(()=>fenceBody(fenceBody('Direct publication',directFence),{...directFence,schema:1}));
   assert.throws(()=>assertFencePackages(fenced,[...packages.slice(1)]));
   assert.throws(()=>assertFencePackages(fenced,[{...packages[0],shasum:'c'.repeat(40)},...packages.slice(1)]));
   assert.throws(()=>assertFencePackages(prepared,packages.map(p=>({...p,version:'1.2.4'}))));
@@ -75,7 +82,7 @@ test('a second canonical draft cannot conceal the original untagged unknown-writ
   assert.equal(report.publish_calls,1);assert.deepEqual(report.write_runs,['700']);assert.equal(report.fence_owner,'700');
 });
 test('workflow guards a previous owner before replacing draft notes or clobbering assets',()=>{
-  const w=readFileSync(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8');
+  const w=readFileSync(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
   assert(w.indexOf('guard-reservation-accepted')<w.indexOf("gh',['release','edit',`v${version}`"));
   const publisher=w.split('\n  publish:\n')[1].split('\n  dev6-publication-resume:')[0];
   assert(publisher.indexOf('check-fence-accepted')<publisher.indexOf('npm install --global'));

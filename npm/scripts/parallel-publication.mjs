@@ -11,7 +11,7 @@ export async function publishScopedPackages(expected, umbrellaName, tag, options
   if (new Set(names).size !== names.length) throw new Error('Duplicate publication package');
   const umbrella = expected.find(receipt => receipt.name === umbrellaName);
   const platforms = expected.filter(receipt => receipt.name !== umbrellaName);
-  if (!umbrella || !platforms.length || platforms.some(receipt => receipt.version !== umbrella.version)) {
+  if ((umbrellaName === 'rsrs-cli' && umbrella) || (!umbrella && umbrellaName !== 'rsrs-cli') || !platforms.length || expected.some(receipt => receipt.version !== expected[0].version)) {
     throw new Error('Incomplete or mixed-version scoped publication batch');
   }
   const {publishImpl: publish = publishPackage, ...publicationOptions} = options;
@@ -36,8 +36,10 @@ export async function publishScopedPackages(expected, umbrellaName, tag, options
   // or temporary-file cleanup after the job reports completion. No retries here.
   await Promise.all(Array.from({length: Math.min(4, platforms.length)}, worker));
   if (errors.length) throw new AggregateError(errors, 'Platform publication failed; umbrella was not published');
-  const result = await publish(umbrella.dir, umbrella, tag, publicationOptions);
-  results.set(umbrella.name, result);
-  await options.onResult?.({...result, name: umbrella.name});
+  if (umbrella) {
+    const result = await publish(umbrella.dir, umbrella, tag, publicationOptions);
+    results.set(umbrella.name, result);
+    await options.onResult?.({...result, name: umbrella.name});
+  }
   return expected.map(receipt => ({...results.get(receipt.name), name: receipt.name}));
 }

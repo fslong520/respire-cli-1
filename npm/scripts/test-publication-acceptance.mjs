@@ -13,7 +13,7 @@ import {planCleanup,executeCleanup,CLEANUP_POLICY} from './cleanup-release-artif
 import {regressionContract} from './release-regression-contract.mjs';
 import {createPreparation,preparationLink} from './release-preparation.mjs';
 import {importedAnchor} from './prepared-import.mjs';
-const m=JSON.parse(readFileSync(new URL('../artifact-manifest.json',import.meta.url)));
+const m=JSON.parse(readFileSync(new URL('../artifact-manifest.json',import.meta.url))); m.npmScope = '@rsrsai/cli'; // Historical receipt layout.
 const copy=structuredClone;
 const hash='a'.repeat(64), sha='b'.repeat(40), version='1.2.3-dev.4';
 const source={repository:'risense-ai/respire-cli',workflow:'.github/workflows/release.yml',run_id:'100',run_attempt:'1',sha,version,channel:'dev',release_id:300};
@@ -42,6 +42,19 @@ test('service durations never mix runner ACK clocks or report negative intervals
 
 test('accepted receipts require all exact package ACKs and cannot masquerade as verified protocol 1',()=>{
   const f=fixture();validateAcceptedScoped(f.scoped,m);
+  const direct=copy(f), directManifest={...m,npmScope:'rsrs-cli'};
+  direct.scoped.launcher=identity('rsrs-cli');
+  direct.scoped.packages=direct.scoped.packages.filter(p=>p.name!==m.npmScope);
+  direct.scoped.acceptances=direct.scoped.acceptances.filter(p=>p.name!==m.npmScope);
+  direct.scoped.optionalDependencies=Object.fromEntries(m.targets.map(t=>[t.pkg,version]));
+  validateAcceptedScoped(direct.scoped,directManifest);
+  direct.alias.scoped_packages=direct.scoped.packages;
+  delete direct.alias.dependencies;direct.alias.optionalDependencies=direct.scoped.optionalDependencies;
+  validateAcceptedAlias(direct.alias,direct.scoped,direct.child,direct.jobs);
+  const wrong=copy(direct.alias);wrong.alias.shasum='f'.repeat(40);
+  assert.throws(()=>validateAcceptedAlias(wrong,direct.scoped,direct.child,direct.jobs));
+  assert.throws(()=>validateAcceptedScoped({...direct.scoped,launcher:undefined},directManifest));
+  assert.throws(()=>validateScoped({...direct.scoped,schema:1,kind:'scoped-ready'},directManifest));
   assert.throws(()=>validateScoped(f.scoped,m));
   for(const mutate of [r=>r.acceptances.pop(),r=>r.acceptances.push(r.acceptances[0]),r=>r.acceptances[0].version='0.0.0',r=>r.acceptances[0].signal='SIGTERM',r=>r.acceptances[0].exit_code=1,r=>r.acceptances[0].evidence='submitted',r=>r.install={},r=>r.assets.pop(),r=>r.binaries[0].sha256='f'.repeat(64)]){
     const r=copy(f.scoped);mutate(r);assert.throws(()=>validateAcceptedScoped(r,m));
@@ -231,7 +244,7 @@ test('new background workflow is read-only, outside publication locks and behind
   assert.match(background,/workflow_dispatch:/);assert.match(background,/workflow_run:\s+workflows: \[Release\]\s+types: \[completed\]/);
   assert.doesNotMatch(background,/id-token:|contents: write|actions: write|concurrency:|npm publish/);
   assert.match(background,/persist-credentials: false/);assert.match(background,/verify-accepted/);
-  assert.match(parent,/--publish --accepted-only --tag/);assert.match(parent,/await-alias-accepted/);assert.match(parent,/finalize-accepted/);
+  assert.match(parent,/--publish --accepted-only --verified-packs npm\/publication-packages --tag/);assert.match(parent,/await-alias-accepted/);assert.match(parent,/finalize-accepted/);
   assert.doesNotMatch(parent,/release-publication.mjs (?:scoped-ready|await-alias\s|finalize\s)/);
   const code=text('npm/scripts/publication-acceptance.mjs');
   const writer=code.slice(code.indexOf('async function publishAliasAccepted'),code.indexOf('export async function findAcceptedAlias'));

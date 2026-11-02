@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param(
     [string]$Server = $env:RSRS_DEV_SERVER_ADDR,
-    [string]$Package = '@rsrsai/cli@dev',
+    [string]$Package = 'rsrs-cli@dev',
     [string]$Root = '',
     [string]$Exe = '',
     [string]$ExpectVersion = '',
@@ -28,9 +28,9 @@ if ($env:CLI_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'CLI_SHA must identify t
 if ([string]::IsNullOrWhiteSpace($env:RSRS_DEV_SERVER_ADDR) -or $Server -ne $env:RSRS_DEV_SERVER_ADDR) {
     throw 'Configure RSRS_DEV_SERVER_ADDR with the approved development server before running this sweep.'
 }
-$pkgMatch = [regex]::Match($Package, '^@rsrsai/cli@(dev|\d+\.\d+\.\d+(-dev\.\d+)?)$')
+$pkgMatch = [regex]::Match($Package, '^rsrs-cli@(dev|\d+\.\d+\.\d+(-dev\.\d+)?)$')
 if (-not $pkgMatch.Success) {
-    throw "拒绝：包必须是 @rsrsai/cli@dev 或 @rsrsai/cli@x.y.z[-dev.n]，收到 $Package"
+    throw "拒绝：包必须是 rsrs-cli@dev 或 rsrs-cli@x.y.z[-dev.n]，收到 $Package"
 }
 $requested = $pkgMatch.Groups[1].Value
 
@@ -692,11 +692,11 @@ if (-not $seen) { throw "npm 上还看不到 $Package" }
 Write-Host "INSTALL $Package ($seen)"
 npm install --prefix $Prefix $Package --include=optional --no-fund --no-audit --registry https://registry.npmjs.org
 if ($LASTEXITCODE -ne 0) { throw "npm install 失败：$LASTEXITCODE" }
-$script:CliJs = Join-Path $Prefix 'node_modules\@rsrsai\cli\bin\cli.js'
+$script:CliJs = Join-Path $Prefix 'node_modules\rsrs-cli\bin\cli.js'
 if (-not (Test-Path $script:CliJs)) { throw "找不到 $script:CliJs" }
-$pkgJson = Get-Content (Join-Path $Prefix 'node_modules\@rsrsai\cli\package.json') -Raw | ConvertFrom-Json
+$pkgJson = Get-Content (Join-Path $Prefix 'node_modules\rsrs-cli\package.json') -Raw | ConvertFrom-Json
 $cliVersion = [string]$pkgJson.version
-$tags = npm view @rsrsai/cli dist-tags --json --registry https://registry.npmjs.org | ConvertFrom-Json
+$tags = npm view rsrs-cli dist-tags --json --registry https://registry.npmjs.org | ConvertFrom-Json
 $specIsDev = $requested -eq 'dev' -or $requested -match '-dev\.'
 if ($specIsDev -and $cliVersion -notmatch '-dev') { throw "拒绝：装到的版本不是 dev：$cliVersion" }
 if ($requested -ne 'dev' -and $cliVersion -ne $requested) { throw "装到 $cliVersion，要的是 $requested" }

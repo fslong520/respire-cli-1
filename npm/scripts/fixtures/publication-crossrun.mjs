@@ -6,7 +6,7 @@ import {spawnSync} from 'node:child_process';
 const source=process.argv[2],root=mkdtempSync(path.join(tmpdir(),'rsrs-cross-run-'));
 mkdirSync(path.join(root,'npm'),{recursive:true});mkdirSync(path.join(root,'bin'));
 cpSync(path.join(source,'npm/scripts'),path.join(root,'npm/scripts'),{recursive:true});
-const m=JSON.parse(readFileSync(path.join(source,'npm/artifact-manifest.json')));m.cliVersion='1.2.3';
+const m=JSON.parse(readFileSync(path.join(source,'npm/artifact-manifest.json')));m.cliVersion='1.2.3';m.npmScope='@rsrsai/cli'; // Historical fence layout.
 writeFileSync(path.join(root,'npm/artifact-manifest.json'),JSON.stringify(m));
 const bytes=Buffer.from('synthetic immutable stable package'),version=m.cliVersion,sha='a'.repeat(40);
 const expected=[...m.targets.map(t=>t.pkg),m.npmScope].map(name=>({name,version,filename:name.replace(/[^a-zA-Z0-9.-]/g,'-')+'.tgz',integrity:'sha512-'+createHash('sha512').update(bytes).digest('base64'),shasum:createHash('sha1').update(bytes).digest('hex')}));

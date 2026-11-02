@@ -26,7 +26,8 @@ def stable(tag):
     return bool(re.fullmatch(r'v\d+\.\d+\.\d+',tag)) and tuple(map(int,tag[1:].split('.'))) >= (1,0,6)
 sources={item['tag_name']:item for item in releases if not item['draft'] and not item['prerelease'] and stable(item['tag_name'])}
 formal_sources=sorted(sources, key=lambda tag: tuple(map(int,tag[1:].split('.'))))
-registry=json.loads(command('npm','view','@rsrsai/cli','versions','--json'))
+registry=sorted(set(json.loads(command('npm','view','@rsrsai/cli','versions','--json'))) |
+                set(json.loads(command('npm','view','rsrs-cli','versions','--json'))))
 missing=[version for version in registry if stable('v'+version) and 'v'+version not in sources]
 assert not missing,'published npm stable has no verifiable GitHub artifact: '+str(missing)
 # No formal 1.0.6 was published in either registry. Keep its last actual DEV as an extra baseline.

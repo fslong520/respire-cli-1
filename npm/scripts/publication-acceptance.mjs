@@ -1,6 +1,6 @@
 // Protocol 2: npm acceptance is the write barrier; propagation/install is read-only.
 import {appendFileSync,readFileSync} from 'node:fs';
-import {packPackage, publishAcceptedPackage, readExpectedPacks} from './registry-publication.mjs';
+import {assertPackMatches, downloadValidatedPacks, readValidatedPacks, verifyPackFile, packPackage, publishAcceptedPackage, readExpectedPacks} from './registry-publication.mjs';
 import {RELEASE_ARTIFACT_CLEANUP_POLICY, validateSource, validateScopedPayload,
   packIdentity, assertSourceRun, assertActive, assertDraft, assertTag, selectRelease,
   api, pages, output, artifact, command, manifest, read, write, digest, sleep,
@@ -35,6 +35,7 @@ export function validateAcceptance(proof, expected) {
 export function validateAcceptedScoped(receipt, m) {
   if (receipt?.schema !== 2 || receipt.kind !== 'scoped-accepted' || receipt.state !== 'accepted') throw Error('Invalid accepted scoped receipt');
   validateScopedPayload(receipt, m);
+  if (m.npmScope === 'rsrs-cli' && !same(receipt.optionalDependencies, Object.fromEntries(m.targets.map(t => [t.pkg, receipt.source.version])))) throw Error('Direct launcher platform dependencies differ');
   const profile=validationProfile(receipt.validation_profile);
   if(receipt.validation_inventory)validateRegressionContract(receipt.validation_inventory,m,profile);
   else if(profile!=='full')throw Error('Critical acceptance requires an explicit regression inventory');
@@ -52,7 +53,7 @@ export function validateAcceptedAlias(receipt, scoped, run, jobs) {
       !same(receipt.source, scoped.source) || !same(receipt.scoped_packages, scoped.packages) ||
       receipt.alias?.name !== 'rsrs-cli' || receipt.alias?.version !== scoped.source.version ||
       !/^sha512-[A-Za-z0-9+/]{86}==$/.test(receipt.alias?.integrity || '') || !/^[a-f0-9]{40}$/.test(receipt.alias?.shasum || '') ||
-      !same(receipt.dependencies, {'@rsrsai/cli': scoped.source.version}) ||
+      (scoped.launcher ? (!same(receipt.alias, scoped.launcher) || !same(receipt.optionalDependencies, scoped.optionalDependencies) || receipt.dependencies !== undefined) : !same(receipt.dependencies, {'@rsrsai/cli': scoped.source.version})) ||
       receipt.publisher?.workflow !== ALIAS || String(receipt.publisher.run_id) !== String(run.id) ||
       Number(receipt.publisher.run_attempt) !== Number(run.run_attempt) || run.path !== ALIAS ||
       !['workflow_run', 'workflow_dispatch'].includes(run.event) || run.head_repository?.full_name !== scoped.source.repository ||
@@ -154,7 +155,9 @@ async function scopedAccepted() {
   const submissions = read('scoped-submissions.json');
   if (submissions.schema !== 2 || submissions.state !== 'accepted' || String(submissions.run_id) !== String(source.run_id) ||
       Number(submissions.run_attempt) !== Number(source.run_attempt)) throw Error('Submissions belong to another attempt');
-  const packages = readExpectedPacks('npm/dist', m).map(packIdentity);
+  const packs = readExpectedPacks('npm/dist', m).map(packIdentity);
+  const launcher = m.npmScope === 'rsrs-cli' ? packs.find(p => p.name === 'rsrs-cli') : undefined;
+  const packages = launcher ? packs.filter(p => p.name !== launcher.name) : packs;
   const assets = readdirSync('release-assets').sort().map(name => ({name, size: statSync(path.join('release-assets',name)).size, sha256: digest(path.join('release-assets',name))}));
   const binaries = m.targets.map(t => {
     const b = read(`release-assets/cli-build-${t.triple}.json`);
@@ -162,7 +165,8 @@ async function scopedAccepted() {
     return {package:t.pkg,target:t.triple,file:b.binary_file,sha256:b.binary_sha256};
   });
   const validationOrigin=process.env.PREPARED_RUN?assertImportedContents(source,m,'release-assets','npm/release-packages',importPinFromEnv()).anchor:undefined;
-  const receipt = validateAcceptedScoped({schema:2,kind:'scoped-accepted',state:'accepted',source,packages,assets,binaries,
+  const receipt = validateAcceptedScoped({schema:2,kind:'scoped-accepted',state:'accepted',source,packages,assets,binaries,launcher,
+    optionalDependencies:launcher?Object.fromEntries(m.targets.map(t=>[t.pkg,source.version])):undefined,
     cleanup_policy:RELEASE_ARTIFACT_CLEANUP_POLICY,validation_profile:validationProfile(process.env.VALIDATION_PROFILE),validation_inventory:regressionContract(m,validationProfile(process.env.VALIDATION_PROFILE)),validation_origin:validationOrigin,acceptances:submissions.packages.map(p=>p.acceptance)},m);
   assertActive(source); assertDraft(api(`repos/${source.repository}/releases/${source.release_id}`),receipt); assertTag(source);
   write('scoped-accepted.json',receipt);
@@ -183,10 +187,23 @@ async function publishAliasAccepted() {
   if (command('git',['rev-parse','HEAD']).trim() !== source.sha || String(source.run_id) !== process.env.SOURCE_RUN ||
       Number(source.run_attempt) !== Number(process.env.SOURCE_ATTEMPT)) throw Error('Pinned alias checkout/source mismatch');
   assertActive(source);
-  command('node',['npm/scripts/pack-alias.mjs','--version',source.version]);
+  let packed;
+  if (scoped.launcher) {
+    command('node',['npm/scripts/set-build-version.mjs',source.version]);
+    command('node',['npm/scripts/pack.mjs','--launcher-only']);
+    const folder = path.join(process.env.RUNNER_TEMP, 'launcher-validated-packs');
+    const packSource = {repository:source.repository,run_id:String(source.run_id),run_attempt:Number(source.run_attempt),sha:source.sha,job:'publish'};
+    downloadValidatedPacks(folder, packSource);
+    const packs = readValidatedPacks(folder, packSource, manifest());
+    packed = packs.find(p => p.name === 'rsrs-cli');
+    assertPackMatches(packed, scoped.launcher);
+    verifyPackFile(packed.tarballPath, packed, 'npm/dist/rsrs-cli');
+  } else {
+    command('node',['npm/scripts/pack-alias.mjs','--version',source.version]);
+    packed = packPackage('npm/dist/rsrs-cli',process.env.RUNNER_TEMP);
+  }
   const pkg = JSON.parse(readFileSync('npm/dist/rsrs-cli/package.json','utf8'));
-  if (!same(pkg.dependencies,{'@rsrsai/cli':source.version})) throw Error('Local alias dependency mismatch');
-  const packed = packPackage('npm/dist/rsrs-cli',process.env.RUNNER_TEMP);
+  if (scoped.launcher ? (!same(pkg.optionalDependencies, scoped.optionalDependencies) || pkg.dependencies !== undefined) : !same(pkg.dependencies,{'@rsrsai/cli':source.version})) throw Error('Local alias dependency mismatch');
   const expected = packIdentity(packed);
   if (expected.name !== 'rsrs-cli' || expected.version !== source.version) throw Error('Alias pack identity mismatch');
   // The existing alias lock serializes writers, including duplicate wake-ups.
@@ -219,12 +236,13 @@ async function publishAliasAccepted() {
     }
   }
   assertActive(source); // No public propagation wait and no replay around this write.
-  const result = await publishAcceptedPackage('npm/dist/rsrs-cli',{...expected,dependencies:pkg.dependencies},source.channel,
+  const publishPack = scoped.launcher ? packed : expected;
+  const result = await publishAcceptedPackage('npm/dist/rsrs-cli',{...publishPack,dependencies:pkg.dependencies,optionalDependencies:pkg.optionalDependencies},source.channel,
     {knownAcceptances,onSubmission:()=>{assertActive(source);journal({state:'unknown',package:expected});}});
   journal({state:'accepted',package:result.acceptance});
   validateAcceptance(result.acceptance,expected);
   write('alias-accepted.json',{schema:2,kind:'alias-accepted',state:'accepted',validation_profile:validationProfile(scoped.validation_profile),source,scoped_packages:scoped.packages,
-    alias:expected,dependencies:pkg.dependencies,acceptance:result.acceptance,
+    alias:expected,dependencies:pkg.dependencies,optionalDependencies:pkg.optionalDependencies,acceptance:result.acceptance,
     publisher:{workflow:ALIAS,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT}});
 }
 export async function findAcceptedAlias(scoped, createdAt) {
@@ -359,7 +377,7 @@ async function verifyAccepted() {
   const run = assertCurrent(), found = await findAcceptedAlias(scoped,run.created_at);
   if(!found) throw Error('Accepted alias publisher proof missing');
   const packages = [...scoped.packages,found.receipt.alias];
-  await verifyPackages(packages.map(p=>p.name==='rsrs-cli'?{...p,dependencies:found.receipt.dependencies}:p),{requireInstallIndex:true,timeoutMs:60*60*1000});
+  await verifyPackages(packages.map(p=>p.name==='rsrs-cli'?{...p,dependencies:found.receipt.dependencies,optionalDependencies:found.receipt.optionalDependencies}:p),{requireInstallIndex:true,timeoutMs:60*60*1000});
   if(arm){
     const installs=[];
     for(const platform of ['linux-arm64-gnu','linux-arm64'])installs.push(await publicInstall(scoped,found.receipt.alias,assertCurrent,platform));

@@ -47,9 +47,10 @@ if (doPublish) {
   const validated = arg('--verified-packs');
   if (process.argv.includes('--verified-packs') && !validated) throw Error('Validated tarball directory is required');
   if (validated) {
-    const packs=readValidatedPacks(path.resolve(validated),currentPackSource(),manifest);
+    const packs=readValidatedPacks(path.resolve(validated),{...currentPackSource(),...(manifest.npmScope==='rsrs-cli'?{job:'publish'}:{})},manifest);
     expected=expected.map(pack=>({...assertPackMatches(packs.find(p=>p.name===pack.name),pack),dir:pack.dir}));
   }
+  if (manifest.npmScope === 'rsrs-cli') expected = expected.filter(p => p.name !== manifest.npmScope);
   const accepted = [];
   const submissions = new Map();
   const prior = acceptedOnly ? JSON.parse(readFileSync('prior-scoped-acceptances.json', 'utf8')) : null;
@@ -106,7 +107,7 @@ rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 const built = [];
 
-for (const [triple, t] of Object.entries(TARGETS)) {
+for (const [triple, t] of process.argv.includes('--launcher-only') ? [] : Object.entries(TARGETS)) {
   const src = findBin(triple);
   if (!src) {
     console.warn(`skip ${triple} (no binary)`);

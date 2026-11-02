@@ -6,7 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {regressionContract} from './release-regression-contract.mjs';
 import {CLEANUP_POLICY,REPOSITORY,planCleanup,executeCleanup,allowedSourceArtifact,requireRegressions,githubAdapter} from './cleanup-release-artifacts.mjs';
 
-const manifest=JSON.parse(readFileSync(new URL('../artifact-manifest.json',import.meta.url)));
+const manifest=JSON.parse(readFileSync(new URL('../artifact-manifest.json',import.meta.url))); manifest.npmScope = '@rsrsai/cli'; // Historical receipt layout.
 manifest.targets=manifest.targets.filter(t=>!t.triple.startsWith('aarch64-unknown-linux-')&&t.triple!=='aarch64-pc-windows-msvc'); // frozen historical protocol-1 inventory
 const sha='b'.repeat(40),digest='a'.repeat(64),zipDigest=`sha256:${'d'.repeat(64)}`;
 const integrity='sha512-'+createHash('sha512').update('synthetic package').digest('base64');

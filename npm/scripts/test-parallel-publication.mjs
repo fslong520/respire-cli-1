@@ -30,6 +30,10 @@ test('four bounded workers overlap; umbrella waits for the last verified platfor
   gates[3].resolve();
   assert.equal((await run).length, 5);
   assert.equal(started.at(-1), umbrella);
+  const direct = batch.slice(0,4), directWrites=[];
+  assert.equal((await publishScopedPackages(direct,'rsrs-cli','dev',{publishImpl:async(_,p)=>{directWrites.push(p.name);return {status:'published'};}})).length,4);
+  assert.deepEqual(directWrites,direct.map(p=>p.name));
+  await assert.rejects(publishScopedPackages([...direct,{...batch[4],name:'rsrs-cli'}],'rsrs-cli','dev',{publishImpl:()=>assert.fail('launcher cannot use the parent publisher')}));
 });
 
 test('failure drains in-flight work and blocks umbrella; no queued publication starts', async () => {
@@ -52,7 +56,8 @@ test('failure drains in-flight work and blocks umbrella; no queued publication s
 
 test('duplicate, missing umbrella, empty platforms and mixed version fail before side effects', async () => {
   for (const receipts of [[...batch, batch[0]], batch.slice(0, 4), [batch[4]],
-    batch.map((r, i) => i === 0 ? {...r, version: '1.0.12-dev.6'} : r)]) {
+    batch.map((r, i) => i === 0 ? {...r, version: '1.0.12-dev.6'} : r),
+    batch.map(r => r.name === umbrella ? {...r, version: '1.0.12-dev.6'} : r)]) {
     await assert.rejects(publishScopedPackages(receipts, umbrella, 'dev', {publishImpl: () => assert.fail('must not publish')}));
   }
 });

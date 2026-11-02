@@ -24,6 +24,23 @@ The matching short npm entry is dispatched automatically. A completed Release
 automatically starts read-only public package and isolated-install verification.
 Tag CI has its own concurrency group, so a later `main` push cannot cancel it.
 
+For a source manifest with `npmScope: "rsrs-cli"`, packaging validates eight
+packages. Release submits the seven platform packages, then records their real
+npm acknowledgements and a separate launcher identity. `npm-alias.yml` keeps its
+existing OIDC identity and publishes the parent's exact validated launcher
+archive from `npm-publication-packages-RUN-ATTEMPT`; it does not repack on the child runner.
+The launcher has exact-version optional dependencies on all platform packages
+and no `@rsrsai/cli` dependency. This source change does not alter already
+published versions, whose layout and recovery still follow their source
+manifest. The legacy `npm/alias` inputs remain byte-for-byte unchanged.
+
+Release acceptance must distinguish an existing `rsrs-cli` alias upgrade from a
+scoped-only global `@rsrsai/cli` switch. The latter can fail `EEXIST` because both
+packages own `rsrs`; test controlled removal/exact-version installation and
+failed-install rollback in an isolated prefix, with user profile/runtime/database
+bytes unchanged. Never add automatic uninstall or `--force` to the launcher. See
+the [user migration guide](../npm/README.md#migrating-a-global-install).
+
 ## Acceptance performance
 
 Source CI retains the pinned SDK and Rust dependency caches. Release acceptance
