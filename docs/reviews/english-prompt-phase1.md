@@ -107,14 +107,16 @@ is not an effectiveness-equivalence claim.
 | Privacy: equivalent Chinese/English secret-bearing source and safe-location reference | Both receive credential inspection; source metadata/queries protected; safe reference preserved | Only English secret fields checked or claiming best-effort scrub is a complete scanner |
 | Mode: normal/readonly/off with equivalent findings | Normal bounded archive; readonly no write/feedback; off no memory reads | Applying normal mandatory archive to readonly or first-recall rule to off |
 
-## Cross-repository and release dependencies
+## External compatibility boundary and release sequence
 
 `respire-memtool` is a separate repository and is not edited here. Its current
 pure-function characterization confirms English Trigger is missed and mixed
-section boundaries can contaminate parsing. A separately authorized dual-reader
-fix must accept new/old headings, preserve unknown/mixed user content, and avoid
-batch rewrites before end-to-end compatibility can be accepted. The nine desktop
-characterization tests document the gap; they are not a fix or whole-app test.
+section boundaries can contaminate parsing. The user explicitly excludes this unmaintained repository from the task. Its
+compatibility gap is an external boundary, not a CLI/Core release dependency, and
+no authorization for fixing it will be requested. The nine desktop characterization
+tests document the gap; they are not a fix or whole-app test. Do not claim that
+this external consumer supports English or mixed markers. CLI/Core must preserve
+their own supported legacy inputs and user data without batch rewriting.
 The WorkBuddy connector plugin has a separate prompt entry and is handed off to
 plugin review. No paused Qoder5 work is resumed.
 
