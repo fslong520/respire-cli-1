@@ -1,6 +1,6 @@
 //! Local snapshot inventory. Manifests describe files; they never grant access.
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -228,7 +228,11 @@ pub fn create(
             sqlite_user_version,
             sdk_version,
             sdk_abi: crate::core_sdk::ABI_VERSION,
-            model: "m3".to_owned(),
+            model: {
+                let copy = Connection::open_with_flags(&database,OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                let snapshot: Option<String> = copy.query_row("SELECT value FROM meta WHERE key=?1",[crate::core_sdk::profiles::ACTIVE_SELECTION_KEY],|r|r.get(0)).optional()?;
+                snapshot.map(|v| serde_json::from_str::<crate::core_sdk::profiles::Selection>(&v).map(|s|s.model)).transpose()?.unwrap_or_else(||"m3".to_owned())
+            },
             witness_head: witness.as_ref().map(|report| report.head.clone()),
             witness_count: witness.as_ref().map(|report| report.count),
             witness_intact: if witness_problem.is_some() {

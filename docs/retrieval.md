@@ -183,16 +183,17 @@ use the same data flow and diagnostics.
 
 | Migration step | Behavior |
 | --- | --- |
-| Runtime automatic preparation | Detect pending index work, prepare missing M3 files and rebuild in the background |
+| Runtime automatic preparation | Detect pending work, prepare the active profile's resources and rebuild in the background |
 | `model install-m3` | Explicitly verify pinned files; pending index work is handled by the runtime |
 | `model activate m3` | Rebuild/resume locally, then activate after source checks |
-| Interrupted rebuild | Keep completed checkpoints; resume the M3 rebuild |
+| Interrupted rebuild | Keep completed checkpoints; explicitly resume a pending profile switch |
 | Concurrent content edit | Reject stale derived data |
 | Legacy index | Rebuild from decrypted source with M3; retired inference never runs |
 | `reembed` | Repair missing/outdated data for the current model |
 
-When a usable account has an invalid or incomplete index, the runtime prepares M3
-and rebuilds derived data in the background. Recall uses current, source-checked
+When a usable account has an invalid or incomplete index, the runtime prepares
+the active embedding profile and rebuilds derived data in the background. M3
+remains the default when no library profile has been selected. Recall uses current, source-checked
 index artifacts and full-body lexical retrieval for pending entries. A library
 with no indexed entries can perform lexical retrieval without loading the model.
 Its JSON summary reports `index_pending`, `indexed_candidates` and
@@ -203,7 +204,9 @@ Rebuilding checkpoints completed entries and resumes pending work after restart.
 Encrypted memories, account keys and sync state are preserved. Explicit invalid
 model paths or failed downloads remain visible errors.
 
-`RSRS_M3_DIR` selects the model directory. Index work does not alter memory content
+`RSRS_M3_DIR` selects the legacy M3 directory; custom resource paths belong to
+their immutable profile snapshots. See [embedding profiles](model-profiles.md).
+Index work does not alter memory content
 or synced dirty flags. Core artifacts are opaque, versioned local derived data, not
 account keys or an encryption mechanism. Writes and changed sync inputs maintain the
 active index; deleted content is excluded from retrieval.
@@ -212,8 +215,8 @@ active index; deleted content is excluded from retrieval.
 memories. Binary updates do not rewrite agent files; run `rsrs inject` after prompt changes.
 
 New profiles use M3. Existing legacy metadata does not select the retired model.
-Incomplete M3 generations remain resumable; semantic retrieval uses only valid,
-source-checked M3 artifacts. The runtime continues long migrations in the background;
+Incomplete generations remain resumable; semantic retrieval uses only valid,
+source-checked artifacts for the active selection. The runtime continues long migrations in the background;
 `rsrs reembed` remains available for an explicit repair. The plain-document calibration update advances the M3 generation identity;
 existing source-checked checkpoints for that generation are reused. Content, timestamps and sync flags
 are unchanged; retired weight files are not deleted automatically.

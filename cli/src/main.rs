@@ -570,6 +570,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum ModelAction {
+    /// List built-in/custom profiles and the library's immutable active selection.
+    Catalog,
+    /// Save model/backend drafts from JSON without changing the active library.
+    Configure { file: PathBuf },
+    /// Prepare, probe and rebuild a profile before atomic activation.
+    Switch {
+        model: String,
+        #[arg(long, default_value = "onnx")] backend: String,
+        #[arg(long, default_value = "cpu", value_parser = ["cpu","gpu","npu"])] engine: String,
+        #[arg(long)] variant: Option<String>,
+    },
+    /// Read the profile-switch task, cancellation ID and current operation.
+    Progress,
+    /// Resume the library's last pending immutable profile snapshot.
+    Resume,
     /// Download or verify BGE-M3 without rebuilding the index.
     #[command(name = "install", visible_alias = "install-m3")]
     InstallM3 {
@@ -606,9 +621,9 @@ enum ModelAction {
     },
     /// Install compatible NPU execution providers through Windows ML.
     InstallEngines,
-    /// Run real BGE-M3 inference and report the selected backend.
+    /// Run real inference with the active embedding profile and report its backend.
     Probe {
-        #[arg(long, value_parser = ["m3"])]
+        #[arg(long)]
         model: Option<String>,
         /// Text to compare against the CPU baseline, including long-input checks.
         #[arg(long, default_value = "本地推理引擎验证：记忆检索")]
@@ -1108,7 +1123,7 @@ enum Command {
         #[arg(long)]
         key_stdin: bool,
     },
-    /// Model management: install, verify or uninstall BGE-M3
+    /// Manage embedding profiles, model resources and inference backends.
     Model {
         #[command(subcommand)]
         action: ModelAction,
@@ -4920,7 +4935,7 @@ fn run_doctor(check_remote: bool, check_update: bool, fix: bool) -> Result<()> {
         }
         model_warnings.push("embedder");
         add(&mut items, "embedder", false,
-            format!("BGE-M3 preparation/indexing {} through the runtime; model task: {}. No second installer started",
+            format!("{active_model} preparation/indexing {} through the runtime; model task: {}. No second installer started",
                 if model_busy { "in progress" } else { "scheduled" }, model_task));
     } else if model_busy {
         model_warnings.push("embedder");
@@ -4930,16 +4945,25 @@ fn run_doctor(check_remote: bool, check_update: bool, fix: bool) -> Result<()> {
         // Diagnostics remain read-only unless --fix is explicit.
         match BgeEmbedder::load_model(&active_model) {
             Ok(e) => match e.probe("BGE-M3 doctor inference") {
-                Ok(probe) => add(&mut items, "embedder", true, format!("BGE-M3 {} dims; inference verified ({})", e.dims(), probe["selected"])),
-                Err(error) => add(&mut items, "embedder", false, format!("BGE-M3 inference failed: {error:#}")),
+                Ok(probe) => add(&mut items, "embedder", true, format!("{active_model} {} dims; inference verified ({})", e.dims(), probe["selected"])),
+                Err(error) => add(&mut items, "embedder", false, format!("{active_model} inference failed: {error:#}")),
             },
             Err(e) if !fix => {
                 add(
                     &mut items,
                     "embedder",
                     false,
-                    format!("unavailable: {e} (the runtime prepares BGE-M3 automatically for pending index work; inspect model-task progress and download source settings)"),
+                    format!("{active_model} unavailable: {e} (inspect model-task progress and the selected profile resources)"),
                 );
+            }
+            Err(error) if store.active_selection()?.is_some() => {
+                let selection = store.active_selection()?.context("active profile missing")?;
+                let prepared = respire_app::embedding::prepare(&selection,|_,_,_|Ok(()))
+                    .and_then(|_| BgeEmbedder::load_model(&active_model)?.probe("Respire doctor inference"));
+                match prepared {
+                    Ok(probe) => add(&mut items,"embedder",true,format!("{active_model}; inference verified ({})",probe["selected"])),
+                    Err(repair) => add(&mut items,"embedder",false,format!("{active_model} unavailable: {error:#}; profile preparation failed: {repair:#}")),
+                }
             }
             Err(_) => {
                 progress::phase("下载 BGE-M3 模型", "Downloading BGE-M3 model");
@@ -6412,7 +6436,7 @@ fn run_capabilities() -> Result<()> {
                 "memory_metadata_flags": true,
                 "memory_metadata_gate_default": false,
                 "rerank": false,
-                "model": {"install": true, "install_rerank": false}
+                "model": {"install": true, "install_rerank": false, "profile_contract":1, "transport_contract":1, "methods":["model.catalog","model.configure","model.switch","model.resume","model.progress"], "selection_scope":"library"}
             }
         }), Vec::new()))
 }
@@ -6613,6 +6637,24 @@ fn run(args: Cli) -> Result<()> {
     set_json_mode(
         args.json || respire::env::var("RSRS_JSON").is_ok_and(|v| v == "1" || v == "true"),
     );
+    if let Some(Command::Model { action }) = args.command.as_ref() {
+        let request = match action {
+            ModelAction::Catalog => Some(("model.catalog",Vec::new())),
+            ModelAction::Configure { file } => {
+                let value: serde_json::Value = serde_json::from_slice(&std::fs::read(file)?)?;
+                Some(("model.configure",vec![serde_json::to_string(&value)?]))
+            }
+            ModelAction::Switch { model,backend,engine,variant } => Some(("model.switch",vec![serde_json::to_string(&serde_json::json!({"model":model,"backend":backend,"engine":engine,"variant":variant}))?])),
+            ModelAction::Progress => Some(("model.progress",Vec::new())),
+            ModelAction::Resume => Some(("model.resume",Vec::new())),
+            _ => None,
+        };
+        if let Some((method,values)) = request {
+            anyhow::ensure!(!DIRECT_MODE.load(Ordering::Relaxed),"model profiles require the resident runtime; omit --direct");
+            let value = rpc::profile_request(method,values)?;
+            return emit_result(serde_json::from_value(value)?);
+        }
+    }
     if matches!(args.command, Some(Command::MemoryRevision)) {
         if rpc::worker_active() {
             return run_memory_revision();
@@ -6715,6 +6757,7 @@ fn run(args: Cli) -> Result<()> {
         })
     ) {
         runtime_policy::require_host("CPU recovery and runtime shutdown")?;
+        anyhow::ensure!(respire_app::embedding::saved_selection()?.is_none(),"library uses a model profile; use model switch PROFILE --backend onnx --engine cpu for CPU recovery");
         if autostart::managed_enabled()? {
             rpc::change_profile(respire::memory::onnx::reset_cpu_config)?;
             return emit_result(ResultEnvelope::new("model", OutputStatus::Ok,
@@ -7322,6 +7365,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
         }
         Some(Command::Model { action }) => {
             return match action {
+                ModelAction::Catalog | ModelAction::Configure { .. } | ModelAction::Switch { .. } | ModelAction::Progress | ModelAction::Resume => anyhow::bail!("model profile command must use the runtime interface"),
                 ModelAction::InstallM3 { mirror, model, for_engine } => {
                     let mirror_env = respire::model_install::mirror_from_env();
                     let resolved = mirror.as_deref().or(mirror_env.as_deref());
@@ -7354,6 +7398,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     let _operation = model_progress::Operation::try_begin_background_index()?
                         .ok_or_else(|| anyhow::anyhow!("another model operation is running"))?;
                     let store = build_local()?;
+                    anyhow::ensure!(store.retrieval_model()? == *model,"legacy model activate cannot change a profile selection; use model switch m3");
                     let keys = build_session()?;
                     let embedder = BgeEmbedder::load_model(model)?;
                     let count = store.rebuild_index_with_progress(
@@ -7384,6 +7429,9 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 }
                 ModelAction::Engine { engine, model } => {
                     use respire::memory::onnx;
+                    let selected = respire_app::embedding::saved_selection()?;
+                    respire_app::core_sdk::profiles::set_active(selected.clone());
+                    anyhow::ensure!(selected.is_none() || (engine.is_none() && model.is_none()),"library uses a model profile; use model switch instead of legacy engine settings");
                     if let Some(engine) = engine {
                         onnx::save_engine_with_variant(onnx::Engine::parse(engine)?, model.as_deref())?;
                         *EMBEDDER_SLOT
@@ -7399,12 +7447,15 @@ fn run_local_inner(args: Cli) -> Result<()> {
                         OutputStatus::Ok,
                         serde_json::json!({"engine":engine,
                             "model":onnx::configured_variant(engine)?.name,
-                            "variants":respire::model_install::variant_inventory()?}),
+                            "variants":respire::model_install::variant_inventory()?, "active_selection":selected}),
                         vec![],
                     ))?;
                     Ok(())
                 }
                 ModelAction::Load { engine, model } => {
+                    let selected = respire_app::embedding::saved_selection()?;
+                    respire_app::core_sdk::profiles::set_active(selected.clone());
+                    anyhow::ensure!(selected.is_none(),"library uses a model profile; use model switch instead of legacy model load");
                     let _operation = respire::model_progress::Operation::begin_load()?;
                     let engine = respire::memory::onnx::Engine::parse(engine)?;
                     respire::model_progress::update("verify", model, 0, None)?;
@@ -7419,10 +7470,9 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     anyhow::bail!("inference engine installation is host-managed; run rsrs model install-engines from the host terminal")
                 }
                 ModelAction::Probe { text, model } => {
-                    let selected = match model {
-                        Some(model) => model.clone(),
-                        None => build_local()?.retrieval_model()?,
-                    };
+                    let current = build_local()?.retrieval_model()?;
+                    let selected = model.clone().unwrap_or_else(||current.clone());
+                    anyhow::ensure!(selected == current,"probe must name the active library profile; switch before probing");
                     let result = BgeEmbedder::load_model(&selected)?.probe(text)?;
                     emit_result(ResultEnvelope::new(
                         "model",
@@ -7570,10 +7620,11 @@ fn run_local_inner(args: Cli) -> Result<()> {
     macro_rules! embedder {
         () => {{
             let model = build_local()?.retrieval_model()?;
+            let generation = respire::core_sdk::generation_key(&model)?;
             if embedder_hold
                 .0
                 .as_ref()
-                .is_some_and(|e| e.model_name() != model)
+                .is_some_and(|e| e.model_name() != model || e.generation_key() != generation)
             {
                 embedder_hold.0 = None;
             }
