@@ -7,7 +7,7 @@ const crateLock=JSON.parse(readFileSync(join(root,'crates/core-sdk/core-sdk.lock
 if (JSON.stringify(lock) !== JSON.stringify(crateLock)) throw new Error('CLI and packaged SDK locks differ');
 const manifest=JSON.parse(readFileSync(join(root,'npm/artifact-manifest.json'),'utf8'));
 const sdkTargets = [
-  'x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc', 'aarch64-apple-darwin',
+  'x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc', 'aarch64-apple-darwin', 'x86_64-apple-darwin',
   'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu',
   'x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl',
 ];

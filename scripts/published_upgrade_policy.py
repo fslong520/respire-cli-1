@@ -13,6 +13,8 @@ def select_upgrade_sources(sources, target, profile):
         assets = [asset["name"] for asset in sources[tag]["assets"]]
         if platform_applicability(tag, target, assets) is None:
             return {tag: sources[tag]}
+    if sources and target == "x86_64-apple-darwin":
+        return {}
     raise ValueError(f"no applicable formal stable upgrade source: {target}")
 
 
@@ -26,4 +28,6 @@ def platform_applicability(tag, target, asset_names):
         return "Linux ARM64 was not distributed for this exact release"
     if target == "aarch64-pc-windows-msvc" and tag in ABSENT_WINDOWS_ARM_RELEASES and not present:
         return "Windows ARM64 was not distributed for this exact release"
+    if target == "x86_64-apple-darwin" and tuple(map(int, tag.removeprefix("v").split("-")[0].split("."))) < (1, 0, 20) and not present:
+        return "Intel macOS was not distributed before 1.0.20"
     raise ValueError(f"missing platform artifact: {tag} {target}; present={sorted(present)}")
