@@ -1,7 +1,7 @@
 //! Convert a normalized [`Session`] into a protocol `MemoryEntry`.
 //!
-//! The body follows the mandatory `【前因】【行为】【后果】` three-marker
-//! convention so recall renders it in full. Credentials embedded in transcripts
+//! New bodies use the canonical `【Cause】【Action】【Result】` headings.
+//! Existing memory bodies are not migrated by this formatter. Credentials embedded in transcripts
 //! are scrubbed best-effort before storage (agent policy requires inspecting
 //! content before writing; this is a safety net, not a scanner guarantee).
 
@@ -104,32 +104,32 @@ fn platform_label(platform: &str) -> String {
     }
 }
 
-/// Session title: `<Platform> 会话 <first request>` (concise, event-shaped).
+/// Session title: `<Platform> session <first request>` (concise, event-shaped).
 pub fn derive_title(session: &Session) -> String {
     let platform = platform_label(&session.platform);
     let snippet = first_line(&scrub(&session.first_user_message));
     if snippet.is_empty() {
-        format!("{platform} 会话 {}", short_id(&session.id))
+        format!("{platform} session {}", short_id(&session.id))
     } else {
-        format!("{platform} 会话 {snippet}")
+        format!("{platform} session {snippet}")
     }
 }
 
-/// Assemble the `【前因】【行为】【后果】` body.
+/// Assemble the English scaffold; user-supplied text keeps its original language.
 pub fn build_body(session: &Session) -> String {
-    let cwd = session.cwd.as_deref().unwrap_or("未知");
+    let cwd = session.cwd.as_deref().unwrap_or("unknown");
     let model = match (session.provider.as_deref(), session.model.as_deref()) {
         (Some(provider), Some(model)) => format!("{provider}/{model}"),
         (Some(provider), None) => provider.to_owned(),
         (None, Some(model)) => model.to_owned(),
-        (None, None) => "未知".to_owned(),
+        (None, None) => "unknown".to_owned(),
     };
-    let created = session.created_at.as_deref().unwrap_or("未知");
+    let created = session.created_at.as_deref().unwrap_or("unknown");
     let updated = session.updated_at.as_deref().unwrap_or(created);
 
     let mut body = String::new();
     body.push_str(&format!(
-        "【前因】{} 会话 {}。起始 {}；工作目录 {}；模型 {}。",
+        "【Cause】{} session {}. Started {}; working directory {}; model {}.",
         platform_label(&session.platform),
         short_id(&session.id),
         scrub(created),
@@ -139,31 +139,31 @@ pub fn build_body(session: &Session) -> String {
 
     let first_raw = session.first_user_message.trim();
     let first = truncate_chars(&scrub(first_raw), 600);
-    body.push_str("\n【行为】");
+    body.push_str("\n【Action】");
     if first.is_empty() {
-        body.push_str("（无用户消息记录）");
+        body.push_str("(no user message recorded)");
     } else {
         body.push_str(&first);
     }
     let last_raw = session.last_user_message.trim();
     if !last_raw.is_empty() && last_raw != first_raw {
         body.push_str(&format!(
-            "\n末次请求：{}",
+            "\nLast request: {}",
             truncate_chars(&scrub(last_raw), 400)
         ));
     }
 
-    body.push_str(&format!("\n【后果】会话更新于 {}。", scrub(updated)));
+    body.push_str(&format!("\n【Result】Session updated at {}.", scrub(updated)));
     if let Some(line) = usage_line(&session.usage) {
         body.push(' ');
         body.push_str(&line);
     }
     if let Some(agent) = session.agent.as_deref().filter(|s| !s.is_empty()) {
-        body.push_str(&format!(" 由 `{}` 子代理执行", scrub(agent)));
+        body.push_str(&format!(" Executed by subagent `{}`", scrub(agent)));
         if let Some(parent) = session.parent_id.as_deref().filter(|s| !s.is_empty()) {
-            body.push_str(&format!("（父会话 {}）", short_id(parent)));
+            body.push_str(&format!(" (parent session {})", short_id(parent)));
         }
-        body.push('。');
+        body.push('.');
     }
     body
 }
@@ -179,22 +179,22 @@ fn usage_line(usage: &serde_json::Map<String, Value>) -> Option<String> {
         parts.push(format!("tokens {total:.0}"));
     } else {
         if let Some(input) = number("input") {
-            parts.push(format!("输入 {input:.0}"));
+            parts.push(format!("input {input:.0}"));
         }
         if let Some(output) = number("output") {
-            parts.push(format!("输出 {output:.0}"));
+            parts.push(format!("output {output:.0}"));
         }
     }
     if let Some(cost) = number("cost_total") {
-        parts.push(format!("费用 {cost:.4}"));
+        parts.push(format!("cost {cost:.4}"));
     }
     if let Some(count) = number("message_count") {
-        parts.push(format!("消息 {count:.0}"));
+        parts.push(format!("messages {count:.0}"));
     }
     if parts.is_empty() {
         None
     } else {
-        Some(format!("{}.", parts.join("；")))
+        Some(format!("{}.", parts.join("; ")))
     }
 }
 
@@ -258,7 +258,7 @@ pub fn scrub(text: &str) -> String {
         let lower = line.to_ascii_lowercase();
         if line.contains("-----BEGIN") && lower.contains("private key") {
             in_pem = true;
-            out.push_str("[已隐去私钥]");
+            out.push_str("[REDACTED PRIVATE KEY]");
             out.push('\n');
             continue;
         }
@@ -448,14 +448,33 @@ mod tests {
     }
 
     #[test]
+    fn english_scaffold_preserves_chinese_user_data_and_input_version() {
+        let mut session = sample();
+        session.platform = "hermes".into();
+        session.first_user_message = "保留用户中文与【前因】原始引用".into();
+        session.last_user_message = "保留混合【Result】原文".into();
+        let fingerprint = session.content_fingerprint();
+        let entry = session_entry(&session, &ConvertOptions::default());
+        assert_eq!(fingerprint, session.content_fingerprint());
+        assert_eq!(entry.id, session_id(&session.key()));
+        assert_eq!(entry.title, "Hermes session 保留用户中文与【前因】原始引用");
+        assert!(entry.content.starts_with("【Cause】Hermes session"));
+        assert!(entry.content.contains("\n【Action】保留用户中文与【前因】原始引用"));
+        assert!(entry.content.contains("\nLast request: 保留混合【Result】原文"));
+        assert!(entry.content.contains("\n【Result】Session updated at"));
+        assert_eq!(entry.importance, "important");
+        assert_eq!(scrub("说明中文保持；密码：fixture-secret"), "说明中文保持；密码： ***");
+    }
+
+    #[test]
     fn builds_entry_with_three_markers_and_metadata() {
         let entry = session_entry(&sample(), &ConvertOptions::default());
-        assert!(entry.content.contains("【前因】"));
-        assert!(entry.content.contains("【行为】"));
-        assert!(entry.content.contains("【后果】"));
+        assert!(entry.content.contains("【Cause】"));
+        assert!(entry.content.contains("【Action】"));
+        assert!(entry.content.contains("【Result】"));
         assert_eq!(entry.project, "respire");
         assert_eq!(entry.importance, "important");
-        assert!(entry.title.starts_with("Codex 会话"));
+        assert!(entry.title.starts_with("Codex session"));
         assert_eq!(
             entry.tags,
             vec!["session-import".to_owned(), "codex".to_owned()]
@@ -470,14 +489,14 @@ mod tests {
         assert!(!clean.contains("ghp_ABCDEFGHIJKLMNOP"));
         assert!(!clean.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!clean.contains("MIIabc"));
-        assert!(clean.contains("[已隐去私钥]"));
+        assert!(clean.contains("[REDACTED PRIVATE KEY]"));
     }
 
     #[test]
     fn title_falls_back_to_id() {
         let mut s = sample();
         s.first_user_message = String::new();
-        assert_eq!(derive_title(&s), format!("Codex 会话 {}", "0199abcd"));
+        assert_eq!(derive_title(&s), format!("Codex session {}", "0199abcd"));
     }
 
     #[test]
@@ -523,7 +542,7 @@ mod tests {
         let prose = "Let's begin by rotating the private key for the service";
         assert_eq!(scrub(prose), prose);
         let block = "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----";
-        assert!(scrub(block).contains("[已隐去私钥]"));
+        assert!(scrub(block).contains("[REDACTED PRIVATE KEY]"));
     }
 
     #[test]

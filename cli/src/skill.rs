@@ -12,27 +12,27 @@ use respire::memory::engine::RecalledWithContext;
 use std::collections::HashMap;
 
 /// Canonical labels a skill body should carry, inside the standard
-/// `【前因】/【行为】/【后果】` markers (the markers stay mandatory).
-pub const SECTIONS: [&str; 6] = ["触发", "前置", "步骤", "校验", "回退", "边界"];
+/// `【Cause】/【Action】/【Result】` markers (required for new structured bodies); legacy Chinese remains readable.
+pub const SECTIONS: [&str; 6] = ["Trigger", "Prerequisites", "Steps", "Verification", "Rollback", "Scope"];
 
 /// Accepted spellings per section. Matching is substring-based so
 /// `【触发条件】`, `触发条件：` and `Trigger:` all count.
 const ALIASES: [(&str, &[&str]); 6] = [
     (
-        "触发",
+        "Trigger",
         &["触发条件", "触发", "何时用", "when to use", "trigger"],
     ),
     (
-        "前置",
-        &["前置条件", "前置", "前提", "prerequisite", "requires"],
+        "Prerequisites",
+        &["前置条件", "前置", "前提", "prerequisites", "prerequisite", "requires"],
     ),
-    ("步骤", &["执行步骤", "步骤", "steps", "procedure"]),
+    ("Steps", &["执行步骤", "步骤", "steps", "procedure"]),
     (
-        "校验",
+        "Verification",
         &["成功判据", "校验", "验证", "verification", "verify"],
     ),
     (
-        "回退",
+        "Rollback",
         &[
             "失败回退",
             "失败处理",
@@ -43,7 +43,7 @@ const ALIASES: [(&str, &[&str]); 6] = [
         ],
     ),
     (
-        "边界",
+        "Scope",
         &["适用边界", "适用范围", "边界", "不适用", "scope", "limits"],
     ),
 ];
@@ -219,17 +219,31 @@ mod tests {
     }
 
     #[test]
+    fn english_legacy_and_mixed_headings_have_the_same_requirements() {
+        let english = "【Cause】fixture\n【Action】\nTrigger: authorized task\nPrerequisites: ready\nSteps: run\nVerification: exit 0\nRollback: restore\nScope: Linux\n【Result】verified";
+        let legacy = "【前因】fixture\n【行为】\n触发条件：authorized task\n前置条件：ready\n步骤：run\n成功判据：exit 0\n失败回退：restore\n适用边界：Linux\n【后果】verified";
+        let mixed = english.replace("Verification:", "校验：").replace("【Cause】", "【前因】");
+        for body in [english, legacy, &mixed] {
+            assert!(missing_sections(body).is_empty(), "{body}");
+        }
+        for (label, old) in [("Verification: exit 0", "成功判据：exit 0"), ("Rollback: restore", "失败回退：restore")] {
+            assert_eq!(missing_sections(&english.replace(label, "")), missing_sections(&legacy.replace(old, "")));
+        }
+        assert_eq!(missing_sections("未验证; verification pending; rollback unavailable"), SECTIONS);
+    }
+
+    #[test]
     fn template_accepts_aliases_and_flags_gaps() {
         let full = "【前因】x\n【行为】\n触发条件：不能本地跑\n前置：已登录\n步骤：1) run\n校验：退出码 0\n回退：还原备份\n边界：仅 Linux\n【后果】y";
         let missing = missing_sections(full);
         assert!(missing.is_empty(), "missing={missing:?}");
 
         let missing = missing_sections("【前因】x【行为】步骤：只写了一步【后果】y");
-        assert_eq!(missing, vec!["触发", "前置", "校验", "回退", "边界"]);
+        assert_eq!(missing, vec!["Trigger", "Prerequisites", "Verification", "Rollback", "Scope"]);
 
         // Prose that merely contains an alias word does not satisfy the template.
         let prose = missing_sections("【前因】x【行为】步骤：结果未验证，边界情况很多【后果】y");
-        assert!(prose.contains(&"校验"), "未验证 must not stand in for 校验");
+        assert!(prose.contains(&"Verification"), "未验证 must not stand in for 校验");
     }
 
     #[test]
