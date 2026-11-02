@@ -186,7 +186,7 @@ GitSwarm 真正有价值的不是“共享记忆让 Agent 变强”，而是它�
 - **确认缺口**：未给 `--parent` 且未 `--force` 时会做语义冲突检查并可拒绝，显式 `--parent` 跳过这项冲突判断；不能笼统称每次重复导入必成功。成功重复导入仍会产生新本地 ID，`duplicates: 0` 不等于已完成 origin/digest 去重。share-import 的 merge 路径只给出后续手工 merge 提示，未实现自动 merge；`--title` 改 `payload.root_title`/候选账单而非逐条入库 title。没有分享专用 origin 清单/撤销协议。
 - **元数据与同步**：[`MemoryMeta`](https://github.com/risense-ai/respire-cli/blob/0f6bf9ac30f8e93a12f669c7495f0ada6689ca25/crates/protocol/src/metadata.rs) 已有有效期、来源引用、artifact 和 verification，不应与拟议的 share-specific trust/revocation 状态混称“完全无状态”。[`MemoryEngine::seal` / `hydrate_local`](https://github.com/risense-ai/respire-cli/blob/0f6bf9ac30f8e93a12f669c7495f0ada6689ca25/crates/crypto/src/engine.rs) 把记录/metadata/未知扩展保存在加密 payload，明文本地列不直接当作同步内容。成功导入且 autosync/remote 配置允许时可同步 **sealed ciphertext**；[`metadata_gate`](https://github.com/risense-ai/respire-cli/blob/0f6bf9ac30f8e93a12f669c7495f0ada6689ca25/crates/app/src/metadata_gate.rs) 的 isolated 部署可阻止含相应 metadata 的库同步。仍须审查解密接收方范围；仅加本地 origin 列会在换机/hydration/LWW 后丢失，不能替代版本化加密来源协议。
 - **space 边界**：现有 space 账号/key/data-dir 隔离不构成分享者签名认证；移除成员不能收回已取得的密钥、离线副本或已解密历史。这里提出的跨库来源撤销/传播还未实现。
-- **召回与 read heat**：当前已有 metadata 验证/有效性语义，但未实现本提案的分享来源/quarantine/trust 过滤协议。Core `MemoryQuery::default()` 的 `read_heat` 为 true；CLI 查询设置装配未指定时沿用。没有可核验的“默认关闭”决定，本 PR 不调整读取计数、热度、排序或来源信任。效果实验必须记录实际设置，变更默认值须另行授权及回归。
+- **召回与 read heat**：当前已有 metadata 验证/有效性语义，但未实现本提案的分享来源/quarantine/trust 过滤协议。Core `QuerySettings::default()` 的 `read_heat` 为 true；CLI 查询设置装配未指定时沿用。没有可核验的“默认关闭”决定，本 PR 不调整读取计数、热度、排序或来源信任。效果实验必须记录实际设置，变更默认值须另行授权及回归。
 
 ## 9. 候选实施路线（均未实现，不是本次发布承诺）
 
