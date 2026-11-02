@@ -21,6 +21,7 @@ pub mod lock;
 pub mod migration;
 pub mod service;
 pub mod diary;
+pub mod embedding;
 pub mod snapshot;
 pub mod feedback;
 pub mod read_heat;

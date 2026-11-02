@@ -71,6 +71,14 @@ fn check_progress(progress: &Progress) -> Result<()> {
 }
 
 impl Operation {
+    /// Reserve cancellation/progress before acknowledging a queued task.
+    pub fn reserve_task(id: String) -> Result<Self> {
+        let _scope = TaskScope::new(Some(id));
+        let operation = Self::try_begin_inner("queued",true,true)?.ok_or_else(||anyhow!("another model operation is running"))?;
+        TRACKED.set(false);
+        Ok(operation)
+    }
+    pub fn enter_thread(&self) { TRACKED.set(true); }
     /// Download duration depends on bandwidth. Keep progressing downloads alive.
     pub fn begin_download() -> Result<Self> {
         Self::try_begin_with_idle_timeout("verify", true)?
@@ -188,6 +196,17 @@ pub fn commit<T>(action: impl FnOnce() -> Result<T>) -> Result<T> {
     anyhow::ensure!(TRACKED.get(), "diary commit requires an active model operation");
     check_progress(slot.as_ref().ok_or_else(|| anyhow!("model operation already ended"))?)?;
     action()
+}
+
+pub fn commit_final<T>(action: impl FnOnce() -> Result<T>) -> Result<T> {
+    let mut slot = CURRENT.lock().map_err(|_|anyhow!("model progress lock poisoned"))?;
+    anyhow::ensure!(TRACKED.get(),"final commit requires an active model operation");
+    let progress = slot.as_mut().ok_or_else(||anyhow!("model operation already ended"))?;
+    check_progress(progress)?;
+    let result = action()?;
+    progress.cancellable = false;
+    progress.phase = "committed".to_owned();
+    Ok(result)
 }
 
 pub fn control(task_id: &str, cancel: bool) -> Result<Value> {

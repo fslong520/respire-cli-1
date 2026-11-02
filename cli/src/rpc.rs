@@ -328,6 +328,128 @@ pub(crate) fn index_status() -> Value {
         "model_setup": (state.state == "failed").then_some("Automatic BGE-M3 preparation or indexing failed; inspect the reported error and download source settings.")})
 }
 
+static PROFILE_SWITCH_RUNNING: AtomicBool = AtomicBool::new(false);
+
+static PROFILE_ADMISSION: Mutex<()> = Mutex::new(());
+static PROFILE_SWITCH_STATE: Mutex<Value> = Mutex::new(Value::Null);
+
+fn profile_state() -> Value {
+    PROFILE_SWITCH_STATE.lock().map(|v| v.clone()).unwrap_or_else(|_| json!({"state":"failed","error":"switch state lock poisoned"}))
+}
+fn set_profile_state(value: Value) {
+    if let Ok(mut slot) = PROFILE_SWITCH_STATE.lock() { *slot = value; }
+}
+fn start_profile_switch(choice: respire_app::embedding::Choice, task_id: String) -> Result<Value> {
+    anyhow::ensure!(!respire::service::service_paused() && !crate::autostart::background_paused(), "model switching is paused by service mode");
+    start_profile_switch_target(respire_app::embedding::select(choice)?,task_id)
+}
+fn start_profile_switch_target(mut target: respire_app::core_sdk::profiles::Selection, task_id: String) -> Result<Value> {
+    anyhow::ensure!(!respire::service::service_paused() && !crate::autostart::background_paused(),"model switching is paused by service mode");
+    target.validate()?;
+    let epoch = GENERATION.load(Ordering::Acquire);
+    let library = respire::service::data_dir();
+    let admission = PROFILE_ADMISSION.lock().map_err(|_|anyhow::anyhow!("model admission lock poisoned"))?;
+    anyhow::ensure!(PROFILE_SWITCH_RUNNING.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_ok(), "another model switch is running");
+    let operation = match respire::model_progress::Operation::reserve_task(task_id.clone()) {
+        Ok(operation) => operation,
+        Err(error) => { PROFILE_SWITCH_RUNNING.store(false,Ordering::Release); return Err(error); }
+    };
+    let queued = (|| -> Result<()> {
+        check_sync_context(epoch)?;
+        let store = respire::service::open_store()?;
+        anyhow::ensure!(library == respire::service::data_dir(),"model switch library changed before acceptance");
+        store.queue_selection(&target,&task_id)
+    })();
+    if let Err(error) = queued { PROFILE_SWITCH_RUNNING.store(false,Ordering::Release); return Err(error); }
+    drop(admission);
+    set_profile_state(json!({"id":task_id,"state":"pending","target":target.model,"active_changed":false,"semantic":"busy"}));
+    let spawn = std::thread::Builder::new().name("respire-model-switch".into()).stack_size(16 * 1024 * 1024).spawn(move || {
+        struct Finish;
+        impl Drop for Finish { fn drop(&mut self) { PROFILE_SWITCH_RUNNING.store(false,Ordering::Release); } }
+        let _finish = Finish;
+        operation.enter_thread();
+        let _operation = operation;
+        let _scope = respire::model_progress::TaskScope::new(Some(task_id.clone()));
+        let result = (|| -> Result<Value> {
+            respire::model_progress::update("switch-verify",&target.model,0,None)?;
+            let waiting = Instant::now();
+            while RUNNING.load(Ordering::Acquire).saturating_sub(RUNNING_STATUS.load(Ordering::Acquire)) > 0 || CLASSIFY_RUNNING.load(Ordering::Acquire) || sync_running() {
+                check_sync_context(epoch)?;
+                respire::model_progress::check()?;
+                anyhow::ensure!(waiting.elapsed() < Duration::from_secs(1800),"model switch timed out draining in-flight requests");
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            let gate = shared_exclusive();
+            let _write = gate.acquire(true);
+            check_sync_context(epoch)?;
+            anyhow::ensure!(library == respire::service::data_dir(), "model switch library changed");
+            let store = respire::service::open_store()?;
+            let previous = store.active_selection()?;
+            let source_revision = store.meta_get("memory_revision_v1")?.context("source revision unavailable")?;
+            let keys = crate::build_session()?;
+            store.meta_set("embedding_pending_task_v1",&serde_json::to_string(&json!({"id":task_id,"phase":"prepare"}))?)?;
+            respire_app::embedding::prepare(&target, |item,done,total| {
+                check_sync_context(epoch)?;
+                respire::model_progress::update("switch-download",item,done,total)
+            })?;
+            target.generation = respire_app::core_sdk::profiles::generation_key_for_profile(&target)?;
+            store.meta_set("embedding_pending_selection_v1",&serde_json::to_string(&target)?)?;
+            respire_app::core_sdk::profiles::exclusive(|| {
+                let attempt = respire_app::core_sdk::profiles::scoped(target.clone(), || {
+                    store.meta_set("embedding_pending_task_v1",&serde_json::to_string(&json!({"id":task_id,"phase":"load"}))?)?;
+                    respire::model_progress::update("switch-load",&target.model,0,None)?;
+                    respire_app::core_sdk::profiles::load(&target)?;
+                    respire::model_progress::check()?;
+                    let embedder = respire::memory::bge::BgeEmbedder::load_model(&target.model)?;
+                    store.meta_set("embedding_pending_task_v1",&serde_json::to_string(&json!({"id":task_id,"phase":"main-index"}))?)?;
+                    store.build_index_with_progress(&keys,&embedder,&target.model,false,|done,total| {
+                        check_sync_context(epoch)?;
+                        respire::model_progress::update("switch-index",&target.model,done as u64,Some(total as u64))
+                    })?;
+                    store.meta_set("embedding_pending_task_v1",&serde_json::to_string(&json!({"id":task_id,"phase":"diary-index"}))?)?;
+                    respire::diary::rebuild_with_progress(&store,&keys,&embedder,
+                        || { check_sync_context(epoch)?; respire::model_progress::check() },
+                        |action| { check_sync_context(epoch)?; respire::model_progress::commit(action) },
+                        |done| respire::model_progress::update("switch-diary",&target.model,done as u64,None))?;
+                    check_sync_context(epoch)?;
+                    anyhow::ensure!(library == respire::service::data_dir(), "model switch library changed");
+                    anyhow::ensure!(!store.index_pending(&target.model)? && !respire::diary::needs_rebuild(&store)?, "candidate index/source validation failed");
+                    respire::resident::clear()?;
+                    *crate::EMBEDDER_SLOT.lock().map_err(|_|anyhow::anyhow!("embedder cache poisoned"))? = None;
+                    respire::model_progress::commit_final(|| store.activate_selection(&target,&source_revision))?;
+                    Ok(())
+                });
+                if let Err(error) = attempt {
+                    let restored = match previous {
+                        Some(ref selection) => respire_app::core_sdk::profiles::load(selection).map(|_| ()),
+                        None => {
+                            respire_app::core_sdk::profiles::set_active(None);
+                            respire::memory::onnx::reset_sessions().and_then(|_| respire::memory::bge::BgeEmbedder::load_model("m3")?.probe("Respire rollback verification").map(|_| ()))
+                        }
+                    };
+                    return match restored {
+                        Ok(()) => Err(anyhow::anyhow!("model switch failed: {error:#}; previous selection restored and trial inference passed")),
+                        Err(recovery) => Err(anyhow::anyhow!("recovery_failed: model switch failed: {error:#}; previous model reload failed: {recovery:#}; semantic availability is unverified")),
+                    };
+                }
+                respire_app::core_sdk::profiles::set_active(Some(target.clone()));
+                Ok(json!({"selection":target,"active_changed":true,"semantic":"ready"}))
+            })
+        })();
+        match result {
+            Ok(result) => set_profile_state(json!({"id":task_id,"state":"ready","active_changed":true,"semantic":"ready","result":result})),
+            Err(error) => set_profile_state(json!({"id":task_id,"state":"failed","active_changed":false,"error":format!("{error:#}"),"semantic":if format!("{error:#}").contains("recovery_failed") {"unverified"} else if format!("{error:#}").contains("previous selection restored and trial inference passed") {"previous_ready"} else {"unchanged"}})),
+        }
+        kick_index();
+    });
+    if let Err(error) = spawn {
+        PROFILE_SWITCH_RUNNING.store(false,Ordering::Release);
+        set_profile_state(json!({"state":"failed","active_changed":false,"error":error.to_string()}));
+        return Err(error.into());
+    }
+    Ok(profile_state())
+}
+
 pub(crate) fn kick_index() {
     if STOPPING.load(Ordering::Acquire) {
         return;
@@ -424,7 +546,8 @@ fn index_loop_inner() -> Result<()> {
             // An indexed library still needs the CPU container for its next query.
             // Empty libraries wait for a write or explicit preparation instead of
             // starting an unsolicited model download during status/restart.
-            let cpu_upgrade = model == "m3" && respire::MemoryTransport::count(&store)? > 0
+            let active_profile = store.active_selection()?;
+            let cpu_upgrade = active_profile.is_none() && model == "m3" && respire::MemoryTransport::count(&store)? > 0
                 && respire::model_install::cpu_model_preparation_needed()?;
             if !pending && !diary_pending && !prepare_requested && !cpu_upgrade {
                 return Ok(true);
@@ -440,6 +563,11 @@ fn index_loop_inner() -> Result<()> {
             let mirror = INDEX_WORK.lock().map_err(|_| anyhow::anyhow!("index work lock poisoned"))?.prepare_mirror.take();
             if let Some(mirror) = mirror {
                 respire::model_install::prepare_m3_from_mirror(&mirror)?;
+            } else if let Some(selection) = active_profile.as_ref() {
+                respire_app::embedding::prepare(selection, |item,done,total| {
+                    check_sync_context(generation)?;
+                    respire::model_progress::update("prepare",item,done,total)
+                })?;
             } else if model == "m3" {
                 respire::model_progress::update("prepare", "BGE-M3", 0, None)?;
                 respire::model_install::prepare_m3_for_index()?;
@@ -637,7 +765,15 @@ fn flight_loop() {
                     .0;
             }
         };
+        let admission = PROFILE_ADMISSION.lock().unwrap_or_else(|error|error.into_inner());
+        if PROFILE_SWITCH_RUNNING.load(Ordering::Acquire) {
+            if let Some((job,_,_)) = manual { let _ = job.reply.send(Err("model_switch_busy".into())); }
+            else { SYNC_KICK.lock().unwrap_or_else(|error|error.into_inner()).due = Some(Instant::now()+Duration::from_secs(1)); }
+            drop(admission);
+            continue;
+        }
         SYNC_RUNNING.store(true, Ordering::Release);
+        drop(admission);
         if let Some((job, generation, boundary)) = manual {
             let boundary = if boundary < 0 {
                 let gate = shared_exclusive();
@@ -1240,6 +1376,12 @@ pub(crate) fn prepare_model(mirror: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn profile_request(method: &str, args: Vec<String>) -> Result<Value> {
+    let response = call_method(method,args,true)?;
+    anyhow::ensure!(response.ok,"{}",response.error.unwrap_or_else(|| "model profile request failed".to_owned()));
+    Ok(serde_json::to_value(response.envelope.context("model profile response missing")?)?)
+}
+
 fn http_roundtrip(method: &str, args: &[String]) -> Result<RpcResponse> {
     match method {
         "runtime.status" => {
@@ -1274,7 +1416,7 @@ fn http_roundtrip(method: &str, args: &[String]) -> Result<RpcResponse> {
                 data_dir: None,
             })
         }
-        "cli.exec" | "cli.progress" | "model.control" | "model.prepare" | "index.prepare" => {
+        "cli.exec" | "cli.progress" | "model.control" | "model.prepare" | "index.prepare" | "model.catalog" | "model.configure" | "model.switch" | "model.resume" | "model.progress" => {
             let parsed = if method == "cli.exec" {
                 crate::net_rpc::rpc_exec(args.to_vec())?
             } else {
@@ -1369,6 +1511,9 @@ fn dispatch(request: RpcRequest, tx: &Sender<Job>) -> RpcResponse {
     if matches!(request.method.as_str(), "model.prepare" | "index.prepare") && crate::autostart::background_paused() {
         return error_response(&request,"runtime_maintenance","runtime maintenance pauses model/index preparation");
     }
+    if request.method == "cli.exec" && PROFILE_SWITCH_RUNNING.load(Ordering::Acquire) && !is_status(&request.args) {
+        return error_response(&request,"model_switch_busy","model switch in progress; semantic queries and writes are paused; inspect model.progress");
+    }
     let response = match request.method.as_str() {
         #[cfg(feature = "native-fault-tests")]
         "runtime.test_worker_lifecycle" => {
@@ -1392,6 +1537,37 @@ fn dispatch(request: RpcRequest, tx: &Sender<Job>) -> RpcResponse {
             match respire_app::core_sdk::execute::<Value>("engine_control", json!({"action":"test_native_fault","mode":mode})) {
                 Ok(result) => { let mut response = status_response(&request); response.envelope = Some(ResultEnvelope::new("runtime.test_native_fault", OutputStatus::Ok, result, Vec::new())); response },
                 Err(error) => error_response(&request, "native_fixture_failed", &format!("{error:#}")),
+            }
+        }
+        "model.catalog" | "model.configure" | "model.switch" | "model.resume" | "model.progress" => {
+            let result = (|| -> Result<Value> {
+                match request.method.as_str() {
+                    "model.catalog" => {
+                        let store = respire::service::open_store()?;
+                        Ok(json!({"registry":respire_app::embedding::registry()?,"active":store.active_selection()?,"switch":profile_state()}))
+                    }
+                    "model.configure" => {
+                        let config = serde_json::from_str(request.args.first().context("configuration JSON required")?)?;
+                        respire_app::embedding::configure(config)
+                    }
+                    "model.switch" => {
+                        let choice = serde_json::from_str(request.args.first().context("selection JSON required")?)?;
+                        start_profile_switch(choice,request.id.clone())
+                    }
+                    "model.resume" => {
+                        let store = respire::service::open_store()?;
+                        let target = serde_json::from_str(&store.meta_get("embedding_pending_selection_v1")?.context("no pending model selection")?)?;
+                        start_profile_switch_target(target,request.id.clone())
+                    }
+                    _ => {
+                        let store = respire::service::open_store()?;
+                        Ok(json!({"switch":profile_state(),"operation":respire::model_progress::status()?,"pending_selection":store.meta_get("embedding_pending_selection_v1")?.map(|v|serde_json::from_str::<Value>(&v)).transpose()?,"pending_task":store.meta_get("embedding_pending_task_v1")?.map(|v|serde_json::from_str::<Value>(&v)).transpose()?}))
+                    },
+                }
+            })();
+            match result {
+                Ok(value) => { let mut response = status_response(&request); response.envelope = Some(ResultEnvelope::new(&request.method,if matches!(request.method.as_str(),"model.switch" | "model.resume") {OutputStatus::Pending} else {OutputStatus::Ok},value,Vec::new())); response }
+                Err(error) => error_response(&request,"model_profile_failed",&format!("{error:#}")),
             }
         }
         "model.prepare" => {
@@ -1511,6 +1687,10 @@ fn command_response(request: &RpcRequest, result: CommandResult) -> RpcResponse 
 }
 
 fn dispatch_deferred(request: RpcRequest, tx: &Sender<Job>, action: impl FnOnce(RpcResponse) + Send + 'static) {
+    if request.method == "cli.exec" && PROFILE_SWITCH_RUNNING.load(Ordering::Acquire) && !is_status(&request.args) {
+        action(error_response(&request,"model_switch_busy","model switch in progress; semantic queries and writes are paused; inspect model.progress"));
+        return;
+    }
     if request.method != "cli.exec" || request.v != PROTOCOL_V {
         action(dispatch(request, tx));
         return;
@@ -1668,7 +1848,8 @@ pub(crate) fn request_drain_exit() {
         wait_for_drain(supervised, ||RUNNING.load(Ordering::Acquire) != 0
             || WRITE_RUNNING.load(Ordering::Acquire)
             || CLASSIFY_RUNNING.load(Ordering::Acquire)
-            || sync_running() || index_has_work());
+            || sync_running() || index_has_work() || PROFILE_SWITCH_RUNNING.load(Ordering::Acquire));
+        while PROFILE_SWITCH_RUNNING.load(Ordering::Acquire) { std::thread::sleep(Duration::from_millis(25)); }
         stop_process(0);
     });
 }
@@ -1946,7 +2127,10 @@ fn dispatch_loop(rx: Receiver<Job>, limit: usize, idle: Option<Duration>, _lock:
                     let _ = job.reply.send(Err("missing classification context".into()));
                     continue;
                 };
+                let admission = PROFILE_ADMISSION.lock().unwrap_or_else(|error|error.into_inner());
+                if PROFILE_SWITCH_RUNNING.load(Ordering::Acquire) { let _ = job.reply.send(Err("model_switch_busy".into())); continue; }
                 CLASSIFY_RUNNING.store(true, Ordering::Release);
+                drop(admission);
                 let _active = ClassifyGuard;
                 SYNC_CONTEXT.with(|context| context.set(Some((generation, -1))));
                 let result = check_sync_context(generation)
@@ -2006,7 +2190,14 @@ fn dispatch_loop(rx: Receiver<Job>, limit: usize, idle: Option<Duration>, _lock:
                     let _ = job.reply.send(Err("runtime is stopping".into()));
                     continue;
                 }
+                let admission = PROFILE_ADMISSION.lock().unwrap_or_else(|error|error.into_inner());
+                if PROFILE_SWITCH_RUNNING.load(Ordering::Acquire) {
+                    shared_exclusive().cancel_reservation();
+                    let _ = job.reply.send(Err("model_switch_busy".into()));
+                    continue;
+                }
                 WRITE_RUNNING.store(true, Ordering::Release);
+                drop(admission);
                 let gate = shared_exclusive();
                 let _held = gate.acquire_reserved();
                 if !job.deadline.start() {
@@ -2155,6 +2346,11 @@ fn dispatch_loop(rx: Receiver<Job>, limit: usize, idle: Option<Duration>, _lock:
                         .and_then(|position| pending.remove(position))
                 } else { None };
             let Some(job) = job else { break; };
+            let admission = PROFILE_ADMISSION.lock().unwrap_or_else(|error|error.into_inner());
+            if PROFILE_SWITCH_RUNNING.load(Ordering::Acquire) && !is_status(&job.args) {
+                let _ = job.reply.send(Err("model_switch_busy".into()));
+                continue;
+            }
             let light_job = matches!(command_name(&job.args), Some("show" | "list" | "status" | "memory-revision"));
             if light_job { LIGHT_RUNNING.fetch_add(1, Ordering::AcqRel); }
             let status_job = is_status(&job.args);
@@ -2162,6 +2358,7 @@ fn dispatch_loop(rx: Receiver<Job>, limit: usize, idle: Option<Duration>, _lock:
                 RUNNING_STATUS.fetch_add(1, Ordering::AcqRel);
             }
             RUNNING.fetch_add(1, Ordering::AcqRel);
+            drop(admission);
             let reply = job.reply.clone();
             let spawned = std::thread::Builder::new()
                 .name("respire-read".into())
@@ -2214,6 +2411,7 @@ fn dispatch_loop(rx: Receiver<Job>, limit: usize, idle: Option<Duration>, _lock:
     for job in pending {
         let _ = job.reply.send(Err("runtime is stopping".into()));
     }
+    while PROFILE_SWITCH_RUNNING.load(Ordering::Acquire) { std::thread::sleep(Duration::from_millis(25)); }
     if let Err(error) = respire_app::core_sdk::worker::shutdown() {
         eprintln!("Core worker shutdown failed: {error:#}");
         // This stack still owns LibraryLock. Never reach drop(_lock) while a

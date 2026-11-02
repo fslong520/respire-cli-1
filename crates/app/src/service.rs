@@ -2863,6 +2863,8 @@ pub fn open_store_with_profile() -> Result<(PathBuf, LocalStore)> {
     } else {
         LocalStore::open(&db)
     }?;
+    respire_core_sdk::profiles::set_active(store.active_selection()?);
+    crate::embedding::install_transport()?;
     Ok((root, store))
 }
 
@@ -2877,6 +2879,8 @@ pub fn open_runtime_store(ownership:&crate::lock::LibraryLock)->Result<(LocalSto
         store.verify_sqlite_integrity()?;
         anyhow::ensure!(store.snapshot_quarantine_id()?.as_ref()==Some(id),"opened library does not match the restored snapshot transaction");
     }
+    respire_core_sdk::profiles::set_active(store.active_selection()?);
+    crate::embedding::install_transport()?;
     Ok((store,expected))
 }
 

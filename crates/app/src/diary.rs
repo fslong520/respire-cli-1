@@ -62,6 +62,15 @@ fn cache_path() -> std::path::PathBuf {
         .unwrap_or(root)
         .join("diary-fragments-v1.db")
 }
+
+fn model_cache_path(model: &str) -> Result<std::path::PathBuf> {
+    if core_sdk::profiles::current()?.is_none() { return Ok(cache_path()); }
+    let generation = core_sdk::generation_key(model)?;
+    Ok(cache_path().with_file_name(format!("diary-fragments-{}.db", digest(&generation))))
+}
+fn model_cache(model: &str, readonly: bool) -> Result<Option<Connection>> {
+    cache_at(&model_cache_path(model)?, readonly)
+}
 #[derive(Debug)]
 struct DamagedCache;
 impl std::fmt::Display for DamagedCache {
@@ -136,6 +145,7 @@ fn cache_at(path: &std::path::Path, readonly: bool) -> Result<Option<Connection>
     }
     Ok(Some(db))
 }
+#[cfg(test)]
 fn cache(readonly: bool) -> Result<Option<Connection>> {
     cache_at(&cache_path(), readonly)
 }
@@ -349,7 +359,8 @@ fn select(mut hits: Vec<Fragment>, limit: usize) -> Vec<Fragment> {
 pub fn needs_rebuild(store: &LocalStore) -> Result<bool> {
     let sources = diaries(store)?;
     let result = (|| -> Result<bool> {
-        let Some(db) = cache(true)? else {
+        let model = core_sdk::profiles::current()?.map(|s| s.model).unwrap_or(store.retrieval_model()?);
+        let Some(db) = model_cache(&model, true)? else {
             return Ok(!sources.is_empty());
         };
         if sources.is_empty() {
@@ -361,7 +372,7 @@ pub fn needs_rebuild(store: &LocalStore) -> Result<bool> {
         {
             return Ok(true);
         }
-        let generation = core_sdk::generation_key("m3")?;
+        let generation = core_sdk::generation_key(&model)?;
         let mut stmt = db.prepare("SELECT generation,artifact FROM diary_artifacts")?;
         let artifacts = stmt
             .query_map([], |row| {
@@ -406,7 +417,7 @@ pub fn clear_if_empty(
     if !diaries(store)?.is_empty() {
         return Ok(false);
     }
-    let path = cache_path();
+    let path = model_cache_path(&store.retrieval_model()?)?;
     guarded(store, &revision, &mut commit, || {
         let mut db = writable_cache(&path)?;
         let tx = db.transaction()?;
@@ -445,7 +456,7 @@ pub fn rebuild_with_progress<E: Embedder>(
         .meta_get("memory_revision_v1")?
         .context("memory snapshot token unavailable")?;
     let sources = diaries(store)?;
-    let path = cache_path();
+    let path = model_cache_path(provider.model_name())?;
     let mut db = None;
     check()?;
     guarded(store, &revision, &mut commit, || {
@@ -640,7 +651,7 @@ pub fn search(
     let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     // Lexical mode does not even open the disposable semantic cache.
     let db = if hybrid {
-        cache(true).ok().flatten()
+        model_cache(&store.retrieval_model()?, true).ok().flatten()
     } else {
         None
     };
@@ -650,7 +661,7 @@ pub fn search(
     let mut pending = 0;
     let mut omitted = false;
     let generation = if hybrid && db.is_some() {
-        Some(core_sdk::generation_key("m3")?)
+        Some(core_sdk::generation_key(&store.retrieval_model()?)?)
     } else {
         None
     };
@@ -721,7 +732,7 @@ pub fn search(
     let mut ready = false;
     if hybrid && !snapshots.is_empty() {
         let semantic = (|| -> Result<Vec<(f32, MemoryEntry)>> {
-            let provider = crate::memory::bge::BgeEmbedder::load_model("m3")?;
+            let provider = crate::memory::bge::BgeEmbedder::load_model(&store.retrieval_model()?)?;
             core_sdk::query(
                 &provider,
                 &snapshots,

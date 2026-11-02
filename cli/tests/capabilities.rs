@@ -26,7 +26,7 @@ fn capabilities_is_typed_and_does_not_initialize_any_profile() -> anyhow::Result
         assert_eq!(result["summary"]["schema_version"], 1);
         assert!(result["summary"]["cli_version"].is_string());
         assert_eq!(result["summary"]["capabilities"], serde_json::json!({
-            "rerank":false, "model":{"install":true,"install_rerank":false},
+            "rerank":false, "model":{"install":true,"install_rerank":false,"profile_contract":1,"transport_contract":1,"methods":["model.catalog","model.configure","model.switch","model.resume","model.progress"],"selection_scope":"library"},
             "host_rpc":{"version":1,"transport":"stdio","flag":"--host-rpc-stdio",
                 "methods":["auth.register","auth.login","auth.recover","auth.reset"]},
             "memory_list_metadata":true,

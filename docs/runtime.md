@@ -1,5 +1,13 @@
 # Host runtime and sandbox clients
 
+Embedding profiles use `model.catalog`, `model.configure`, `model.switch`,
+`model.resume` and `model.progress` on the existing runtime RPC transport.
+See [embedding profiles](model-profiles.md) for CLI/JSON and failure semantics.
+SQLite library metadata owns active selections. A switch pauses new semantic
+requests and writes, checkpoints a candidate generation, validates both main
+and diary indexes, and only then activates it. Pending snapshots survive restart
+for an explicit `model resume`; no uncertain operation is automatically replayed.
+
 ```mermaid
 flowchart LR
   Host[Host terminal] -->|owns lifecycle| Runtime[Loopback HTTP runtime]

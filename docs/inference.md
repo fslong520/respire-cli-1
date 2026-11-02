@@ -44,7 +44,8 @@ performance guarantee is implied. The commands are
 `rsrs model engine cpu|gpu|npu --model VARIANT` remains a settings-only CLI command;
 TUI engine changes use the validated load path.
 
-`RSRS_ENGINE` overrides the saved selection. Automatic selection is unsupported.
+`RSRS_ENGINE` overrides legacy `inference.json` selection. Library profile
+snapshots use their explicit selected engine instead. Automatic selection is unsupported.
 Missing hardware and inference failures are reported without switching engines.
 Provider names do not prove execution of every operation on the requested device.
 
@@ -52,7 +53,8 @@ Provider names do not prove execution of every operation on the requested device
 | --- | --- |
 | `model install` / `model install-m3` | Install or verify pinned BGE-M3 quantized (543 MiB model plus tokenizer) |
 | `model uninstall` / `model uninstall-m3` | Delete user-installed M3 files |
-| `model activate m3` / `reembed` | Rebuild/resume the M3 index |
+| `model activate m3` | Legacy M3 rebuild interface |
+| `reembed` | Rebuild/resume the active library profile's index |
 | `model install-engines` | Explicit Windows provider installation |
 | `model probe --json` | Actual M3 inference diagnostics |
 | `model reset-cpu` | Host-only CPU runtime recovery |
@@ -66,8 +68,12 @@ The tokenizer remains pinned to the same revision and checksum. FP16 and
 generation; old vectors are rebuilt using resumable checkpoints and the completed
 generation is activated atomically. Subsequent restarts reuse this generation.
 
-BGE-M3 is the sole embedding model (1024 dimensions, CLS pooling, L2 normalization). Legacy BGE
-and cross-encoder rerank models cannot be installed, loaded or executed.
+Embedding profiles support arbitrary model IDs and explicit execution settings.
+The presets are BGE-M3 (1024 dimensions) and `bge-small-zh-v1.5` (512 dimensions,
+Chinese query prefix). Both use CLS pooling and L2 normalization. See
+[embedding profiles](model-profiles.md) for catalog/configure/switch/progress.
+The commands above remain the legacy M3 interface: `--model` on
+`model engine/load/install` continues to mean an M3 weight variant.
 The TUI download-source editor offers auto, hf-mirror.com, hf-mirror.net and the
 official Hugging Face origin, plus a custom URL. `--mirror` overrides
 `RSRS_MIRROR`, then the persisted `model_mirror` setting; default is auto. These
@@ -117,7 +123,8 @@ failure is rejected before fallback. CPU source provenance is recorded alongside
 the verified cache artifact.
 `RSRS_M3_DIR` overrides `~/.rsrs/models/bge-m3`. Old BGE directories and
 `RSRS_MODEL_DIR` are not used. Model weights and engine selection are global;
-switching accounts does not select another engine or model directory.
+legacy settings do not select another model directory. Profile selections,
+in contrast, belong to each library and follow account/library switching.
 
 The resident host supervises a dedicated Core worker that reuses foreground and
 background native sessions. Worker IPC uses private inherited anonymous

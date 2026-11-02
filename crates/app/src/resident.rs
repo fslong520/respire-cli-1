@@ -35,6 +35,7 @@ pub fn recall_catalog(keys: &SessionKeys, store: &LocalStore)
     -> Result<(Arc<Vec<StoredMemory>>, usize, Arc<respire_core_sdk::ResidentLease>)> {
     let mut hash = Sha256::new();
     hash.update(store.library_identity()?.as_bytes());
+    hash.update(store.active_generation_key()?.as_bytes());
     hash.update(keys.urk);
     let identity = hash.finalize().to_vec();
     let revision = store.retrieval_revision()?;

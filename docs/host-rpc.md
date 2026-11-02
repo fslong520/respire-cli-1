@@ -1,5 +1,21 @@
 # Desktop host RPC
 
+Embedding model selection uses resident loopback `/api/rpc`, separately from
+the one-shot account host process. Use the existing `v:1`, unique `id`, `method`
+and `args` envelope. See [embedding profiles](model-profiles.md) for JSON fields.
+
+| Runtime method | `args` | Result |
+| --- | --- | --- |
+| `model.catalog` | `[]` | Registry, active library selection, switch state |
+| `model.configure` | `["<configuration JSON>"]` | Saved draft; no activation |
+| `model.switch` | `["<selection JSON>"]` | Pending task; selection contains `model`, `backend`, `engine`, optional `variant` |
+| `model.resume` | `[]` | Resume the persisted pending snapshot |
+| `model.progress` | `[]` | Switch result, current operation, persisted pending selection/task |
+| `model.control` | `["<operation task ID>", "true"]` | Cancel that operation |
+
+Poll after a pending switch. Surface `recovery_failed` separately from a
+successful rollback. A lost receipt does not authorize replaying a switch.
+
 Account operations use a one-shot host process because committing an account can restart the memory Runtime. The normal HTTP `cli.exec` gate continues to reject host-only identity operations.
 
 Launch `rsrs --json --host-rpc-stdio`, write one UTF-8 JSON request to stdin, then close stdin. Do not put credentials in process arguments. The host uses the existing authentication, vault, profile transaction and lifecycle implementation.
