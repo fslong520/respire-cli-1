@@ -81,7 +81,8 @@ class NativeModelCacheTests(unittest.TestCase):
         self.assertIn("pip==26.2.2 setuptools==84.2.1 wheel==0.48.0", workflow)
         self.assertIn('scripts/native-psutil-wheel-cache.py validate --directory .native-psutil-wheels', workflow)
         self.assertIn('scripts/native-psutil-wheel-cache.py install --directory .native-psutil-wheels', workflow)
-        self.assertIn('"${ACTIONS_CACHE_MODE:-}" = write', workflow)
+        self.assertNotIn('${ACTIONS_CACHE_MODE', workflow)
+        self.assertIn('if [ "$TRUSTED_SOURCE" = true ]; then', workflow)
         for block in workflow.split("      - uses: actions/cache/save@v4\n")[1:]:
             block = block.split("\n      - ")[0]
             self.assertIn("continue-on-error: true", block)
