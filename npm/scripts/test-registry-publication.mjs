@@ -2,7 +2,7 @@
 // Offline publication tests. All registry reads and every npm publish are mocked.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
+import {chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
@@ -612,6 +612,8 @@ function sealedPack(t,mutateEntries=entries=>entries) {
   const pkg={name:expected.name,version:expected.version,dependencies:{'@rsrsai/linux':expected.version}};
   writeFileSync(path.join(dir,'package.json'),JSON.stringify(pkg));
   writeFileSync(path.join(dir,'LICENSE'),'license bytes');
+  // The archive/receipt declare 0644; do not inherit the caller's umask.
+  for (const file of ['package.json','LICENSE']) chmodSync(path.join(dir,file),0o644);
   const entries=['package.json','LICENSE'].map(file=>({name:`package/${file}`,data:readFileSync(path.join(dir,file),'utf8')}));
   pythonFixture(`import io,json,sys,tarfile
 with tarfile.open(sys.argv[1],'w:gz') as t:

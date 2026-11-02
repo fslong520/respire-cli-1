@@ -34,6 +34,13 @@ and no `@rsrsai/cli` dependency. This source change does not alter already
 published versions, whose layout and recovery still follow their source
 manifest. The legacy `npm/alias` inputs remain byte-for-byte unchanged.
 
+Release acceptance must distinguish an existing `rsrs-cli` alias upgrade from a
+scoped-only global `@rsrsai/cli` switch. The latter can fail `EEXIST` because both
+packages own `rsrs`; test controlled removal/exact-version installation and
+failed-install rollback in an isolated prefix, with user profile/runtime/database
+bytes unchanged. Never add automatic uninstall or `--force` to the launcher. See
+the [user migration guide](../npm/README.md#migrating-a-global-install).
+
 ## Acceptance performance
 
 Source CI retains the pinned SDK and Rust dependency caches. Release acceptance
