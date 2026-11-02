@@ -7405,7 +7405,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
                     Ok(())
                 }
                 ModelAction::Load { engine, model } => {
-                    let _operation = respire::model_progress::Operation::begin("verify")?;
+                    let _operation = respire::model_progress::Operation::begin_load()?;
                     let engine = respire::memory::onnx::Engine::parse(engine)?;
                     respire::model_progress::update("verify", model, 0, None)?;
                     respire::memory::onnx::validate_selection(engine, model)?;

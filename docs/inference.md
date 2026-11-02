@@ -30,7 +30,10 @@ and one of `quantized`, `fp16`, `int8`, `uint8`, `q4`, or `q4f16`.
   the selection and checks runtime read-back. Missing, corrupt or unsupported
   weights are rejected. A failure after replacement attempts to reload and trial
   the previous model; failure to recover is explicitly reported.
-- Escape/Back discards the draft; both confirmations default to cancel. File
+- Escape/Back discards the draft; both confirmations default to cancel. Once a
+  load starts it cannot be cancelled, and RPC cancellation explicitly rejects
+  the request instead of acknowledging a cancellation it cannot honor. Downloads
+  remain cancellable. File
   presence in the picker is metadata only, with checksums verified on loading.
 
 GPU/NPU require compatible OS, hardware and providers. A listed variant is not a
