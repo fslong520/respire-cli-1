@@ -26,6 +26,15 @@ the already running runtime. `RSRS_*` names retain the standard legacy aliases.
 | RSRS_RECALL_MAX_FUSION | 0 | Select strongest-axis fusion instead of weighted fusion |
 | RSRS_RECALL_AUX_CAP_RATIO | 0.85 | Limit auxiliary contributions relative to semantic strength |
 | RSRS_RECALL_RRF_CAP | 0 | Optional consensus contribution; report comparison value 0.05 |
+| RSRS_RECALL_FUSION | legacy | `attention` re-ranks admitted candidates with per-head softmax distributions and independent gates; `attention_anchor` keeps the legacy relevance blend and attends only priors; `auto` selects by a fitted pool-size gate |
+| RSRS_RECALL_FUSION_ALPHA | 0.20 | Auxiliary prior share in attention fusion; semantic keeps the residual |
+| RSRS_RECALL_FUSION_BETA | 0.25 | Lexical head share in attention fusion |
+| RSRS_RECALL_FUSION_TEMPERATURE | 1.0 | Softmax temperature after per-head standardization |
+| RSRS_RECALL_FUSION_GATE_RECENCY | 0.02 | Non-temporal recency gate in attention fusion |
+| RSRS_RECALL_FUSION_GATE_RECENCY_TEMPORAL | 1.0 | Temporal recency gate in attention fusion |
+| RSRS_RECALL_FUSION_GATE_HOT | 0.10 | Heat gate in attention fusion |
+| RSRS_RECALL_FUSION_GATE_TREE | 0.02 | Tree gate in attention fusion |
+| RSRS_RECALL_FUSION_TEMPORAL_ALPHA | 0.15 | Extra prior share for temporal questions |
 | RSRS_RECALL_HEAT_CAP | 8 | Cap read frequency for ranking; raw counters remain intact |
 | RSRS_RECALL_COS_RELATIVE_RATIO | unset | Optional additional cosine floor, e.g. 0.85 of this query's top cosine |
 | RSRS_RECALL_COS_MARGIN | unset | Optional top-minus-median semantic admission margin, e.g. 0.15 |
@@ -67,3 +76,34 @@ remain release gates. No external corpus replication is claimed: the user asked
 to implement the supplied algorithms without requiring the original evaluation
 archive. Lower admission floors may return candidates for questions with no
 answer; titles remain reference material, not evidence that an answer exists.
+
+## Lexical learning from real adoption
+
+`rsrs learn train --from-labels` rebuilds BM25 top-100 candidates for every
+`query_log` row with `adopted` or `good_ids`, uses those ids as positives, and
+samples up to eight deep negatives (candidate rank >= 20). Negatives are kept
+deep on purpose: an adopted result can sit at rank 40, and treating the lexical
+top-20 as negatives teaches the model to invert BM25.
+
+The BM25 log score is the fixed base (`weights[0] = 1`); only the other eight
+features learn, capped at `[-2, 2]`. At recall the residual is normalized per
+query and added with weight 0.5, so learned evidence can promote a deep
+candidate but cannot erase the lexical order on its own. The model lives in the
+local `learned_reranker` singleton and is never synced. `--epochs` replays the
+same labeled rows; `rsrs learn reset` returns to pure BM25.
+
+## Retrieval-mode switch
+
+`client.json` stores `retrieval` (`auto|bge|self`), set with:
+
+```bash
+rsrs config --retrieval self   # BM25 + learned reranker, no vectors
+rsrs config --retrieval bge    # hybrid BGE retrieval
+rsrs config --retrieval auto   # BGE if installed, otherwise the local path
+```
+
+`RSRS_RETRIEVAL` overrides the file for one process. In `self` mode writes use
+the zero embedder and recall goes through the lexical learner even when BGE is
+installed; switching back to `bge` requires `rsrs reembed` for entries written
+during the self-learning window. GUI/TUI should expose the same three-way switch
+instead of asking users to edit `client.json`.
