@@ -26,6 +26,7 @@ use crate::i18n::{self, Lang};
 mod model_task;
 mod model_weights;
 mod recall_api;
+mod recall_fusion;
 mod recall_test;
 mod text_input;
 
@@ -68,6 +69,7 @@ enum ConfirmKind {
 enum Overlay {
     None,
     RecallApi(recall_api::Form),
+    RecallFusion(recall_fusion::Form),
     ModelMirror(text_input::Input),
     ModelWeights(model_weights::Form),
     SavingWeights,
@@ -179,6 +181,7 @@ pub fn run() -> Result<()> {
         if let Overlay::RecallTest(form) = &mut app.overlay {
             form.poll();
         }
+        if let Overlay::RecallFusion(form) = &mut app.overlay { form.poll(); }
         let api_saved = match &mut app.overlay {
             Overlay::RecallApi(form) => form.poll_saved(),
             _ => false,
@@ -218,6 +221,7 @@ pub fn run() -> Result<()> {
         if let Event::Paste(text) = &event {
             match &mut app.overlay {
                 Overlay::RecallApi(form) => form.paste(text),
+                Overlay::RecallFusion(form) => form.paste(text),
                 Overlay::ModelMirror(input) => input.paste(text),
                 Overlay::RecallTest(form) => form.paste(text),
                 _ => {}
@@ -253,6 +257,10 @@ pub fn run() -> Result<()> {
                 let next = if key.code == KeyCode::Down { (index + 1) % presets.len() } else { (index + presets.len() - 1) % presets.len() };
                 *input = text_input::Input::new(presets[next].to_owned());
             } else { input.key(key); }
+            continue;
+        }
+        if let Overlay::RecallFusion(form) = &mut app.overlay {
+            if form.key(key) { app.overlay = Overlay::None; }
             continue;
         }
         if let Overlay::RecallApi(form) = &mut app.overlay {
@@ -684,7 +692,7 @@ fn handle(app: &mut App, code: KeyCode) -> bool {
         Page::Model => list_key(
             app,
             code,
-            13 + model_engines().len() + usize::from(cfg!(windows)),
+            15 + model_engines().len() + usize::from(cfg!(windows)),
             |app, code| model_key(app, code),
         ),
         Page::Workspace => workspace_key(app, code),
@@ -1099,7 +1107,11 @@ fn model_key(app: &mut App, code: KeyCode) {
                     }
                     Some(7) => app.overlay = Overlay::RecallTest(recall_test::Form::new("benchmark")),
                     Some(8) => app.overlay = Overlay::ModelWeights(model_weights::Form::new(&app.live.model_settings)),
-                    Some(9) => app.page = Page::Home,
+                    Some(9) => match recall_fusion::Form::new() {
+                        Ok(form) => app.overlay = Overlay::RecallFusion(form),
+                        Err(error) => app.set_notice(error),
+                    },
+                    Some(10) => app.page = Page::Home,
                     _ => {}
                 }
             }
@@ -1703,7 +1715,7 @@ fn draw(frame: &mut Frame, app: &App) {
     }
     let mut lines = vec![banner()];
     if let Some(mut extra) = overlay_lines(app) {
-        if matches!(app.overlay, Overlay::ModelWeights(_)) { keep_selection_visible(&mut extra, chunks[0]); }
+        if matches!(app.overlay, Overlay::ModelWeights(_) | Overlay::RecallFusion(_)) { keep_selection_visible(&mut extra, chunks[0]); }
         // Confirmation and edit controls must not be clipped below a long page body.
         lines.extend(extra);
     } else {
@@ -1732,7 +1744,7 @@ fn draw(frame: &mut Frame, app: &App) {
     }
     let foot = if matches!(app.overlay, Overlay::ModelTask(_)) {
         t("Esc / C \u{53d6}\u{6d88}\u{5f53}\u{524d}\u{6a21}\u{578b}\u{4efb}\u{52a1}", "Esc / C cancels the model task")
-    } else if matches!(app.overlay, Overlay::RecallApi(_)) {
+    } else if matches!(app.overlay, Overlay::RecallApi(_) | Overlay::RecallFusion(_)) {
         t(
             "Tab \u{5207}\u{5b57}\u{6bb5}    Ctrl+A \u{5168}\u{9009}    Ctrl+S \u{4fdd}\u{5b58}    Esc \u{653e}\u{5f03}",
             "Tab changes field    Ctrl+A selects all    Ctrl+S saves    Esc discards",
@@ -2339,7 +2351,8 @@ fn model_body(app: &App) -> Vec<Line<'static>> {
     lines.push(choice(app.cursor == index + 7, t("\u{4ece}\u{6240}\u{9009}\u{4e0b}\u{8f7d}\u{6e90}\u{91cd}\u{65b0}\u{4e0b}\u{8f7d}", "Restart download from selected source")));
     lines.push(choice(app.cursor == index + 8, t("\u{63a8}\u{7406} / Recall Benchmark", "Inference / Recall Benchmark")));
     lines.push(choice(app.cursor == index + 9, t("\u{9009}\u{62e9}\u{5f15}\u{64ce}\u{4e0e}\u{6a21}\u{578b}\u{6743}\u{91cd}\u{2026}", "Choose engine and model weights\u{2026}")));
-    lines.push(choice(app.cursor == index + 10, t("0  \u{8fd4}\u{56de}", "0  Back")));
+    lines.push(choice(app.cursor == index + 10, t("五轴注意力融合设置…", "Five-axis attention fusion settings…")));
+    lines.push(choice(app.cursor == index + 11, t("0  \u{8fd4}\u{56de}", "0  Back")));
     lines
 }
 
@@ -2574,7 +2587,7 @@ mod model_menu_tests {
             model_key(&mut app, KeyCode::Enter);
             assert!(matches!(app.overlay, Overlay::ModelWeights(_)));
             app.overlay = Overlay::None;
-            app.cursor += 1;
+            app.cursor += 2;
             model_key(&mut app, KeyCode::Enter);
             assert!(matches!(app.page, Page::Home));
             Ok(())
@@ -2596,6 +2609,7 @@ fn overlay_lines(app: &App) -> Option<Vec<Line<'static>>> {
     match &app.overlay {
         Overlay::None => None,
         Overlay::ModelWeights(form) => Some(form.lines(&app.live.model_settings)),
+        Overlay::RecallFusion(form) => Some(form.lines()),
         Overlay::SavingWeights => Some(vec![
             line(match app.live.model_progress["phase"].as_str() {
                 Some("verify") => t("\u{6b63}\u{5728}\u{6821}\u{9a8c}\u{56fa}\u{5b9a}\u{5927}\u{5c0f}\u{3001}SHA-256 \u{548c}\u{6a21}\u{578b}\u{8eab}\u{4efd}", "Validating pinned size, SHA-256 and model identity"),

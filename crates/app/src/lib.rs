@@ -25,6 +25,7 @@ pub mod embedding;
 pub mod snapshot;
 pub mod feedback;
 pub mod read_heat;
+pub mod recall_fusion;
 pub mod session_import;
 pub mod resident;
 pub mod sync;

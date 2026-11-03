@@ -81,7 +81,7 @@ fn main() -> Result<()> {
         }
         results.push(result);
     }
-    let mut params = bench::snapshot_params();
+    let mut params = bench::snapshot_params()?;
     params.insert("embedding_model".into(), model);
     params.insert("recall_mode".into(), "fast".into());
     let report = bench::BenchReport {

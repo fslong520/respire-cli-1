@@ -331,8 +331,8 @@ pub const PARAM_KEYS: &[&str] = &[
     "RSRS_DEBUG_SCORE",
 ];
 
-/// Env snapshot (only vars that are set).
-pub fn snapshot_params() -> BTreeMap<String, String> {
+/// Environment snapshot plus effective persistent fusion settings.
+pub fn snapshot_params() -> anyhow::Result<BTreeMap<String, String>> {
     let mut m = BTreeMap::new();
     for k in PARAM_KEYS {
         if let Ok(v) = respire::env::var(k) {
@@ -346,13 +346,20 @@ pub fn snapshot_params() -> BTreeMap<String, String> {
     }
     m.entry("RSRS_RECALL_PROFILE".into()).or_insert_with(||"calibrated".into());
     m.insert("recall_calibration_contract".into(),"1".into());
+    m.insert("recall_fusion_contract".into(),"1".into());
+    for (key, value) in respire_app::recall_fusion::query_settings()? {
+        if key == "fusion" || key.starts_with("fusion_") {
+            m.insert(format!("RSRS_RECALL_{}", key.to_uppercase()),
+                value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string()));
+        }
+    }
     m.insert("feedback_contract".into(),respire::core_sdk::FEEDBACK_CONTRACT.to_string());
     {
         use sha2::{Digest,Sha256};
         m.insert("sdk_lock_sha256".into(),format!("{:x}",Sha256::digest(include_bytes!("../../sdk/core-sdk.lock.json"))));
     }
     m.insert("cli_version".into(),env!("CARGO_PKG_VERSION").into());
-    m
+    Ok(m)
 }
 
 #[cfg(test)]
