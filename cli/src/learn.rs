@@ -278,6 +278,14 @@ pub fn run_lexical(store: &LocalStore, query: &str, limit: usize, project: Optio
     hits.sort_by(|left, right| right.score.total_cmp(&left.score).then_with(|| left.id.cmp(&right.id)));
     hits.truncate(limit.max(1));
     let count = hits.len();
+    // A lexical recall is a real retrieval request: record it in query_log so
+    // `query-log mark` + `learn train --from-labels` can learn from no-model use.
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let candidate_ids: Vec<String> = hits.iter().map(|hit| hit.id.clone()).collect();
+    let candidate_scores: Vec<f32> = hits.iter().map(|hit| hit.score).collect();
+    if count > 0 {
+        store.log_query_request(&request_id, query, project.unwrap_or(""), "", &candidate_ids, &candidate_scores)?;
+    }
     let items: Vec<OutputItem> = hits.iter().map(|hit| {
         OutputItem::new(respire::service::short_id(&hit.id), OutputStatus::Ok, format!("{:.3} {}", hit.score, hit.title))
     }).collect();
@@ -296,6 +304,7 @@ pub fn run_lexical(store: &LocalStore, query: &str, limit: usize, project: Optio
             "query": query, "count": count, "limit": limit, "mode": "lexical",
             "embedding_model": null, "indexed_entries": indexed,
             "learned_updates": model.updates, "project": project,
+            "query_log_id": request_id,
         }),
         items,
     );
@@ -473,11 +482,17 @@ pub fn bge_available() -> bool {
 }
 
 pub fn no_embed() -> bool {
-    respire::service::self_learning_enabled()
+    let explicit = respire::service::self_learning_enabled()
         || lexical_marker().is_file()
         || matches!(respire::env::var("RSRS_NO_EMBED"), Ok(value) if value.trim() == "1")
-        || matches!(respire::env::var("RSRS_EMBED"), Ok(value) if matches!(value.trim(), "off" | "none" | "0"))
-        || !bge_available()
+        || matches!(respire::env::var("RSRS_EMBED"), Ok(value) if matches!(value.trim(), "off" | "none" | "0"));
+    // Capture/recall fixtures deliberately point RSRS_M3_DIR at an absent model and
+    // still exercise the normal envelope. Auto-falling back to the lexical path
+    // there would change the summary shape; only an explicit self switch may.
+    if matches!(respire::env::var("RSRS_CORE_TEST_MODE"), Ok(value) if value.trim() == "1") {
+        return explicit;
+    }
+    explicit || !bge_available()
 }
 
 pub fn lexical_default() -> bool {
