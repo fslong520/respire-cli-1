@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand};
 use uuid::Uuid;
 
 mod admission;
-mod annotate;
+mod lexical;
 mod learn;
 mod app_version;
 mod autostart;
@@ -800,63 +800,6 @@ enum Command {
     Bench {
         #[command(subcommand)]
         cmd: BenchCmd,
-    },
-    /// Annotate retrieval: BM25 top-N candidates (no BGE) + LLM judgement, stored as replayable training labels
-    Annotate {
-        /// One query to annotate
-        #[arg(long)]
-        query: Option<String>,
-        /// JSONL file: one {"query":"..."} object or a plain query per line
-        #[arg(long)]
-        file: Option<String>,
-        /// Mine the most recent distinct queries from query-log (skips already annotated ones)
-        #[arg(long)]
-        from_query_log: bool,
-        /// Max queries taken from --from-query-log
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
-        /// Candidate depth sent to the LLM
-        #[arg(long, default_value_t = 10)]
-        topk: usize,
-        /// BM25 pool stored as hard negatives (LLM still sees only --topk)
-        #[arg(long, default_value_t = 50)]
-        candidate_topk: usize,
-        /// Only print BM25 candidates; no LLM call, and the row is stored as dry_run
-        #[arg(long)]
-        dry_run: bool,
-        /// Project value recorded on the label row
-        #[arg(long)]
-        project: Option<String>,
-        /// Chat backend: ds | jev (default: stored selection)
-        #[arg(long)]
-        backend: Option<String>,
-        /// DeepSeek-compatible backend: --ds uses the stored key; --ds <key> stores it
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        ds: Option<String>,
-        /// OpenAI-compatible base URL (default: backend default)
-        #[arg(long)]
-        api_base: Option<String>,
-        /// Model name (default: backend default)
-        #[arg(long, default_value = classify::DEFAULT_MODEL)]
-        model: String,
-        /// Export stored annotations as training JSONL
-        #[arg(long)]
-        export_training: Option<String>,
-        /// Training export shape: listwise | pairwise
-        #[arg(long, default_value = "listwise")]
-        export_format: String,
-        /// Max annotations in the export
-        #[arg(long, default_value_t = 5000)]
-        export_limit: usize,
-        /// Include dry_run/llm_error/parse_error rows in the export (default: ok only)
-        #[arg(long)]
-        include_failed: bool,
-        /// Correlates the label row with the recall that triggered it
-        #[arg(long, hide = true)]
-        request_id: Option<String>,
-        /// Recall-hook mode: no output, failures only land in annotation_log
-        #[arg(long, hide = true)]
-        quiet: bool,
     },
     /// Local retrieval learning: inspect, batch-train or reset the BM25 reranker
     Learn {
@@ -6980,7 +6923,6 @@ fn run_local(args: Cli) -> Result<()> {
         Some(Command::Remember { .. }) => "remember",
         Some(Command::Candidates { .. }) => "candidates",
         Some(Command::Bench { .. }) => "bench",
-        Some(Command::Annotate { .. }) => "annotate",
         Some(Command::Learn { .. }) => "learn",
         Some(Command::TreeDeepen { .. }) => "tree-deepen",
         Some(Command::TreeCure { .. }) => "tree-cure",
@@ -7435,47 +7377,6 @@ fn run_local_inner(args: Cli) -> Result<()> {
             cmd,
         }) => return run_query_log(*limit, *stats, *json, cmd.as_ref()),
         Some(Command::Bench { cmd }) => return run_bench(cmd),
-        Some(Command::Annotate {
-            query,
-            file,
-            from_query_log,
-            limit,
-            topk,
-            candidate_topk,
-            dry_run,
-            project,
-            backend,
-            ds,
-            api_base,
-            model,
-            export_training,
-            export_format,
-            export_limit,
-            include_failed,
-            request_id,
-            quiet,
-        }) => {
-            return annotate::run(annotate::Options {
-                query: query.clone(),
-                file: file.clone(),
-                from_query_log: *from_query_log,
-                limit: *limit,
-                topk: *topk,
-                candidate_topk: *candidate_topk,
-                dry_run: *dry_run,
-                project: project.clone(),
-                api_base: api_base.clone(),
-                model: model.clone(),
-                ds: ds.clone(),
-                backend: backend.clone(),
-                export_training: export_training.clone(),
-                export_format: export_format.clone(),
-                export_limit: *export_limit,
-                include_failed: *include_failed,
-                request_id: request_id.clone(),
-                quiet: *quiet,
-            });
-        }
         Some(Command::Learn { cmd }) => return run_learn(cmd),
         Some(Command::RunLog { id, status, note }) => {
             return run_run_log(id, status, note);
@@ -8517,7 +8418,6 @@ fn run_local_inner(args: Cli) -> Result<()> {
                 }
                 // Opt-in (RSRS_ANNOTATE=1): label this recall's query with BM25 + LLM in a
                 // detached process. The reply path never waits for the model call.
-                annotate::spawn_after_recall(&query, project.as_deref().unwrap_or(""), query_log_id.as_deref());
                 // Hit-heat writeback: top hits recall_count+1 - source of the heat-axis hit_score (used to be read-only, always 0; this round fills it)
                 // Plugin hook post-recall: query and hit summary (post-training / external telemetry)
                 {
@@ -10077,7 +9977,6 @@ fn run_local_inner(args: Cli) -> Result<()> {
         | Command::Prompt
         | Command::QueryLog { .. }
         | Command::Bench { .. }
-        | Command::Annotate { .. }
         | Command::Learn { .. }
         | Command::RunLog { .. }
         | Command::Classify { .. }

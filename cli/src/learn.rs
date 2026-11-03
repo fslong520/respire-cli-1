@@ -15,7 +15,7 @@ use serde_json::json;
 
 use respire::transport::local::{AnnotationCandidate, AnnotationRow, LocalStore};
 
-use crate::annotate::{docs_from_store, tokenize, Bm25Index, RowDoc};
+use crate::lexical::{docs_from_store, tokenize, Bm25Index, RowDoc};
 use crate::output::{Item as OutputItem, ResultEnvelope, Status as OutputStatus};
 
 pub const FEATURE_COUNT: usize = 9;
@@ -280,12 +280,16 @@ pub fn run_lexical(store: &LocalStore, query: &str, limit: usize, project: Optio
     let count = hits.len();
     // A lexical recall is a real retrieval request: record it in query_log so
     // `query-log mark` + `learn train --from-labels` can learn from no-model use.
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let candidate_ids: Vec<String> = hits.iter().map(|hit| hit.id.clone()).collect();
-    let candidate_scores: Vec<f32> = hits.iter().map(|hit| hit.score).collect();
-    if count > 0 {
+    // Read-only mode must not write, and an empty result has no row to grade.
+    let query_log_id: Option<String> = if count > 0 && respire::service::workspace_mode() == "normal" {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let candidate_ids: Vec<String> = hits.iter().map(|hit| hit.id.clone()).collect();
+        let candidate_scores: Vec<f32> = hits.iter().map(|hit| hit.score).collect();
         store.log_query_request(&request_id, query, project.unwrap_or(""), "", &candidate_ids, &candidate_scores)?;
-    }
+        Some(request_id)
+    } else {
+        None
+    };
     let items: Vec<OutputItem> = hits.iter().map(|hit| {
         OutputItem::new(respire::service::short_id(&hit.id), OutputStatus::Ok, format!("{:.3} {}", hit.score, hit.title))
     }).collect();
@@ -304,7 +308,7 @@ pub fn run_lexical(store: &LocalStore, query: &str, limit: usize, project: Optio
             "query": query, "count": count, "limit": limit, "mode": "lexical",
             "embedding_model": null, "indexed_entries": indexed,
             "learned_updates": model.updates, "project": project,
-            "query_log_id": request_id,
+            "query_log_id": query_log_id,
         }),
         items,
     );
@@ -561,6 +565,18 @@ impl Embedder for LocalEmbedder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use respire::transport::local::NewAnnotation;
+    use crate::capture_tests::with_isolated_session;
+    use respire::service::{App, CreateReq};
+
+    struct NoPrepare;
+    impl respire::memory::search::Embedder for NoPrepare {
+        fn model_name(&self) -> &str { "unused" }
+        fn dims(&self) -> usize { 0 }
+        fn prepare(&self, _: &respire::MemoryEntry) -> Result<respire::core_sdk::Prepared> {
+            anyhow::bail!("test fixture must not prepare a model")
+        }
+    }
     use std::collections::HashMap;
 
     fn doc(id: &str, title: &str, head: &str) -> RowDoc {
@@ -622,5 +638,158 @@ mod tests {
         assert_eq!(model.updates, 1);
         assert!(step.weights.iter().all(|weight| weight.is_finite()));
         assert!(step.bias.is_finite());
+    }
+
+    #[test]
+    fn feature_helpers_cover_overlap_recency_and_model_shape() {
+        let tokens = tokens("部署脚本");
+        assert!(overlap(&tokens, "部署脚本位置") > 0.0);
+        assert_eq!(overlap(&HashSet::new(), "anything"), 0.0);
+        assert_eq!(recency("not-a-date"), 0.0);
+        assert!(recency("2026-01-01T00:00:00Z") > 0.0);
+        let normalized = LearnedModel { weights: vec![2.0], bias: 0.0, updates: 0 }.normalized();
+        assert_eq!(normalized.weights.len(), FEATURE_COUNT);
+        let model = LearnedModel { weights: vec![0.0; FEATURE_COUNT], bias: 1.0, updates: 0 };
+        assert_eq!(model.score(&[0.0; FEATURE_COUNT]), 1.0);
+    }
+
+    #[test]
+    fn zero_embedder_reports_none() {
+        let embedder = LocalEmbedder::Zero(ZeroEmbedder);
+        assert_eq!(embedder.model_name(), "none");
+        assert_eq!(embedder.dims(), 0);
+        assert_eq!(embedder.generation_key(), "none");
+    }
+
+    #[test]
+    fn annotation_batch_training_persists_and_resets() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = LocalStore::open(&dir.path().join("memory.db"))?;
+        let candidates = vec![
+            AnnotationCandidate { id: "pos".into(), title: "部署脚本位置".into(), score: 9.0, snippet: "scripts/build".into() },
+            AnnotationCandidate { id: "neg".into(), title: "周报模板".into(), score: 1.0, snippet: "每周进展".into() },
+        ];
+        let selected = vec!["pos".to_owned()];
+        store.insert_annotation(&NewAnnotation {
+            query: "部署脚本",
+            project: "demo",
+            scope: "",
+            topk: 2,
+            candidates: &candidates,
+            selected: &selected,
+            confidence: 0.9,
+            reason: "",
+            model: "test",
+            source: "model",
+            status: "ok",
+            raw: "",
+            request_id: None,
+        })?;
+        assert_eq!(store.annotation_training_rows(false, 10)?.len(), 1);
+        train_from_annotations(&store, 10, 1)?;
+        let trained = store.load_learned_model()?.expect("model saved");
+        assert!(trained.updates > 0);
+        assert!(status(&store).is_ok());
+        assert!(run_lexical(&store, "部署脚本", 3, None, None, true).is_ok());
+        reset(&store)?;
+        assert!(store.load_learned_model()?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn label_training_without_labels_is_a_noop() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = LocalStore::open(&dir.path().join("memory.db"))?;
+        assert!(store.labeled_queries(10)?.is_empty());
+        train_from_labels(&store, 10, 1)?;
+        assert!(store.load_learned_model()?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn snippet_and_early_returns() {
+        assert_eq!(snippet("", "标题"), "标题");
+        assert!(snippet(&"很长".repeat(80), "t").ends_with('…'));
+        let docs: HashMap<String, RowDoc> = HashMap::new();
+        let mut model = LearnedModel::default();
+        let mut no_positive = row();
+        no_positive.selected.clear();
+        assert_eq!(train_one_with_docs(&no_positive, &docs, &mut model).unwrap().pairs, 0);
+        let mut no_negative = row();
+        no_negative.selected = vec!["pos".into(), "neg".into()];
+        assert_eq!(train_one_with_docs(&no_negative, &docs, &mut model).unwrap().pairs, 0);
+    }
+
+    #[test]
+    fn train_row_persists_and_resolves_fallback_docs() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = LocalStore::open(&dir.path().join("memory.db"))?;
+        let step = train_row(&store, &row())?;
+        assert_eq!(step.pairs, 1);
+        assert!(store.load_learned_model()?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn label_training_learns_from_real_adoption() -> Result<()> {
+        with_isolated_session(|_| {
+            let app = App {
+                keys: crate::build_session()?,
+                store: crate::build_local()?,
+                embedder: Box::new(NoPrepare),
+            };
+            let _defer = respire::core_sdk::defer_indexing();
+            let mut ids = Vec::new();
+            for i in 0..25 {
+                let entry = app.create(&CreateReq {
+                    title: format!("部署脚本位置 {i}"),
+                    content: "scripts/build-core-sdk.mjs 构建入口".into(),
+                    ..Default::default()
+                })?;
+                ids.push(entry.id);
+            }
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let scores = vec![0.0_f32; ids.len()];
+            app.store.log_query_request(&request_id, "部署脚本", "demo", "", &ids, &scores)?;
+            app.store.mark_query_feedback(&request_id, &[ids[0].clone()], true, "human")?;
+            train_from_labels(&app.store, 10, 1)?;
+            let model = app.store.load_learned_model()?.expect("label training saved a model");
+            assert!(model.updates > 0);
+            assert!(run_lexical(&app.store, "部署脚本", 5, None, None, false).is_ok());
+            assert!(status(&app.store).is_ok());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn lexical_marker_roundtrip_controls_no_embed() -> Result<()> {
+        with_isolated_session(|_| {
+            set_lexical(false)?;
+            assert!(!no_embed());
+            assert!(!lexical_default());
+            set_lexical(true)?;
+            assert!(lexical_marker().is_file());
+            assert!(no_embed());
+            assert!(lexical_default());
+            set_lexical(false)?;
+            assert!(!lexical_marker().is_file());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn no_embed_honors_explicit_env() -> Result<()> {
+        with_isolated_session(|_| {
+            std::env::set_var("RSRS_NO_EMBED", "1");
+            assert!(no_embed());
+            std::env::remove_var("RSRS_NO_EMBED");
+            std::env::set_var("RSRS_EMBED", "off");
+            assert!(no_embed());
+            std::env::remove_var("RSRS_EMBED");
+            std::env::set_var("RSRS_RETRIEVAL", "lexical");
+            assert!(lexical_default());
+            std::env::remove_var("RSRS_RETRIEVAL");
+            Ok(())
+        })
     }
 }
