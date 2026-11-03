@@ -1675,6 +1675,7 @@ fn run_agent_config(set: Option<&str>) -> Result<()> {
     object.insert("memory_off".into(), serde_json::json!(respire::service::off_mode()));
     object.insert("workspace_mode".into(), serde_json::json!(respire::service::workspace_mode()));
     object.insert("read_heat_runtime".into(), respire_app::read_heat::receipt()?);
+    object.insert("recall_fusion_runtime".into(), respire_app::recall_fusion::receipt()?);
     let rows = object
         .iter()
         .map(|(key, value)| OutputItem::new(key, OutputStatus::Ok, value.to_string()))

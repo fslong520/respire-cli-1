@@ -25,7 +25,7 @@ pub fn query_settings(
     query: &MemoryQuery,
     candidates: &[StoredMemory],
 ) -> Result<Value> {
-    let mut settings = crate::core_sdk::query_settings_from_env()?;
+    let mut settings = crate::recall_fusion::query_settings()?;
     if let Some(read_heat) = crate::read_heat::effective()? {
         settings.insert("read_heat".into(), Value::Bool(read_heat));
     }
