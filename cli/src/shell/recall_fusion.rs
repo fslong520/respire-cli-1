@@ -161,6 +161,7 @@ impl Form {
     pub(super) fn lines(&self) -> Vec<Line<'static>> {
         let mut lines = vec![
             line(t("五轴注意力融合", "Five-axis attention fusion")),
+            line(self.message.clone()),
             line(format!(
                 "{}: {}",
                 t("当前生效模式", "Effective mode"),
@@ -215,7 +216,6 @@ impl Form {
             "legacy preserves ranking; auto selects by pool size. alpha + beta <= 1.",
         )));
         lines.push(line(t("Tab 切换字段；Ctrl+A 全选；Ctrl+S 保存；Esc 返回。环境变量优先。", "Tab changes field; Ctrl+A selects all; Ctrl+S saves; Esc returns. Environment overrides win.")));
-        lines.push(line(self.message.clone()));
         lines
     }
 }
