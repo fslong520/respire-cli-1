@@ -30,6 +30,10 @@ class UpgradePolicyTest(unittest.TestCase):
                 platform_applicability("v1.0.16", target, [asset])
         with self.assertRaises(ValueError):
             platform_applicability("v1.0.16", "x86_64-unknown-linux-gnu", [])
+        self.assertIsNotNone(platform_applicability("v1.0.19", "x86_64-apple-darwin", []))
+        for tag, assets in [("v1.0.20", []), ("v1.0.19", ["rsrs-x86_64-apple-darwin"])]:
+            with self.assertRaises(ValueError):
+                platform_applicability(tag, "x86_64-apple-darwin", assets)
 
     def test_present_historical_arm_assets_remain_required(self):
         target = "aarch64-unknown-linux-musl"
@@ -60,6 +64,7 @@ class UpgradeProfileTest(unittest.TestCase):
             select_upgrade_sources(sources, self.target, "critical")
 
     def test_partial_latest_or_no_applicable_source_fails(self):
+        self.assertEqual(select_upgrade_sources({"v1.0.19": {"assets": []}}, "x86_64-apple-darwin", "critical"), {})
         release = self.release("v1.0.16")
         release["assets"].pop()
         with self.assertRaisesRegex(ValueError, "missing platform artifact"):

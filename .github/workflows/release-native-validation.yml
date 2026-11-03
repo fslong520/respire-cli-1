@@ -40,6 +40,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - os: macos-latest
             target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             rustflags: -C target-feature=-crt-static
@@ -313,18 +315,19 @@ jobs:
           name: gnu-login-interruption
           path: ${{ runner.temp }}/gnu-login-interruption/interruption-coverage.json
           if-no-files-found: error
-      - name: Read the runner's actual public input cache capability
+      - name: Allow public input cache saves only for trusted sources
         id: cache-write
         shell: bash
         env:
           TRUSTED_SOURCE: ${{ github.repository == 'risense-ai/respire-cli' && github.ref == 'refs/heads/main' && inputs.ref == github.sha && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
         run: |
           set -euo pipefail
-          if [ "${ACTIONS_CACHE_MODE:-}" = write ] && [ "$TRUSTED_SOURCE" = true ]; then
+          # Cache actions enforce cache-mode; shell steps may not receive ACTIONS_CACHE_MODE.
+          if [ "$TRUSTED_SOURCE" = true ]; then
             echo 'may_save=true' >> "$GITHUB_OUTPUT"
           else
             echo 'may_save=false' >> "$GITHUB_OUTPUT"
-            echo "Public input cache is read-only for this source/mode (${ACTIONS_CACHE_MODE:-unset}); no save scheduled"
+            echo 'Public input cache saves are disabled for this untrusted source'
           fi
       - name: Stage only verified public model inputs for the next run
         id: model-cache-stage

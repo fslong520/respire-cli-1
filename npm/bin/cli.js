@@ -10,6 +10,7 @@ const PKGS = {
   'linux-x64': '@rsrsai/linux-x64',
   'linux-arm64': '@rsrsai/linux-arm64',
   'darwin-arm64': '@rsrsai/macos-arm64',
+  'darwin-x64': '@rsrsai/macos-x64',
   'win32-x64': '@rsrsai/win-x64',
   'win32-arm64': '@rsrsai/win-arm64',
 };
@@ -25,15 +26,7 @@ if (process.platform === 'linux') {
   if (pkg && libc === 'glibc') pkg += '-gnu';
 }
 if (!pkg) {
-  if (key === 'darwin-x64') {
-    console.error(
-      'rsrs: Intel Mac is unsupported.\n' +
-      '  Use Apple Silicon (arm64), Linux or Windows.\n' +
-      '  See https://github.com/risense-ai/respire-cli#use-and-distribution'
-    );
-  } else {
-    console.error(`rsrs: unsupported platform ${key} (supported: ${Object.keys(PKGS).join(' ')})`);
-  }
+  console.error(`rsrs: unsupported platform ${key} (supported: ${Object.keys(PKGS).join(' ')})`);
   process.exit(1);
 }
 

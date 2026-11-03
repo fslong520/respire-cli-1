@@ -116,7 +116,13 @@ try:
     with ThreadPoolExecutor(max_workers=1 if sys.platform == 'darwin' else 2) as pool:
         for outcome in pool.map(verify_upgrade, sorted(selected.items())):
             report['sources'].append(outcome)
-    assert any(item.get('passed') is True for item in report['sources']),'no actual applicable upgrade was exercised'
+    first_platform_release=(args.target=='x86_64-apple-darwin' and all(
+        platform_applicability(tag,args.target,[asset['name'] for asset in source['assets']]) is not None
+        for tag,source in sources.items()))
+    assert first_platform_release or any(item.get('passed') is True for item in report['sources']),'no actual applicable upgrade was exercised'
+    report['first_platform_release']=first_platform_release
+    if first_platform_release:
+        report['upgrade_status']='not-applicable: first Intel macOS release; fresh inference is validated separately'
     report['passed']=True
     report['full_coverage']=report['all_published_sources_covered']=args.profile=='full'
 finally:

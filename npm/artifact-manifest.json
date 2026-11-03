@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "cliVersion": "1.0.19",
+  "cliVersion": "1.0.20",
   "binaryName": "rsrs",
   "commandAliases": [],
   "npmScope": "rsrs-cli",
@@ -51,6 +51,12 @@
       "cpu": [
         "arm64"
       ]
+    },
+    {
+      "triple": "x86_64-apple-darwin",
+      "pkg": "@rsrsai/macos-x64",
+      "os": ["darwin"],
+      "cpu": ["x64"]
     },
     {
       "triple": "aarch64-apple-darwin",

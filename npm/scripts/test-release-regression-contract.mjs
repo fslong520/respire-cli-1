@@ -35,7 +35,7 @@ test('both Linux ARM targets require native runners, every source feedback phase
   assert.match(background,/publication-arm64-verified-/);assert.doesNotMatch(background,/id-token:|contents: write|actions: write|npm publish|concurrency:/);
 });
 test('new full gate requires every native, cloud, migration fixture, join and API success',()=>{
-  validateRegressionContract(contract,manifest);assert.equal(contract.native.length,7);assert.equal(contract.cloud.length,6);assert.equal(contract.migration.length,3);assert.equal(contract.migration_gate.length,3);
+  validateRegressionContract(contract,manifest);assert.equal(contract.native.length,manifest.targets.length);assert.equal(contract.cloud.length,manifest.targets.length-1);assert.equal(contract.migration.length,3);assert.equal(contract.migration_gate.length,3);
   assert.equal(regressionStatus(inventory(),contract),'success');requireRegressions(inventory(),contract.native,contract);
   for(let index=0;index<inventory().length-1;index++){
     for(const conclusion of ['failure','cancelled','skipped',null]){
@@ -111,7 +111,7 @@ test('Alpine preflight mounts the selected CPU cache read-only and refuses missi
 test('critical and legacy full inventories cannot be interchanged or weakened by skipped native jobs',()=>{
   const critical=regressionContract(manifest,'critical');
   assert.equal(validationProfile(), 'full');assert.throws(()=>validationProfile('unknown'));
-  assert.equal(critical.native.length,7);assert.equal(critical.cloud.length,0);assert.equal(critical.migration.length,0);assert.equal(critical.migration_gate.length,0);assert.equal(critical.api,true);
+  assert.equal(critical.native.length,manifest.targets.length);assert.equal(critical.cloud.length,0);assert.equal(critical.migration.length,0);assert.equal(critical.migration_gate.length,0);assert.equal(critical.api,true);
   validateRegressionContract(critical,manifest,'critical');validateRegressionContract(contract,manifest,'full');
   assert.throws(()=>validateRegressionContract(critical,manifest,'full'));assert.throws(()=>validateRegressionContract(contract,manifest,'critical'));
   const unlabelled=copy(critical);delete unlabelled.validation_profile;assert.throws(()=>validateRegressionContract(unlabelled,manifest));

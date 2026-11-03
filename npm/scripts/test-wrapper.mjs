@@ -13,6 +13,7 @@ const targets = [
   ['linux', 'arm64', 'musl', 'linux-arm64'],
   ['linux', 'arm64', 'glibc', 'linux-arm64-gnu'],
   ['linux', 'arm64', '', 'linux-arm64'],
+  ['darwin', 'x64', '', 'macos-x64'],
   ['darwin', 'arm64', '', 'macos-arm64'], ['win32', 'x64', '', 'win-x64'],
   ['win32', 'arm64', '', 'win-arm64'],
 ];
@@ -61,7 +62,7 @@ for (const [platform, arch, libc, name] of targets) {
   }
 }
 }
-for (const [platform, arch] of [['win32', 'ia32'], ['darwin', 'x64']]) {
+for (const [platform, arch] of [['win32', 'ia32']]) {
   let exit, stderr = '';
   const quit = {};
   const require = (name) => {
@@ -78,7 +79,7 @@ for (const [platform, arch] of [['win32', 'ia32'], ['darwin', 'x64']]) {
         exit: (code) => { exit = code; throw quit; } } });
   } catch (error) { if (error !== quit) throw error; }
   assert.equal(exit, 1);
-  assert.ok(stderr.includes(platform === 'darwin' ? 'Intel Mac is unsupported' : `unsupported platform ${platform}-${arch}`), stderr);
+  assert.ok(stderr.includes(`unsupported platform ${platform}-${arch}`), stderr);
   cases++;
 }
 console.log(`Wrapper version regression: ${cases} cases passed`);
