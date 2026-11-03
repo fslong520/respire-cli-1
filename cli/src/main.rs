@@ -3033,7 +3033,7 @@ fn run_bench_run(
 
     let metrics = bench::summarize(&results, topk);
     latency.sort_unstable();
-    let mut params = bench::snapshot_params();
+    let mut params = bench::snapshot_params()?;
     params.insert("embedding_model".into(), embedder.model_name().into());
     params.insert("cli_version".into(), env!("CARGO_PKG_VERSION").into());
     params.insert(

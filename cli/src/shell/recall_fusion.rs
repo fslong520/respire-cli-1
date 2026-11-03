@@ -1,5 +1,5 @@
 //! Draft editor; validation and persistence belong to the host application.
-use super::{checked_result, choice, line, retrieval_action, t, text_input::Input, Line, Value};
+use super::{choice, line, retrieval_action, t, text_input::Input, Line, Value};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use respire_app::recall_fusion::{defaults, validate, MODES, NUMERIC};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -15,7 +15,7 @@ pub(super) struct Form {
 
 impl Form {
     pub(super) fn new() -> Result<Self, String> {
-        let envelope = checked_result(retrieval_action(&["agent-config"])?)?;
+        let envelope = retrieval_action(&["agent-config"])?;
         let receipt = envelope["summary"]["recall_fusion_runtime"].clone();
         if !receipt["effective"].is_object() {
             return Err(t(
@@ -118,12 +118,12 @@ impl Form {
         self.message = t("正在保存设置", "Saving settings");
         std::thread::spawn(move || {
             let result = (|| {
-                checked_result(retrieval_action(&[
+                retrieval_action(&[
                     "agent-config",
                     "--set",
                     &format!("recall_fusion={value}"),
-                ])?)?;
-                let read_back = checked_result(retrieval_action(&["agent-config"])?)?;
+                ])?;
+                let read_back = retrieval_action(&["agent-config"])?;
                 let receipt = &read_back["summary"]["recall_fusion_runtime"];
                 if receipt["configured"] != value {
                     return Err("Recall fusion read-back differs; refresh settings".to_owned());
