@@ -730,10 +730,20 @@ pub fn candidate_report<E: crate::memory::search::Embedder>(
     all: &[crate::memory::model::StoredMemory],
     content: &str,
 ) -> Result<CandidateReport> {
+    // no_embed (self/lexical) loads a ZeroEmbedder whose model_name is
+    // "none"; the artifact check compares against the index's active
+    // profile instead, so a lexical-mode report does not fail every
+    // m3 artifact with "belongs to another model".
+    let model = {
+        let name = embedder.model_name();
+        if name == "none" {
+            respire_core_sdk::profiles::current()?.map(|selection| selection.model).unwrap_or_else(|| name.to_owned())
+        } else { name.to_owned() }
+    };
     respire_core_sdk::execute(
         "candidate_report",
         serde_json::json!({
-            "model":embedder.model_name(), "snapshots":respire_crypto::engine::snapshots(keys, all)?, "content":content,
+            "model":model, "snapshots":respire_crypto::engine::snapshots(keys, all)?, "content":content,
         }),
     )
 }
