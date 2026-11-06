@@ -1095,6 +1095,11 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         top: usize,
     },
+    /// Query the outcome of a request whose id was printed by request_outcome_unknown (read-only; never replays the command)
+    Result {
+        /// request_id from the request_outcome_unknown error
+        id: String,
+    },
     /// Split a mixed node (AI decides): no flags prints material JSON for the AI to plan; --go --spec '<json>' applies
     Split {
         id: String,
@@ -4788,6 +4793,44 @@ fn run_defrag(min: f32, top: usize) -> Result<()> {
     emit_result(result)?;
     Ok(())
 }
+/// Query the cached outcome of a request by the id printed in request_outcome_unknown.
+/// Read-only: `runtime.result` inspects state, it never replays the original command.
+fn run_result(id: &str) -> Result<()> {
+    let value = crate::net_rpc::rpc_method("runtime.result", vec![id.to_owned()])?;
+    let summary = &value["envelope"]["summary"];
+    let state = summary["state"].as_str().unwrap_or("unknown").to_owned();
+    let response = summary["response"].clone();
+    let retention = summary["retention"].as_str().unwrap_or_default().to_owned();
+    if json_mode() {
+        let mut envelope = ResultEnvelope::new(
+            "result",
+            OutputStatus::Ok,
+            serde_json::json!({"request_id":id,"state":state}),
+            Vec::new(),
+        );
+        envelope.details = if response.is_null() { serde_json::Value::Null } else { response };
+        return emit_result(envelope);
+    }
+    let mut items = vec![
+        OutputItem::new("request_id", OutputStatus::Ok, id.to_owned()),
+        OutputItem::new("state", OutputStatus::Ok, state),
+        OutputItem::new(
+            "response",
+            OutputStatus::Ok,
+            if response.is_null() { "none".to_owned() } else { response.to_string() },
+        ),
+    ];
+    if !retention.is_empty() {
+        items.push(OutputItem::new("retention", OutputStatus::Ok, retention));
+    }
+    emit_result(ResultEnvelope::new(
+        "result",
+        OutputStatus::Ok,
+        serde_json::json!({"request_id":id}),
+        items,
+    ))?;
+    Ok(())
+}
 fn run_keygen(pass: Option<&str>, force: bool) -> Result<()> {
     // v4: --pass is unused for encryption (super password is system-generated); kept for old scripts
     if pass.is_some() {
@@ -6987,6 +7030,7 @@ fn run_local(args: Cli) -> Result<()> {
         Some(Command::TreeCure { .. }) => "tree-cure",
         Some(Command::TreeFloat { .. }) => "tree-float",
         Some(Command::Defrag { .. }) => "defrag",
+        Some(Command::Result { .. }) => "result",
         Some(Command::ShareImport { .. }) => "share-import",
         _ => "cli",
     };
@@ -7188,6 +7232,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
         }
         Some(Command::Keygen { pass, force }) => return run_keygen(pass.as_deref(), *force),
         Some(Command::Defrag { min, top }) => return run_defrag(*min, *top),
+        Some(Command::Result { id }) => return run_result(id),
         Some(Command::TreeCure {
             top,
             id,
@@ -10039,6 +10084,7 @@ fn run_local_inner(args: Cli) -> Result<()> {
             unreachable!("already returned at the top of main")
         }
         Command::Defrag { .. }
+        | Command::Result { .. }
         | Command::TreeCure { .. }
         | Command::TreeFloat { .. }
         | Command::Split { .. }

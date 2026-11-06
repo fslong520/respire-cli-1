@@ -345,6 +345,10 @@ fn rpc_timeout(method: &str, args: &[String], test_timeout: Option<Duration>) ->
         || command.first().is_some_and(|c| matches!(*c, "reembed" | "sync" | "import"))
     {
         Duration::from_secs(30 * 60)
+    } else if command.first().is_some_and(|c| *c == "defrag") {
+        // Core's single-call budget is 365s; wait exactly that long before
+        // outcome-unknown reconciliation instead of the generic 120s HTTP cap.
+        Duration::from_secs(365)
     } else {
         HTTP_TIMEOUT
     }
@@ -361,25 +365,63 @@ pub(crate) fn rpc_method_with_timeout(method: &str, args: Vec<String>, test_time
         "lifecycle": if method == "runtime.stop" { Some("coordinator-v1") } else { None },
     });
     let timeout = rpc_timeout(method, &args, test_timeout);
-    let resp = send_loopback(agent().post(&url).timeout(timeout), |request| {
+    let resp = match send_loopback(agent().post(&url).timeout(timeout), |request| {
         request.send_json(body.clone())
-    }).map_err(|error| {
-        if method == "cli.exec" && matches!(error.downcast_ref::<RuntimeError>(), Some(RuntimeError::Transport(_))) {
-            RuntimeError::OutcomeUnknown {
-                request_id: body["id"].as_str().unwrap_or_default().to_owned(),
-                detail: error.to_string(),
-            }.into()
-        } else { error }
-    })?;
-    let parsed: Value = resp.into_json().map_err(|error| {
-        if method == "cli.exec" {
-            anyhow::Error::from(RuntimeError::OutcomeUnknown {
-                request_id: body["id"].as_str().unwrap_or_default().to_owned(),
-                detail: format!("runtime reply unavailable: {error}"),
-            })
-        } else { anyhow::anyhow!("runtime rpc is not JSON: {error}") }
-    })?;
+    }) {
+        Ok(resp) => resp,
+        Err(error) => {
+            if method == "cli.exec" && matches!(error.downcast_ref::<RuntimeError>(), Some(RuntimeError::Transport(_))) {
+                let request_id = body["id"].as_str().unwrap_or_default().to_owned();
+                return settle_outcome_unknown(request_id, error.to_string());
+            }
+            return Err(error);
+        }
+    };
+    let parsed: Value = match resp.into_json() {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            if method == "cli.exec" {
+                let request_id = body["id"].as_str().unwrap_or_default().to_owned();
+                return settle_outcome_unknown(request_id, format!("runtime reply unavailable: {error}"));
+            }
+            return Err(anyhow::anyhow!("runtime rpc is not JSON: {error}"));
+        }
+    };
     Ok(parsed)
+}
+
+/// Reconcile an outcome-unknown `cli.exec` against `runtime.result` (2s budget)
+/// before reporting it: a completed request replays its cached response — the
+/// command itself is never re-executed — a pending request keeps the unknown
+/// status with the exact query command, and only an unknown result falls
+/// through to the original error with the same reconciliation hint.
+fn settle_outcome_unknown(request_id: String, detail: String) -> Result<Value> {
+    let hint = format!(
+        "query `rsrs result {request_id}` before any retry; the command was not replayed"
+    );
+    match rpc_method_with_timeout("runtime.result", vec![request_id.clone()], Some(Duration::from_secs(2))) {
+        Ok(value) => match value["envelope"]["summary"]["state"].as_str() {
+            Some("completed") => match value["envelope"]["summary"]["response"].clone() {
+                Value::Null => Err(RuntimeError::OutcomeUnknown {
+                    request_id,
+                    detail: format!("{detail}; completed but the cached response is gone; {hint}"),
+                }.into()),
+                response => Ok(response),
+            },
+            Some("pending") => Err(RuntimeError::OutcomeUnknown {
+                request_id,
+                detail: format!("still running; {hint}"),
+            }.into()),
+            _ => Err(RuntimeError::OutcomeUnknown {
+                request_id,
+                detail: format!("{detail}; {hint}"),
+            }.into()),
+        },
+        Err(_) => Err(RuntimeError::OutcomeUnknown {
+            request_id,
+            detail: format!("{detail}; {hint}"),
+        }.into()),
+    }
 }
 
 pub fn wait_until_down() -> Result<()> {
@@ -605,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn response_after_client_deadline_reports_unknown_and_can_be_inspected_without_replay() -> Result<()> {
+    fn response_after_client_deadline_is_reconciled_via_runtime_result_without_replay() -> Result<()> {
         let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         let directory = tempfile::tempdir()?;
         let server = tiny_http::Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -633,15 +675,14 @@ mod tests {
             Ok(id)
         });
         let result = (|| -> Result<()> {
-            let error = rpc_method_with_timeout("cli.exec", vec!["remember".into(), "synthetic write".into()], Some(Duration::from_millis(50))).err().ok_or_else(|| anyhow::anyhow!("delayed write unexpectedly completed within deadline"))?;
-            let id = match error.downcast_ref::<RuntimeError>() {
-                Some(RuntimeError::OutcomeUnknown { request_id, .. }) => request_id.clone(),
-                _ => anyhow::bail!("ambiguous transport failure was not marked outcome_unknown: {error}"),
-            };
-            let inspected = rpc_method_with_timeout("runtime.result", vec![id.clone()], Some(Duration::from_secs(2)))?;
-            anyhow::ensure!(inspected["envelope"]["summary"]["state"] == "completed", "inspection failed: {inspected}");
+            // The 50ms deadline expires before the 150ms response, so the client
+            // must reconcile against runtime.result: completed means the cached
+            // response is replayed to the caller while the command itself is
+            // never executed again (the actor asserts result inspected our id).
+            let reconciled = rpc_method_with_timeout("cli.exec", vec!["remember".into(), "synthetic write".into()], Some(Duration::from_millis(50)))?;
+            anyhow::ensure!(reconciled["committed"] == true, "completed deadline write was not reconciled from runtime.result: {reconciled}");
             let seen = actor.join().map_err(|_| anyhow::anyhow!("test transport actor panicked"))??;
-            anyhow::ensure!(seen == id, "request ID changed");
+            anyhow::ensure!(!seen.is_empty(), "request ID changed");
             Ok(())
         })();
         for (key, value) in previous {
