@@ -671,7 +671,10 @@ mod tests {
             inspect.as_reader().read_to_string(&mut body)?;
             let query: Value = serde_json::from_str(&body)?;
             anyhow::ensure!(query["method"] == "runtime.result" && query["args"][0] == id, "client replayed or inspected the wrong write");
-            inspect.respond(tiny_http::Response::from_string(json!({"v":1,"id":query["id"],"ok":true,"envelope":{"summary":{"state":"completed","request_id":id,"response":{"ok":true,"committed":true}}}}).to_string()))?;
+            // The cached response mirrors the real runtime.result payload: a full
+            // RpcResponse carries the original request id, so the client side can
+            // assert id equality on the reconciled value exactly as before.
+            inspect.respond(tiny_http::Response::from_string(json!({"v":1,"id":query["id"],"ok":true,"envelope":{"summary":{"state":"completed","request_id":id,"response":{"v":1,"id":id,"ok":true,"committed":true}}}}).to_string()))?;
             Ok(id)
         });
         let result = (|| -> Result<()> {
@@ -682,7 +685,7 @@ mod tests {
             let reconciled = rpc_method_with_timeout("cli.exec", vec!["remember".into(), "synthetic write".into()], Some(Duration::from_millis(50)))?;
             anyhow::ensure!(reconciled["committed"] == true, "completed deadline write was not reconciled from runtime.result: {reconciled}");
             let seen = actor.join().map_err(|_| anyhow::anyhow!("test transport actor panicked"))??;
-            anyhow::ensure!(!seen.is_empty(), "request ID changed");
+            anyhow::ensure!(seen == reconciled["id"].as_str().unwrap_or_default(), "request ID changed: seen={seen} reconciled={reconciled}");
             Ok(())
         })();
         for (key, value) in previous {
